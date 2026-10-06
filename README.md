@@ -42,7 +42,7 @@ The app listens on **127.0.0.1:8090** (only reachable from the server itself; ch
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 export NVIDIA_API_KEY=nvapi-...   APP_PASSWORD=choose-one
-gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:8000 app:app
+gunicorn --workers 1 --threads 4 --timeout 120 --bind 127.0.0.1:8090 app:app
 ```
 
 Use **one** worker. Analysis runs in a background thread inside that process, so extra workers wouldn't see each other's jobs. To keep it running, wrap the command in a systemd service.
