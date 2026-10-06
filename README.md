@@ -34,7 +34,7 @@ cp .env.example .env        # then edit .env: API key, APP_PASSWORD
 docker compose up -d --build
 ```
 
-The app listens on **127.0.0.1:8000** (only reachable from the server itself; change `HOST_PORT` if 8000 is taken). Put your reverse proxy or Cloudflare Tunnel in front of it, see below. Job data lives in the `music-data` volume and is deleted automatically after `JOB_TTL_HOURS`.
+The app listens on **127.0.0.1:8090** (only reachable from the server itself; change `HOST_PORT` if 8090 is taken). Put your reverse proxy or Cloudflare Tunnel in front of it, see below. Job data lives in the `music-data` volume and is deleted automatically after `JOB_TTL_HOURS`.
 
 ### Option B: plain Python (Linux)
 
@@ -58,7 +58,7 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `MAX_FILES` | 10 | Max tracks per upload |
 | `JOB_TTL_HOURS` | 24 | How long results are kept |
 | `DATA_DIR` | `./jobs` | Where results are stored |
-| `HOST_PORT` | 8000 | Docker only: the localhost port your proxy forwards to |
+| `HOST_PORT` | 8090 | Docker only: the localhost port your proxy forwards to |
 
 ### Behind a domain (nginx)
 
@@ -66,7 +66,7 @@ Put it behind nginx or Caddy for HTTPS. With nginx, raise the upload limit and t
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8000;
+    proxy_pass http://127.0.0.1:8090;
     proxy_set_header Host $host;
     client_max_body_size 100m;
     proxy_read_timeout 120s;
@@ -76,10 +76,10 @@ location / {
 ### With Cloudflare (server already hosting other sites)
 
 1. **DNS:** in Cloudflare, add an `A` record for a subdomain (for example `music`) pointing to your server's IP, with the orange cloud **Proxied** on.
-2. **Reverse proxy:** add a site for `music.yourdomain.com` to your existing nginx or Caddy that forwards to `http://127.0.0.1:8000`, as in the nginx example above.
+2. **Reverse proxy:** add a site for `music.yourdomain.com` to your existing nginx or Caddy that forwards to `http://127.0.0.1:8090`, as in the nginx example above.
 3. **SSL/TLS mode:** use **Full (strict)**, with a Cloudflare Origin Certificate or a Let's Encrypt certificate on the server.
 
-If you use a **Cloudflare Tunnel** instead, add a public hostname `music.yourdomain.com` → `http://localhost:8000` to your existing tunnel. You don't need any DNS record or open ports.
+If you use a **Cloudflare Tunnel** instead, add a public hostname `music.yourdomain.com` → `http://localhost:8090` to your existing tunnel. You don't need any DNS record or open ports.
 
 Keep `MAX_UPLOAD_MB` under 100, because Cloudflare's free plan rejects larger uploads.
 
