@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+import inspiration
 import instruments
 
 AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
@@ -497,7 +498,7 @@ def load_audio(path):
         return np.concatenate(chunks).astype(np.float32), SR
 
 
-def analyze(path):
+def analyze(path, melody_text=None):
     import librosa
 
     y, sr = load_audio(path)
@@ -629,8 +630,112 @@ def analyze(path):
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
+    # --- melody: best-effort top line, plus the musician's own typed melody if given
+    top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
+    result["top_line"] = top_line_summary(top, grid, chords, main_key)
+    if melody_text:
+        result["melody"] = inspiration.analyse_melody(melody_text, key_tonic(main_key), result["mode"], MODES,
+                                                      lambda pc: spell(pc, main_key))
+        if "error" not in result["melody"]:
+            pcs = [n % 12 for n in result["melody"]["variations_midi"]["original"]]
+            result["melody"]["check"] = check_melody(chroma, bounds, pcs, main_key)
+    result["references"] = shared_dna(result, chords)
     result["ideas"] = rule_based_ideas(result)
     return result
+
+
+def check_melody(chroma, bounds, pcs, key):
+    """Double-check a typed melody against the recording.
+
+    1. Presence: does each note actually sound in the track (pitch-class strength)?
+    2. Order: does the sequence fit the audio better than shuffled versions of the same notes,
+       stepping one note per beat? (On demos where chords/drones dominate, it often can't tell.)"""
+    import librosa
+    profile = chroma.mean(axis=1)
+    profile = profile / (profile.max() + 1e-9)
+    rank = {pc: int(np.sum(profile > profile[pc])) + 1 for pc in range(12)}
+    notes = [{"note": spell(pc, key), "strength": round(float(profile[pc]), 2), "rank": rank[pc]}
+             for pc in dict.fromkeys(pcs)]
+    weak = [n["note"] for n in notes if n["strength"] < 0.35]
+
+    C = librosa.util.sync(chroma, bounds, aggregate=np.mean, pad=False)
+    C = C / (C.max(axis=0, keepdims=True) + 1e-9)
+    k = len(pcs)
+
+    def fit(seq):
+        idx = np.array(seq)
+        vals = [C[idx, np.arange(t, t + k)].mean() for t in range(C.shape[1] - k)]
+        return float(np.percentile(vals, 95)) if vals else 0.0
+    order_pct = None
+    if C.shape[1] > 2 * k and len(set(pcs)) > 1:
+        rng = np.random.default_rng(0)
+        mine = fit(pcs)
+        shuffled = [fit(list(rng.permutation(pcs))) for _ in range(60)]
+        order_pct = round(100 * float(np.mean([mine > x for x in shuffled])))
+
+    if weak:
+        verdict = (f"{', '.join(weak)} barely sound{'s' if len(weak) == 1 else ''} in the recording — "
+                   f"double-check {'that note' if len(weak) == 1 else 'those notes'}.")
+    else:
+        verdict = "All the notes you typed clearly sound in the recording."
+    if order_pct is None:
+        pass
+    elif order_pct >= 80:
+        verdict += " The order fits the audio better than shuffled versions — it looks right."
+    else:
+        verdict += (" The recording can't confirm the order or rhythm (it fits no better than shuffles of the "
+                    "same notes) — typical when chords or a held note dominate a phone recording, so trust "
+                    "your ears on the order.")
+    return {"notes": notes, "weak_notes": weak, "order_beats_shuffles_pct": order_pct, "verdict": verdict}
+
+
+def top_line_summary(notes, grid, chords, key):
+    """Describe the loudest pitched line, and say honestly when it's just following the chords."""
+    voiced = [(grid[i], n) for i, n in enumerate(notes) if n is not None]
+    if len(voiced) < 16:
+        return {"present": False}
+    in_chord = []
+    for t, n in voiced:
+        c = next((c for c in chords if c["start"] <= t < c["end"]), None)
+        if c:
+            in_chord.append(n % 12 in {(c["root"] + iv) % 12 for iv in CHORD_INTERVALS[c["q"]]})
+    chord_share = float(np.mean(in_chord)) if in_chord else 0.0
+    events = [n for i, n in enumerate(notes) if n is not None and (i == 0 or n != notes[i - 1])]
+    names = [spell(n % 12, key) for n in events]
+    motifs = Counter(tuple(names[i:i + 4]) for i in range(len(names) - 3))
+    motifs = [{"notes": list(m), "times": c} for m, c in motifs.most_common(3) if c >= 3 and len(set(m)) > 1]
+    lo, hi = (int(v) for v in np.percentile([n for _, n in voiced], [10, 90]))
+    pcs = Counter(spell(n % 12, key) for _, n in voiced)
+    return {
+        "present": True,
+        "chord_tone_pct": round(100 * chord_share),
+        "follows_chords": chord_share >= 0.75,
+        "range": f"{note_name(lo, key)}–{note_name(hi, key)}",
+        "main_notes": [{"note": k, "pct": round(100 * v / len(voiced))} for k, v in pcs.most_common(5)],
+        "motifs": motifs,
+    }
+
+
+def shared_dna(r, chords):
+    """What the track has in common with well-known music: progressions, mode, groove, melody."""
+    out = {"progressions": [], "mode": None, "groove": None, "melody": []}
+    loops = [l["chords"] for l in r["loops"] if len(l["chords"]) >= 2]
+    if not loops:  # no strict loop: use the 4 most-used chords in the order they first appear
+        top = [c["chord"] for c in r["chords_used"][:4]]
+        first = list(dict.fromkeys(c["chord"] for c in r["chord_timeline"] if c["chord"] in top))
+        loops = [first] if len(first) >= 2 else []
+    seen = set()
+    for names in loops:
+        parsed = [parse_chord(n) for n in names]
+        for m in inspiration.match_progression([(p[0], p[1]) for p in parsed if p]):
+            if m["progression"] not in seen:
+                seen.add(m["progression"])
+                out["progressions"].append({**m, "your_chords": names})
+    if r["mode_confidence"] != "low" and r["mode"] in inspiration.MODE_REFERENCES:
+        out["mode"] = {"mode": r["mode"], "examples": inspiration.MODE_REFERENCES[r["mode"]]}
+    out["groove"] = inspiration.groove_reference((r.get("drums") or {}).get("traits", []))
+    out["melody"] = [d for d in (r.get("melody") or {}).get("devices", []) if "“" in d["reference"]]
+    return out
 
 
 def note_name(midi, key):
@@ -932,6 +1037,27 @@ def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2, cents=0):
                            b"MTrk" + struct.pack(">I", len(data)) + data)
 
 
+def write_melody_midi(path, notes, bpm=90, cents=0, beats_per_note=1, repeats=2):
+    """One note per beat (a sketch of the melody's pitches, not its exact rhythm)."""
+    tpq, data, last, tick = 480, b"", 0, 0
+    us = int(60_000_000 / max(30, min(300, bpm or 90)))
+    data = b"\x00\xff\x51\x03" + us.to_bytes(3, "big")
+    if cents:
+        bend = int(np.clip(8192 + cents / 200 * 8192, 0, 16383))
+        data += b"\x00" + bytes([0xE0, bend & 0x7F, bend >> 7])
+    events = []
+    for _ in range(repeats):
+        for n in notes:
+            events += [(tick, 1, n), (tick + beats_per_note * tpq - 10, 0, n)]
+            tick += beats_per_note * tpq
+    for t, on, n in events:
+        data += _vlq(t - last) + bytes([0x90 if on else 0x80, n, 96 if on else 0])
+        last = t
+    data += b"\x00\xff\x2f\x00"
+    Path(path).write_bytes(b"MThd" + struct.pack(">IHHH", 6, 0, 1, tpq) +
+                           b"MTrk" + struct.pack(">I", len(data)) + data)
+
+
 def export_midis(r, out_dir):
     """Write MIDI for each detected loop, a relative-substitution variation, and AI progressions."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -962,6 +1088,11 @@ def export_midis(r, out_dir):
         top = [c["chord"] for c in r["chords_used"][:4]]
         first_seen = list(dict.fromkeys(c["chord"] for c in r["chord_timeline"] if c["chord"] in top))
         save("main chords", first_seen)
+    mel = r.get("melody") or {}
+    for label, notes in (mel.get("variations_midi") or {}).items():
+        fname = f"{stem}_melody_{re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')}.mid"
+        write_melody_midi(out_dir / fname, notes, bpm, cents=cents)
+        files.append({"file": fname, "label": f"melody — {label}", "chords": mel["variations"][label]})
     for i, alt in enumerate((r.get("ai") or {}).get("alt_progressions", []), 1):
         save(f"ai {i} {alt.get('name', '')}", alt.get("chords", []))
     return files
@@ -977,7 +1108,8 @@ Return ONLY a JSON object, no other text:
   "vibe": "<at most 2 sentences on the feel the data suggests; phrase interpretations as such, e.g. 'the slow tempo and dark tone suggest...'>",
   "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure|remix>", "idea": "<one concrete, actionable suggestion that references a specific time, section, chord, note or number from the data>"}}],
   "alt_progressions": [{{"name": "<short name>", "chords": ["<chord>", "..."], "why": "<one sentence>"}}],
-  "title_ideas": ["<title>", "<title>", "<title>"]
+  "title_ideas": ["<title>", "<title>", "<title>"],
+  "references": [{{"artist": "<artist>", "track": "<well-known recording>", "shared": "<the specific element it shares with this track (progression, mode, groove, melodic device, tempo), one sentence>"}}]
 }}
 
 RULES:
@@ -991,6 +1123,9 @@ RULES:
   Automatic analysis can be wrong; if key_confidence < 0.6 treat the key as uncertain, and if
   mode_confidence is "low" don't build ideas on the exact mode.
 - When you mention a time or a section, copy its start/end exactly from the data.
+- references: 2-3 widely known recordings that share a SPECIFIC element with this data (same chord loop,
+  mode, groove or melodic device). Only name recordings you are certain exist and certain about.
+  Don't repeat ones already in references in the data.
 - Prefer chords the track doesn't already use (see chords_used) for alternative progressions.
 
 ANALYSIS:
@@ -1073,6 +1208,8 @@ def ai_brainstorm(r, llm):
                              for p in obj.get("alt_progressions", [])
                              if isinstance(p, dict) and isinstance(p.get("chords"), list)],
         "title_ideas": [_clean(t) for t in obj.get("title_ideas", [])][:5],
+        "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
+                       for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
     }
 
 
@@ -1191,6 +1328,12 @@ GLOSSARY = {
     "Percussive": "Share of the sound energy coming from drums/percussion rather than sustained notes.",
     "Frequency balance": "Share of energy in each range: sub (felt more than heard), bass, low-mids (body), "
                          "high-mids (presence), air (sparkle).",
+    "Scale degree": "A note's position in the key: 1 is the home note, 5 the fifth above it, b6 a flattened "
+                    "sixth, and so on. Degrees describe a melody independently of the key.",
+    "Top line": "The loudest pitched part, found automatically. In a full-band phone recording this is often the "
+                "chord instrument rather than the melody.",
+    "Variations": "Classic ways to develop a motif: inversion flips its intervals upside down, retrograde plays "
+                  "it backwards, a sequence repeats it a step higher, an answer phrase resolves to the home note.",
     "dBFS": "Loudness relative to the digital maximum (0 dBFS); more negative = quieter.",
     "Dynamic range": "The difference between the loud and quiet parts, in dB. Bigger = more contrast.",
 }
@@ -1293,6 +1436,8 @@ def track_report(r):
                  f"{'✓' if sec.get('bass') else '—'} |")
     L += ["", f"{tip('Form')}: **{' '.join(sec['label'] for sec in r['sections'])}**"]
     L += instruments_report(r)
+    L += melody_report(r)
+    L += dna_report(r)
 
     # Rhythm & sound
     L += ["", "### Groove & sound", "",
@@ -1338,6 +1483,73 @@ def track_report(r):
         L += ["", "### 🎹 MIDI sketches (drag into your DAW)", ""]
         for m in r["midi"]:
             L.append(f"- `midi/{m['file']}` — {m['label']}: {' – '.join(m['chords'])}")
+    L.append("")
+    return L
+
+
+def melody_report(r):
+    L = ["", "### 🎶 Melody", ""]
+    m = r.get("melody")
+    if m and m.get("error"):
+        L += [f"_{m['error']}_", ""]
+    elif m:
+        chk = m.get("check") or {}
+        L += [f"**Your melody:** `{' '.join(m['notes'])}`", ""]
+        if chk:
+            strengths = ", ".join(f"{n['note']} (#{n['rank']} of 12)" for n in chk["notes"])
+            L += [f"> **Checked against the recording:** {chk['verdict']} "
+                  f"_Note strength rank in this track: {strengths}._", ""]
+        L += [
+              f"- **{tip('Scale degrees', 'Scale degree')}:** {' '.join(m['degrees'])} (1 = {r['scale_notes'][0]}, the home note)",
+              f"- **Fits:** {', '.join(mode_tip(x) for x in m['fits_modes']) or 'none of the 8 modes on this home note'}"
+              + (f" · outside the detected scale: {', '.join(m['outside_detected_scale'])}" if m["outside_detected_scale"] else ""),
+              f"- **Shape:** {m['shape']} · range {m['range']} · {m['steps_pct']}% steps, {m['leaps_pct']}% leaps",
+              f"- **Moves:** {', '.join(m['intervals'])}"]
+        if m["harmonize"]:
+            L.append("- **Chords that contain each note:** " +
+                     " · ".join(f"{n} → {', '.join(cs) or '—'}" for n, cs in m["harmonize"].items()))
+        if m["devices"]:
+            L += ["", "**Melodic devices**", ""]
+            L += [f"- {d['device']} — {d['reference']}" for d in m["devices"]]
+        L += ["", f"**{tip('Variations', 'Variations')}** (MIDI files below)", ""]
+        L += [f"- {name}: `{' '.join(notes)}`" for name, notes in m["variations"].items()]
+        L.append("")
+    t = r.get("top_line") or {}
+    if t.get("present"):
+        motif = "; ".join(f"`{' '.join(x['notes'])}` ×{x['times']}" for x in t["motifs"]) or "none clearly repeating"
+        main = ", ".join(f"{n['note']} {n['pct']}%" for n in t["main_notes"])
+        verdict = ("it's {0}% chord notes, so it's most likely following the chords rather than a separate "
+                   "melody".format(t["chord_tone_pct"]) if t["follows_chords"] else
+                   f"{t['chord_tone_pct']}% chord notes — likely a real melodic line")
+        L += [f"**{tip('Top line', 'Top line')} (automatic):** range {t['range']} · main notes {main} · "
+              f"repeating 4-note figures: {motif} · {verdict}."]
+        if not m:
+            L += ["", "_For a precise melody analysis, type the melody or riff when uploading "
+                  "(e.g. `A E F E A E D E`)._"]
+        L.append("")
+    return L
+
+
+def dna_report(r):
+    d = r.get("references") or {}
+    ai_refs = (r.get("ai") or {}).get("references") or []
+    if not (d.get("progressions") or d.get("mode") or d.get("groove") or d.get("melody") or ai_refs):
+        return []
+    L = ["", "### 🎧 Shared DNA with well-known music", "",
+         "_Not “sounds like” — specific building blocks this track shares with recordings worth studying._", ""]
+    for p in d.get("progressions", []):
+        how = "uses the same loop as" if p["match"] == "same loop" else "contains"
+        L.append(f"- **Chords:** your `{' – '.join(p['your_chords'])}` {how} **{p['progression']}** — "
+                 + ", ".join(p["examples"]))
+    if d.get("mode"):
+        L.append(f"- **Scale:** {mode_tip(d['mode']['mode'])} is the sound of " + ", ".join(d["mode"]["examples"]))
+    if d.get("groove"):
+        L.append(f"- **Groove:** {d['groove']}")
+    for m in d.get("melody", []):
+        L.append(f"- **Melody:** {m['device']} — {m['reference']}")
+    if ai_refs:
+        L += ["", "_AI suggestions — double-check before relying on them:_", ""]
+        L += [f"- **{x.get('artist', '?')} — “{x.get('track', '?')}”:** {x.get('shared', '')}" for x in ai_refs]
     L.append("")
     return L
 
@@ -1426,7 +1638,7 @@ def collect_files(paths):
     return files
 
 
-def run_analysis(files, out, llm=None, progress=None):
+def run_analysis(files, out, llm=None, progress=None, melody_text=None):
     """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
     `progress(message)` is called as work proceeds. Returns (results, report_markdown)."""
     progress = progress or (lambda msg: None)
@@ -1436,7 +1648,7 @@ def run_analysis(files, out, llm=None, progress=None):
         f = Path(f)
         progress(f"[{i}/{len(files)}] Analysing {f.name}...")
         try:
-            r = analyze(f)
+            r = analyze(f, inspiration.melody_for(f.name, melody_text))
             if llm:
                 progress(f"[{i}/{len(files)}] Brainstorming ideas for {f.name}...")
                 r["ai"] = ai_brainstorm(r, llm)
@@ -1459,6 +1671,8 @@ def main():
     ap.add_argument("paths", nargs="+", help="audio files and/or folders")
     ap.add_argument("--out", default=".", help="output folder for the report, JSON and MIDI files")
     ap.add_argument("--no-llm", action="store_true", help="skip the AI brainstorm")
+    ap.add_argument("--melody", help="melody/riff notes to analyse, e.g. \"A E F E A E D E\" "
+                                     "(prefix with part of a file name to target one track: \"copy 4: A E F E\")")
     args = ap.parse_args()
 
     for stream in (sys.stdout, sys.stderr):
@@ -1478,7 +1692,8 @@ def main():
         print("No NVIDIA/Anthropic/OpenAI key set — skipping the AI brainstorm.", file=sys.stderr)
 
     out = Path(args.out)
-    _, report = run_analysis(files, out, llm, progress=lambda msg: print(msg, file=sys.stderr))
+    _, report = run_analysis(files, out, llm, progress=lambda msg: print(msg, file=sys.stderr),
+                             melody_text=args.melody)
     print(report)
     print(f"\nWrote {out / 'music_report.md'}, {out / 'music_results.json'} and MIDI files in {out / 'midi'}",
           file=sys.stderr)

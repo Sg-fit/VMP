@@ -18,7 +18,7 @@ RUN if [ "$WITH_DEMUCS" = "1" ]; then \
       pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install demucs; \
     fi
 
-COPY musicanalyze.py instruments.py job_runner.py app.py ./
+COPY musicanalyze.py instruments.py inspiration.py job_runner.py app.py ./
 COPY templates ./templates
 
 RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data

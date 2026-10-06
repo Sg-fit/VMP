@@ -40,7 +40,8 @@ def main(job_dir):
     try:
         files = sorted((d / "input").iterdir())
         llm = ma.make_llm()[0] if read_status(d).get("use_ai") else None
-        ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg))
+        ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg),
+                        melody_text=read_status(d).get("melody"))
         write_status(d, state="done", message="Done")
     except Exception as e:
         write_status(d, state="error", message=f"Analysis failed: {str(e)[:300]}")

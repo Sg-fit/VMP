@@ -30,6 +30,12 @@
       <div class="muted">{{ exts }} · up to {{ max_files }} files, {{ max_mb }} MB total</div>
     </label>
     <ul id="chosen"></ul>
+    <label for="melody" style="display:block;font-weight:600;margin-bottom:4px">Melody or riff <span class="muted" style="font-weight:400">(optional)</span></label>
+    <textarea id="melody" name="melody" rows="2" maxlength="2000"
+      placeholder="e.g. A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"
+      style="width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);margin-bottom:6px"></textarea>
+    <p class="muted" style="font-size:.85rem;margin:0 0 16px">Type the notes you hear and get a melody analysis, variations as MIDI,
+      and a check of each note against the recording. Automatic melody detection is unreliable on full-band phone recordings.</p>
     <div class="row">
       {% if ai_label %}
         <label><input type="checkbox" name="ai" value="1" checked> Include AI brainstorm

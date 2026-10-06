@@ -176,6 +176,7 @@ def analyze():
 
     ahead = job_queue.qsize()
     write_status(d, state="queued", files=saved, use_ai=bool(LLM and request.form.get("ai")),
+                 melody=(request.form.get("melody") or "")[:2000],
                  created=time.time(),
                  message=f"Waiting in line ({ahead} job{'s' if ahead != 1 else ''} ahead)…" if ahead else "Starting…")
     job_queue.put(job_id)

@@ -8,6 +8,8 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **Structure** | Sections (A, B, A…) with times, energy level, key and main chords |
 | **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline |
 | **Groove & sound** | Pulse steadiness, how busy the rhythm is, syncopation, percussive vs. tonal balance, tone and texture, loudness, energy arc, biggest build, quietest moment, frequency balance from sub to air |
+| **🎶 Melody** | Type the melody or riff you hear (e.g. `A E F E A E D E`) to get its scale degrees, which modes it fits, its shape, melodic devices, chords that harmonize each note, and generated variations (inversion, retrograde, sequence, answer phrase) as MIDI files. Each note is also **checked against the recording**: it flags notes that barely sound, and says whether the audio supports the order. There's also an automatic "top line" that says honestly when it's only following the chords |
+| **🎧 Shared DNA** | Building blocks the track shares with well-known recordings: chord loops matched against famous progressions (for example i–IV = Santana's “Oye Como Va”), the mode, the drum groove, and melodic devices. The AI adds more reference tracks, labeled as suggestions to double-check |
 | **💡 Ideas to try** | Rule-based suggestions that need no AI: how to use the mode's colour note, chords to borrow from the parallel key, smooth and dramatic key-change targets, half-time or double-time variants, breakdowns and builds, groove contrasts, gaps in the mix |
 | **🤖 AI brainstorm** (optional) | A description of the feel, 6–8 specific ideas tied to times and chords, 2–3 alternative chord progressions, and title ideas |
 | **🎹 MIDI sketches** | `.mid` files of each detected chord loop, a variation of each loop, and the AI's progressions. Drag them into any DAW. |
@@ -98,6 +100,8 @@ Keep `MAX_UPLOAD_MB` under 100, because Cloudflare's free plan rejects larger up
 ```bash
 python musicanalyze.py song1.mp3 song2.mp3
 python musicanalyze.py ./music_folder --out ./analysis --no-llm
+python musicanalyze.py song.m4a --melody "A E F E A E D E"
+python musicanalyze.py ./music_folder --melody "copy 4: A E F E A E D E"   # one track only
 ```
 
 - Accepts `.mp3 .m4a .wav .ogg .flac .aac`, as single files or whole folders.
@@ -118,5 +122,6 @@ The report explains itself. Underlined terms show a plain-English explanation on
 - **Mode** is guessed from how strongly characteristic notes appear (for example the major 6th means Dorian). Treat it as a hint.
 - **Drums** are not transcribed hit by hit. The tool averages where kick-heavy and snare-heavy hits land across all bars, which is robust on demos but assumes 4/4. Demucs (optional) separates the drums more cleanly than the built-in split.
 - **Bass** is pitch-tracked from the lowest line once the drums are removed. If another low instrument (left-hand piano, low guitar strings) plays along, it's counted as bass.
+- **Melody** can't be reliably extracted automatically from a full-band phone recording, because the chords and any held notes dominate. That's why you can type it. The check against the recording confirms which notes are present. It often can't confirm their order, and it says so.
 - **Sections** come from automatic segmentation. The letters are a rough guide to which parts repeat.
 - Treat everything as a starting point for ideas, not as a transcription.

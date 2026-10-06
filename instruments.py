@@ -187,3 +187,37 @@ def bass_notes(music, sr, btimes, tuning):
         good = span & voiced & (prob > 0.2)
         notes.append(int(np.rint(np.nanmedian(midi[good]))) if span.sum() and good.sum() >= 0.3 * span.sum() else None)
     return notes
+
+
+# ---------------------------------------------------------------- top line (best-effort melody)
+
+def top_line(music, sr, btimes, tuning, lo_midi=45, hi_midi=81):
+    """The most salient pitch (A2-A5) per 8th note, from a harmonic-sum of the CQT.
+
+    This follows whatever pitched part is loudest. In a full-band phone recording that's often the
+    chord instrument rather than the melody, so musicanalyze checks how much of it is just chord
+    tones before calling it a melody. Returns a MIDI note (or None) per 8th note."""
+    import librosa
+    fmin_midi = lo_midi - 12
+    n_bins = hi_midi - fmin_midi + 29
+    C = np.abs(librosa.cqt(music, sr=sr, hop_length=512, fmin=librosa.midi_to_hz(fmin_midi),
+                           n_bins=n_bins, bins_per_octave=12, tuning=tuning))
+    sal = np.zeros_like(C)
+    for off, w in ((0, 1.0), (12, 0.8), (19, 0.6), (24, 0.5), (28, 0.4)):  # fundamental + overtones
+        sal[:n_bins - off] += w * C[off:]
+    lo, hi = lo_midi - fmin_midi, hi_midi - fmin_midi
+    best = sal[lo:hi].argmax(axis=0) + lo_midi
+    strength = sal[lo:hi].max(axis=0)
+    floor = np.percentile(strength, 30)
+    times = librosa.times_like(C[0], sr=sr, hop_length=512)
+    grid = np.concatenate([np.linspace(a, b, 2, endpoint=False) for a, b in zip(btimes[:-1], btimes[1:])]
+                          + [[btimes[-1]]])
+    notes = []
+    for a, b in zip(grid[:-1], grid[1:]):
+        sel = (times >= a) & (times < b)
+        if not sel.any() or strength[sel].mean() < floor:
+            notes.append(None)
+            continue
+        vals, counts = np.unique(best[sel], return_counts=True)
+        notes.append(int(vals[np.argmax(counts)]))
+    return notes, grid
