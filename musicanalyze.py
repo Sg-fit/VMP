@@ -546,6 +546,8 @@ def analyze(path):
         time_in_key[k] += e - s
     scores = key_scores(chroma[:, frames].mean(axis=1))
     runner_up = next(int(i) for i in np.argsort(scores)[::-1] if i != main_key)
+    if scores[main_key] < 0.6 and scale["mode_confidence"] == "high":
+        scale["mode_confidence"] = "medium"  # the mode can't be surer than the key it's built on
 
     # --- chords
     chords = detect_chords(chroma, rms_db, bounds, btimes)
@@ -558,7 +560,9 @@ def analyze(path):
                  and c["start"] <= (btimes[i] + btimes[i + 1]) / 2 < c["end"]]
         if under:
             pc = Counter(under).most_common(1)[0][0]
-            c["slash"] = c["name"] + "/" + spell(pc, k) if pc != c["root"] else c["name"]
+            tones = {(c["root"] + iv) % 12 for iv in CHORD_INTERVALS[c["q"]]}
+            meaningful = pc in tones or pc == key_tonic(k)  # inversion, or pedal on the home note
+            c["slash"] = c["name"] + "/" + spell(pc, k) if pc != c["root"] and meaningful else c["name"]
     chord_time = Counter()
     for c in chords:
         chord_time[c["name"]] += c["end"] - c["start"]
@@ -673,7 +677,7 @@ def bass_summary(notes, btimes, chords, key, duration):
         style = "melodic / walking (moves stepwise)"
     else:
         style = "mixed (roots, jumps and passing notes)"
-    lo, hi = (int(v) for v in np.percentile([n for _, n in voiced], [3, 97]))  # ignore stray octave errors
+    lo, hi = (int(v) for v in np.percentile([n for _, n in voiced], [10, 90]))  # ignore stray octave errors
     return {
         "present": True,
         "plays_pct": round(100 * len(voiced) / len(notes)),
@@ -755,10 +759,13 @@ def rule_based_ideas(r):
                       f"the bass follow the chord roots ({chord(5)} under {chord(5)}, {chord(9, 'm')} under "
                       f"{chord(9, 'm')}) so the harmony suddenly moves — then return to the {note(0)} pedal for home."})
     elif r.get("drone"):
+        heard = {c.get("with_bass") for c in r["chord_timeline"]}
+        fresh = [f"{chord(off, q)}/{note(0)}" for off, q in ((2, ""), (10, ""), (7, ""), (5, ""), (9, "m"))
+                 if f"{chord(off, q)}/{note(0)}" not in heard][:2]
         ideas.append({"area": "harmony", "idea":
-                      f"{note(0)} rings through almost everything (a drone/pedal). Use it: move chords on top of the "
-                      f"{note(0)} bass — e.g. {chord(5)}/{note(0)} or {chord(2)}/{note(0)} — for tension without "
-                      f"leaving home, or drop the drone for one section so its return hits harder."})
+                      f"{note(0)} rings through almost everything (a drone/pedal). Put new chords on top of it — "
+                      f"{' or '.join(fresh)} — for tension without leaving home, or drop the drone for one "
+                      f"section so its return hits harder."})
     if bass.get("present") and bass.get("follows_roots_pct", 0) >= 70:
         ideas.append({"area": "bass", "idea": "The bass mostly plays chord roots. Add approach notes: on the last 8th "
                       "before each chord change, play a note a half-step above or below the next root."})
@@ -967,14 +974,15 @@ instrumental track they made. Below is automatic audio analysis of the track (JS
 
 Return ONLY a JSON object, no other text:
 {{
-  "vibe": "<2-3 sentences on the feel the data suggests; phrase interpretations as such, e.g. 'the slow tempo and dark tone suggest...'>",
+  "vibe": "<at most 2 sentences on the feel the data suggests; phrase interpretations as such, e.g. 'the slow tempo and dark tone suggest...'>",
   "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure|remix>", "idea": "<one concrete, actionable suggestion that references a specific time, section, chord, note or number from the data>"}}],
   "alt_progressions": [{{"name": "<short name>", "chords": ["<chord>", "..."], "why": "<one sentence>"}}],
   "title_ideas": ["<title>", "<title>", "<title>"]
 }}
 
 RULES:
-- Give 6-8 ideas, each different and specific. No generic advice like "add more layers" or "experiment".
+- Give 6 ideas, each different, specific and under 40 words. No generic advice like "add more layers" or "experiment".
+- Keep the whole reply short (under 600 words) so it isn't cut off.
 - Do not repeat these ideas the musician already has: {existing}
 - Give 2-3 alt_progressions in the track's key ({key}), 3-6 chords each, as alternatives or a contrasting
   section for the detected loop. Chord names: letter + optional b/# + optional quality from m, 7, m7, maj7, dim, sus2, sus4
@@ -1005,19 +1013,25 @@ def make_llm():
             models, label = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)], "openai"
 
         def call(prompt):
-            # NVIDIA's free endpoints sometimes time out (504) or retire models (410):
-            # fall through to the next model instead of failing the brainstorm.
-            last_error = None
+            # NVIDIA's free endpoints sometimes time out (504), retire models (410), or (reasoning
+            # models) spend the whole budget thinking and return nothing. Fall through to the next
+            # model in all of those cases instead of failing the brainstorm.
+            problems = []
             for model in dict.fromkeys(models):
                 try:
-                    r = client.chat.completions.create(model=model, temperature=0.8, max_tokens=1800,
+                    r = client.chat.completions.create(model=model, temperature=0.8, max_tokens=4096,
                                                        messages=[{"role": "user", "content": prompt}])
-                    return r.choices[0].message.content or ""
                 except (openai.APIStatusError, openai.APITimeoutError, openai.APIConnectionError) as e:
                     if getattr(e, "status_code", 500) in (400, 401, 403):  # bad request / key: don't hammer
                         raise
-                    last_error = e
-            raise last_error
+                    problems.append(f"{model}: {type(e).__name__} {getattr(e, 'status_code', '')}".strip())
+                    continue
+                text = r.choices[0].message.content or ""
+                if "{" in text:
+                    call.model_used = model
+                    return text
+                problems.append(f"{model}: empty reply")
+            raise RuntimeError("no model gave an answer (" + "; ".join(problems) + ")")
         return call, f"{label}/{models[0]}"
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -1028,6 +1042,7 @@ def make_llm():
         def call(prompt):
             m = client.messages.create(model=model, max_tokens=3000, temperature=0.8,
                                        messages=[{"role": "user", "content": prompt}])
+            call.model_used = model
             return "".join(b.text for b in m.content if b.type == "text")
         return call, f"anthropic/{model}"
 
@@ -1045,13 +1060,11 @@ def ai_brainstorm(r, llm):
         return {"error": f"AI brainstorm unavailable: {str(e)[:150]}"}
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     raw = re.sub(r"```(?:json)?", "", raw)
-    a, b = raw.find("{"), raw.rfind("}")
-    try:
-        obj = json.loads(raw[a:b + 1])
-        assert isinstance(obj, dict)
-    except Exception:
+    obj = _parse_json_reply(raw)
+    if obj is None:
         return {"error": "AI reply could not be parsed", "raw": raw.strip()[:1500]}
     return {
+        "model": getattr(llm, "model_used", None),
         "vibe": _clean(obj.get("vibe", "")),
         "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _clean(i["idea"])}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
@@ -1061,6 +1074,50 @@ def ai_brainstorm(r, llm):
                              if isinstance(p, dict) and isinstance(p.get("chords"), list)],
         "title_ideas": [_clean(t) for t in obj.get("title_ideas", [])][:5],
     }
+
+
+def _parse_json_reply(raw):
+    """Parse the AI's JSON. If the reply was cut off mid-way, keep everything up to the last
+    complete item by closing the open brackets, so a long answer still yields its ideas."""
+    a = raw.find("{")
+    if a < 0:
+        return None
+    text = raw[a:raw.rfind("}") + 1] if raw.rfind("}") > a else raw[a:]
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    body = raw[a:]
+    for cut in [i for i, ch in enumerate(body) if ch == "}"][::-1][:200]:
+        head = body[:cut + 1]
+        # Close whatever is still open, innermost first.
+        stack = []
+        in_str = esc = False
+        for ch in head:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]" and stack:
+                stack.pop()
+        if in_str:
+            continue
+        try:
+            obj = json.loads(head + "".join(reversed(stack)))
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _clean(text):
@@ -1262,7 +1319,7 @@ def track_report(r):
 
     ai = r.get("ai")
     if ai:
-        L += ["", "### 🤖 AI brainstorm", ""]
+        L += ["", "### 🤖 AI brainstorm", ""] + ([f"_Suggestions by {ai['model']}._", ""] if ai.get("model") else [])
         if ai.get("error"):
             L.append(f"_{ai['error']}_")
         else:
