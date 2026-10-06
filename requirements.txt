@@ -11,3 +11,6 @@ gunicorn>=22; platform_system != "Windows"
 # Optional AI brainstorm. NVIDIA and OpenAI both use the `openai` package; Anthropic uses `anthropic`.
 openai>=1.40
 anthropic>=0.40
+
+# Optional: AI drum separation (big download). Install separately if you want it:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install demucs

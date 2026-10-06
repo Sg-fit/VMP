@@ -18,6 +18,13 @@
   .report details { margin: 8px 0; } .report summary { cursor: pointer; color: var(--accent); }
   .report hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0 12px; }
   .report hr + p { color: var(--muted); font-size: .85rem; }
+  .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
+  .report abbr[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+  .report details > summary { font-weight: 600; }
+  .report details ul { padding-left: 20px; } .report details li { margin: 4px 0; }
+  #tip { position: absolute; z-index: 10; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
+         background: var(--text); color: var(--bg); border-radius: 10px; font-size: .85rem; line-height: 1.4;
+         box-shadow: 0 6px 24px rgba(0,0,0,.25); display: none; }
 </style>
 {% endblock %}
 {% block content %}
@@ -35,7 +42,24 @@
       <div class="midis">🎹 {% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
   </div>
+  <p class="muted" style="font-size:.88rem;margin:20px 0 0">Tip: underlined terms explain themselves — hover (or tap on a phone).
+    The full guide is under “📖 How to read this report”.</p>
   <div class="report">{{ report_html|safe }}</div>
+  <div id="tip" role="tooltip"></div>
+  <script>
+    // Tap/click an underlined term to show its explanation (hover tooltips don't exist on phones).
+    const tipEl = document.getElementById('tip');
+    document.addEventListener('click', ev => {
+      const a = ev.target.closest('.report abbr[title]');
+      if (!a) { tipEl.style.display = 'none'; return; }
+      tipEl.textContent = a.getAttribute('title');
+      tipEl.style.display = 'block';
+      const r = a.getBoundingClientRect();
+      const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - tipEl.offsetWidth - 16);
+      tipEl.style.left = Math.max(16, left) + 'px';
+      tipEl.style.top = (window.scrollY + r.bottom + 6) + 'px';
+    });
+  </script>
 
 {% elif s.state == 'error' %}
   <div class="card">
@@ -49,7 +73,7 @@
     <div class="spinner"></div>
     <h1>Analysing your music…</h1>
     <p id="msg" class="muted">{{ s.message }}</p>
-    <p class="muted" style="font-size:.85rem">This takes about 20–30 seconds per track. This page updates by itself.</p>
+    <p class="muted" style="font-size:.85rem">This takes about 30–60 seconds per track (a few minutes with AI drum separation). This page updates by itself.</p>
   </div>
   <script>
     async function poll() {

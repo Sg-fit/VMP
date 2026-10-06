@@ -1,6 +1,10 @@
 services:
   music-analyzer:
-    build: .
+    build:
+      context: .
+      args:
+        # 1 = include Demucs AI drum separation (bigger image, slower jobs). Set in .env.
+        WITH_DEMUCS: ${WITH_DEMUCS:-0}
     restart: unless-stopped
     ports:
       # Only reachable from the server itself; put nginx/Caddy/Cloudflare Tunnel in front.

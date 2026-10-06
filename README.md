@@ -6,6 +6,7 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 |---|---|
 | **Harmony** | Key and [Camelot](https://mixedinkey.com/camelot-wheel/) code, key timeline, time spent in each key, **mode** (Dorian, harmonic minor, Mixolydian…) with its signature "colour note", the notes used most, the chords used most, harmonic rhythm, **repeating chord loops** with Roman numerals (for example `Bm – Em – F#` = i – iv – V), and the full chord timeline |
 | **Structure** | Sections (A, B, A…) with times, energy level, key and main chords |
+| **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline |
 | **Groove & sound** | Pulse steadiness, how busy the rhythm is, syncopation, percussive vs. tonal balance, tone and texture, loudness, energy arc, biggest build, quietest moment, frequency balance from sub to air |
 | **💡 Ideas to try** | Rule-based suggestions that need no AI: how to use the mode's colour note, chords to borrow from the parallel key, smooth and dramatic key-change targets, half-time or double-time variants, breakdowns and builds, groove contrasts, gaps in the mix |
 | **🤖 AI brainstorm** (optional) | A description of the feel, 6–8 specific ideas tied to times and chords, 2–3 alternative chord progressions, and title ideas |
@@ -59,6 +60,8 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `JOB_TTL_HOURS` | 24 | How long results are kept |
 | `DATA_DIR` | `./jobs` | Where results are stored |
 | `HOST_PORT` | 8090 | Docker only: the localhost port your proxy forwards to |
+| `MUSIC_SEPARATION` | `auto` | `auto` uses Demucs if installed, `demucs` requires it, `simple` always uses the fast built-in split |
+| `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI drum separation (about 1 GB larger image, 1–2 min of CPU per track). Rebuild with `docker compose up -d --build` after changing it |
 
 ### Behind a domain (nginx)
 
@@ -101,6 +104,10 @@ python musicanalyze.py ./music_folder --out ./analysis --no-llm
 - The AI brainstorm runs when an API key is set. On Windows PowerShell, set it with `$env:NVIDIA_API_KEY="nvapi-..."`, not `export`. Use `--no-llm` to skip it.
 - Speed: about 20 s per 1-minute track on CPU, plus a few seconds for the AI.
 
+## Reading the report
+
+The report explains itself. Underlined terms show a plain-English explanation on hover (tap on a phone), and the **📖 How to read this report** section at the top covers every column (Camelot, Mode, Form, Energy, the drum grid and so on).
+
 ## How accurate is it?
 
 - **Key:** the tool compares the song's pitch-class energy against all 24 major/minor key profiles (Krumhansl-Schmuckler), using a 10-second window every 2 seconds. On real music, expect about 70–80% accuracy. The usual mistakes are relative keys (B minor ↔ D major) or the dominant key. Check the **runner-up** key when the result looks wrong.
@@ -108,5 +115,7 @@ python musicanalyze.py ./music_folder --out ./analysis --no-llm
 - **Tempo** can come out at half or double the felt tempo (for example 70 vs 140).
 - **Chords** are detected once per beat, using major, minor, 7 and m7 shapes only. Detection works best on clear, sustained harmony. Dense mixes, distortion and extended jazz chords will be simplified or misread. Two related chords can be confused when they share notes (for example B and G#m).
 - **Mode** is guessed from how strongly characteristic notes appear (for example the major 6th means Dorian). Treat it as a hint.
+- **Drums** are not transcribed hit by hit. The tool averages where kick-heavy and snare-heavy hits land across all bars, which is robust on demos but assumes 4/4. Demucs (optional) separates the drums more cleanly than the built-in split.
+- **Bass** is pitch-tracked from the lowest line once the drums are removed. If another low instrument (left-hand piano, low guitar strings) plays along, it's counted as bass.
 - **Sections** come from automatic segmentation. The letters are a rough guide to which parts repeat.
 - Treat everything as a starting point for ideas, not as a transcription.

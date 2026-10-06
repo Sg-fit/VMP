@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -21,6 +22,8 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+
+import instruments
 
 AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
 SR = 22050
@@ -501,7 +504,8 @@ def analyze(path):
     if len(y) < 2 * SR:
         raise ValueError("audio is shorter than 2 seconds")
     duration = len(y) / sr
-    y_harm, y_perc = librosa.effects.hpss(y)
+    # Split off the drums so they don't blur the harmony, and analyse each part on its own.
+    y_perc, y_harm, separation = instruments.separate(y, sr)  # drums, everything else
 
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=HOP)
     tempo = float(np.atleast_1d(tempo)[0])
@@ -545,9 +549,16 @@ def analyze(path):
 
     # --- chords
     chords = detect_chords(chroma, rms_db, bounds, btimes)
+    bass = instruments.bass_notes(y_harm, sr, btimes, tuning)  # one note (or None) per beat span
     for c in chords:
         k = key_at(ksec, (c["start"] + c["end"]) / 2)
         c["name"], c["roman"] = chord_name(c["root"], c["q"], k), roman(c["root"], c["q"], k)
+        # If the bass mostly plays something other than the root under this chord: slash chord (A/E).
+        under = [bass[i] % 12 for i in range(len(bass)) if bass[i] is not None
+                 and c["start"] <= (btimes[i] + btimes[i + 1]) / 2 < c["end"]]
+        if under:
+            pc = Counter(under).most_common(1)[0][0]
+            c["slash"] = c["name"] + "/" + spell(pc, k) if pc != c["root"] else c["name"]
     chord_time = Counter()
     for c in chords:
         chord_time[c["name"]] += c["end"] - c["start"]
@@ -567,7 +578,8 @@ def analyze(path):
     for l in loops:
         l.setdefault("roman", [roman(*parse_chord(c)[:2], KEY_NAMES.index(l["key"])) for c in l["chords"]])
 
-    # --- structure (with each section's key and main chords)
+    # --- structure (with each section's key, main chords and which instruments play)
+    drum_rms = librosa.feature.rms(y=y_perc, hop_length=HOP)[0]
     sections = detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, [e for _, e, _ in ksec[:-1]])
     for sec in sections:
         top = Counter()
@@ -576,6 +588,13 @@ def analyze(path):
                 top[c["name"]] += c["end"] - c["start"]
         sec["key"] = KEY_NAMES[key_at(ksec, (sec["start"] + sec["end"]) / 2)]
         sec["main_chords"] = [name for name, _ in top.most_common(4)]
+        a, b = int(sec["start"] * sr / HOP), max(int(sec["end"] * sr / HOP), int(sec["start"] * sr / HOP) + 1)
+        sec["drums_level"] = float(np.mean(drum_rms[a:b] ** 2)) if a < len(drum_rms) else 0.0
+        in_sec = [n for i, n in enumerate(bass) if sec["start"] <= (btimes[i] + btimes[i + 1]) / 2 < sec["end"]]
+        sec["bass"] = bool(in_sec) and sum(n is not None for n in in_sec) >= 0.4 * len(in_sec)
+    loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
+    for sec in sections:
+        sec["drums"] = loudest_drums > 0 and sec.pop("drums_level") >= 0.1 * loudest_drums
 
     result = {
         "file": Path(path).name,
@@ -596,14 +615,78 @@ def analyze(path):
         "chords_used": [{"chord": name, "seconds": round(t, 1)} for name, t in chord_time.most_common(8)],
         "harmonic_rhythm_beats": round(float(np.mean([c["beats"] for c in chords])), 1) if chords else None,
         "chord_timeline": [{"time": fmt_time(c["start"]), "chord": c["name"], "roman": c["roman"],
-                            "beats": c["beats"]} for c in chords],
+                            "with_bass": c.get("slash", c["name"]), "beats": c["beats"]} for c in chords],
         "loops": loops,
         "sections": sections,
         "rhythm": rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr),
         "sound": sound_features(y, sr, rms_db, duration),
+        "separation": separation,
+        "drums": instruments.drum_analysis(y_perc, sr, 256, beat_times, float(np.sum(y ** 2)))
+        if clear_beat else {"present": False},
+        "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
     result["ideas"] = rule_based_ideas(result)
     return result
+
+
+def note_name(midi, key):
+    return f"{spell(midi % 12, key)}{midi // 12 - 1}"
+
+
+def bass_summary(notes, btimes, chords, key, duration):
+    """Describe the bass line: main notes, range, how it moves, whether it follows the chords."""
+    voiced = [(i, n) for i, n in enumerate(notes) if n is not None]
+    if len(voiced) < max(8, 0.2 * len(notes)):
+        return {"present": False}
+    pcs = Counter(n % 12 for _, n in voiced)
+    pairs = [(a, b) for (i, a), (j, b) in zip(voiced, voiced[1:]) if j == i + 1]
+    moves = [abs(b - a) for a, b in pairs]
+    stay = np.mean([m == 0 for m in moves]) if moves else 0.0
+    step = np.mean([0 < m <= 2 for m in moves]) if moves else 0.0
+    leap = np.mean([m > 2 for m in moves]) if moves else 0.0
+    root_hits = []
+    for i, n in voiced:
+        mid = (btimes[i] + btimes[i + 1]) / 2
+        c = next((c for c in chords if c["start"] <= mid < c["end"]), None)
+        if c:
+            root_hits.append(n % 12 == c["root"])
+    follows = float(np.mean(root_hits)) if root_hits else 0.0
+    top_pc, top_n = pcs.most_common(1)[0]
+    top_share = top_n / len(voiced)
+
+    # A riff: the most common 4-beat (one bar) note pattern, if it repeats enough and moves.
+    bars = [tuple(notes[i:i + 4]) for i in range(0, len(notes) - 3, 4)]
+    bars = [b for b in bars if all(n is not None for n in b)]
+    riff = None
+    if bars:
+        pattern, count = Counter(bars).most_common(1)[0]
+        if count >= 3 and count >= 0.25 * len(bars) and len(set(pattern)) > 1:
+            riff = [spell(n % 12, key) for n in pattern]
+
+    if top_share >= 0.55 and stay >= 0.5:
+        style = f"pedal — holds {spell(top_pc, key)} under changing chords"
+    elif follows >= 0.6:
+        style = "plays the chord roots"
+    elif riff:
+        style = "riff-based"
+    elif step >= 0.35:
+        style = "melodic / walking (moves stepwise)"
+    else:
+        style = "mixed (roots, jumps and passing notes)"
+    lo, hi = (int(v) for v in np.percentile([n for _, n in voiced], [3, 97]))  # ignore stray octave errors
+    return {
+        "present": True,
+        "plays_pct": round(100 * len(voiced) / len(notes)),
+        "main_notes": [{"note": spell(pc, key), "pct": round(100 * c / len(voiced))} for pc, c in pcs.most_common(5)],
+        "range": f"{note_name(lo, key)}–{note_name(hi, key)}",
+        "style": style,
+        "stays_pct": round(100 * stay),
+        "steps_pct": round(100 * step),
+        "leaps_pct": round(100 * leap),
+        "follows_roots_pct": round(100 * follows),
+        "riff": riff,
+        "pedal_note": spell(top_pc, key) if top_share >= 0.55 and stay >= 0.5 else None,
+    }
 
 
 def _same_cycle(a, b):
@@ -665,11 +748,20 @@ def rule_based_ideas(r):
         ideas.append({"area": "melody/harmony", "idea": tips[r["mode"]]})
 
     # Drone / pedal tone
-    if r.get("drone"):
+    bass = r.get("bass") or {}
+    if bass.get("pedal_note") == note(0):
+        ideas.append({"area": "bass", "idea":
+                      f"The bass holds {note(0)} under almost every chord (a pedal). Release it in one section: let "
+                      f"the bass follow the chord roots ({chord(5)} under {chord(5)}, {chord(9, 'm')} under "
+                      f"{chord(9, 'm')}) so the harmony suddenly moves — then return to the {note(0)} pedal for home."})
+    elif r.get("drone"):
         ideas.append({"area": "harmony", "idea":
                       f"{note(0)} rings through almost everything (a drone/pedal). Use it: move chords on top of the "
                       f"{note(0)} bass — e.g. {chord(5)}/{note(0)} or {chord(2)}/{note(0)} — for tension without "
                       f"leaving home, or drop the drone for one section so its return hits harder."})
+    if bass.get("present") and bass.get("follows_roots_pct", 0) >= 70:
+        ideas.append({"area": "bass", "idea": "The bass mostly plays chord roots. Add approach notes: on the last 8th "
+                      "before each chord change, play a note a half-step above or below the next root."})
 
     # Major/minor thirds both present
     if r.get("third_mix"):
@@ -746,6 +838,27 @@ def rule_based_ideas(r):
     if quiet:
         ideas.append({"area": "arrangement", "idea": f"The quietest stretch is around {s['quietest_moment']} — a natural "
                       f"spot for a solo instrument, a field recording, or a new melodic motif."})
+
+    # Drums
+    d = r.get("drums") or {}
+    if d.get("grid"):
+        traits = d.get("traits", [])
+        changes = [fmt_time(sec["start"]) for sec in r["sections"][1:]]
+        if not d.get("fills") and changes:
+            ideas.append({"area": "drums", "idea": f"The groove runs without obvious fills. Mark the section changes "
+                          f"({', '.join(changes[:4])}) with a one-bar fill or a crash on the downbeat."})
+        if any("backbeat" in t for t in traits):
+            quiet = next((sec["label"] for sec in r["sections"] if sec["energy"] == "low"), None)
+            ideas.append({"area": "drums", "idea": "Classic backbeat (snare on 2 and 4). For contrast, play one "
+                          f"section{' (e.g. ' + quiet + ')' if quiet else ''} half-time — snare only on 3 — so the "
+                          "return to the backbeat lifts."})
+        if not any("syncopated" in t or "tresillo" in t for t in traits):
+            ideas.append({"area": "drums", "idea": "The kick stays on the main beats. Add one push — a kick on the "
+                          "'a' of 2 or the '&' of 3 — for more bounce without changing the feel."})
+        hats = d.get("hats") or ""
+        if hats and hats.count("h") <= 5:
+            ideas.append({"area": "drums", "idea": "The cymbal/hi-hat marks only the main beats. Switch it to steady "
+                          "8ths (or 16ths) in the loudest section to raise the energy."})
 
     # Groove
     g = r["rhythm"].get("groove")
@@ -989,6 +1102,69 @@ def pairings(results):
 
 BARS = "▁▂▃▄▅▆▇█"
 
+# Plain-English explanations, shown as hover tooltips and in the "How to read this report" guide.
+GLOSSARY = {
+    "Length": "Duration of the track (minutes:seconds).",
+    "Tempo": "Speed in beats per minute (BPM). Automatic detection occasionally reads half or double what you feel.",
+    "Key": "The home note and scale the music settles on, e.g. E major. Major usually sounds brighter, minor darker.",
+    "Camelot": "A DJ/producer code for keys: numbers 1-12 around a wheel, A = minor, B = major. Tracks with the same "
+               "code, one number apart (same letter), or the same number with the other letter blend smoothly.",
+    "Mode": "The flavour of the scale: which notes are used around the home note. Hover a mode name to hear what "
+            "it's like in words.",
+    "Form": "The order of the song's sections. Each letter is a section; the same letter again means it sounds like "
+            "an earlier one (e.g. A B A C = verse, chorus, verse, bridge). Detected automatically, so approximate.",
+    "Energy": "Loudness across the track from start (left) to end (right) in 24 slices; taller bars are louder. "
+              "Shows builds, drops and breakdowns at a glance.",
+    "Confidence": "How strongly the notes match the key (0-1). Above 0.75 is clear; below 0.6 the harmony is "
+                  "ambiguous (modal music, drones, power chords).",
+    "Colour note": "The note that gives this mode its character. Feature it in a melody to make the mode obvious.",
+    "Roman numerals": "Chords named by their place in the key: I = the home chord, IV and V = built on the 4th and "
+                      "5th notes. Upper case = major, lower case = minor, so 'i - iv - V' is the same progression "
+                      "in any key.",
+    "Harmonic rhythm": "How often the chord changes.",
+    "Drone / pedal": "A note that keeps sounding while the chords change above it.",
+    "Slash chord": "A/E means an A chord with E as the lowest (bass) note.",
+    "Tuning": "How far the instrument is from standard pitch (A = 440 Hz), in cents. 100 cents = one semitone.",
+    "Drum grid": "One bar split into 16 sixteenth-notes (1 e & a 2 e & a 3 e & a 4 e & a). K = kick-heavy hit, "
+                 "S = snare-heavy hit, X = strong hit (kick and snare), x = lighter hit, . = usually nothing. "
+                 "h = hi-hat/cymbal.",
+    "Groove repetition": "How closely the bars repeat the main drum groove: tight = loop-like, loose = lots of "
+                         "variation.",
+    "Syncopation": "Hits that fall between the beats instead of on them; makes a groove feel pushed or funky.",
+    "Percussive": "Share of the sound energy coming from drums/percussion rather than sustained notes.",
+    "Frequency balance": "Share of energy in each range: sub (felt more than heard), bass, low-mids (body), "
+                         "high-mids (presence), air (sparkle).",
+    "dBFS": "Loudness relative to the digital maximum (0 dBFS); more negative = quieter.",
+    "Dynamic range": "The difference between the loud and quiet parts, in dB. Bigger = more contrast.",
+}
+MODE_INFO = {
+    "Ionian (major)": "The ordinary major scale: bright, stable, resolved.",
+    "Lydian": "Major with a raised 4th: dreamy, floating, film-score.",
+    "Mixolydian": "Major with a flat 7th: bluesy, rock, folk, laid-back.",
+    "Phrygian dominant": "Flat 2nd with a major 3rd: Spanish / flamenco / Middle-Eastern.",
+    "Dorian": "Minor with a raised 6th: soulful, jazzy, funky, less sad than plain minor.",
+    "Aeolian (natural minor)": "The ordinary minor scale: sad, serious, emotional.",
+    "Harmonic minor": "Minor with a raised 7th: dramatic, classical, exotic pull to home.",
+    "Phrygian": "Minor with a flat 2nd: dark, tense, metal / cinematic.",
+}
+
+
+def tip(text, term=None, explanation=None):
+    """Wrap text in a hover tooltip (an <abbr>). Works in the web app and most Markdown viewers."""
+    title = explanation or GLOSSARY[term or text]
+    return f'<abbr title="{html.escape(title, quote=True)}">{text}</abbr>'
+
+
+def mode_tip(mode):
+    return tip(mode, explanation=MODE_INFO.get(mode, mode))
+
+
+def guide():
+    items = "".join(f"<li><b>{html.escape(k)}</b> — {html.escape(v)}</li>" for k, v in GLOSSARY.items())
+    modes = "".join(f"<li><b>{html.escape(k)}</b> — {html.escape(v)}</li>" for k, v in MODE_INFO.items())
+    return ["<details><summary>📖 How to read this report</summary>", "",
+            f"<ul>{items}</ul><p><b>Modes</b></p><ul>{modes}</ul>", "", "</details>", ""]
+
 
 def sparkline(values):
     return "".join(BARS[min(len(BARS) - 1, int(v * (len(BARS) - 1) + 0.5))] for v in values)
@@ -1004,8 +1180,8 @@ def track_report(r):
         return L + [f"⚠️ Could not analyse this file: {r['error']}", ""]
     rh, s = r["rhythm"], r["sound"]
     tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
-    L += [f"**{r['duration']}** · **{tempo}** · **{r['key']}** ({r['camelot']}) · **{r['mode']}** · "
-          f"{rh['tempo_feel']} · {s['tone']}", ""]
+    L += [f"**{r['duration']}** · **{tempo}** · **{tip(r['key'], 'Key')}** "
+          f"({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · {rh['tempo_feel']} · {s['tone']}", ""]
 
     # Harmony
     conf = r["key_confidence"]
@@ -1014,21 +1190,25 @@ def track_report(r):
                  f"; could also be {r['mode_runner_up']}" if r["mode_confidence"] == "medium" else
                  f"; uncertain — {r['mode_runner_up']} fits almost as well")
     L += ["### Harmony", "",
-          f"- **Key:** {r['key']} (confidence {conf}: {conf_note}; runner-up {r['runner_up_key']})",
-          f"- **Mode:** {r['mode']} ({r['mode_confidence']} confidence{mode_note}) — colour note **{r['color_note']}**",
+          f"- **{tip('Key')}:** {r['key']} ({tip('confidence', 'Confidence')} {conf}: {conf_note}; "
+          f"runner-up {r['runner_up_key']})",
+          f"- **{tip('Mode')}:** {mode_tip(r['mode'])} ({r['mode_confidence']} confidence{mode_note}) — "
+          f"{tip('colour note', 'Colour note')} **{r['color_note']}**",
           f"- **Scale:** {' '.join(r['scale_notes'])}",
           ]
     if r.get("drone"):
-        L.append(f"- **Drone / pedal:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the track")
+        who = " (the bass holds it)" if (r.get("bass") or {}).get("pedal_note") == r["scale_notes"][0] else ""
+        L.append(f"- **{tip('Drone / pedal')}:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the "
+                 f"track{who}")
     if r.get("third_mix"):
         L.append(f"- **Major/minor blur:** both thirds ({r['thirds']}) are prominent")
     cents = r.get("tuning_cents", 0)
     if abs(cents) >= 10:
-        L.append(f"- **Tuning:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
+        L.append(f"- **{tip('Tuning')}:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
                  f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz); the analysis corrects for this")
     L.append(f"- **Chords used most:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
     if r["harmonic_rhythm_beats"]:
-        L.append(f"- **Harmonic rhythm:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
+        L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     L += ["", "**Time in each key**", "", "| Key | Time | Share |", "|-----|------|-------|"]
     for k, v in r["time_in_key"].items():
         L.append(f"| {k} | {fmt_time(v['seconds'])} | {v['percent']}% |")
@@ -1037,34 +1217,40 @@ def track_report(r):
     if r["loops"]:
         L += ["", "**Chord loops**", ""]
         for lp in r["loops"]:
-            L.append(f"- `{' – '.join(lp['chords'])}`  ({' – '.join(lp['roman'])} in {lp['key']}) "
+            L.append(f"- `{' – '.join(lp['chords'])}`  ({tip(' – '.join(lp['roman']), 'Roman numerals')} "
+                     f"in {lp['key']}) "
                      f"· {', '.join(lp['where'])} · ×{lp['repeats']}")
     if r["chord_timeline"]:
-        L += ["", "<details><summary>Full chord timeline</summary>", "",
-              " · ".join(f"{c['time']} {c['chord']}" for c in r["chord_timeline"]), "", "</details>"]
+        L += ["", "<details><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
+              " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" for c in r["chord_timeline"]), "",
+              "</details>"]
 
     # Structure
-    L += ["", "### Structure", "", "| Section | Time | Length | Energy | Key | Main chords |",
-          "|---------|------|--------|--------|-----|-------------|"]
+    L += ["", "### Structure", "",
+          f"| Section | Time | Length | Energy | Key | Main chords | Drums | Bass |",
+          "|---------|------|--------|--------|-----|-------------|-------|------|"]
     for sec in r["sections"]:
         L.append(f"| **{sec['label']}** | {fmt_time(sec['start'])}–{fmt_time(sec['end'])} | "
                  f"{fmt_time(sec['end'] - sec['start'])} | {sec['energy']} | {sec['key']} | "
-                 f"{', '.join(sec['main_chords']) or '—'} |")
-    L += ["", f"Form: **{' '.join(sec['label'] for sec in r['sections'])}**"]
+                 f"{', '.join(sec['main_chords']) or '—'} | {'✓' if sec.get('drums') else '—'} | "
+                 f"{'✓' if sec.get('bass') else '—'} |")
+    L += ["", f"{tip('Form')}: **{' '.join(sec['label'] for sec in r['sections'])}**"]
+    L += instruments_report(r)
 
     # Rhythm & sound
     L += ["", "### Groove & sound", "",
           f"- **Pulse:** {rh['tempo_feel']}"
           + (f" (beat-to-beat variation {rh['tempo_variation_pct']}%)" if "tempo_variation_pct" in rh else ""),
           f"- **Rhythm:** {rh['busyness']} ({rh['onsets_per_sec']} notes/hits per sec)"
-          + (f", {rh['groove']} ({rh['syncopation_pct']}% off-beat)" if "groove" in rh else ""),
-          f"- **Percussive vs tonal:** {rh['percussive_pct']}% percussive energy",
+          + (f", {rh['groove']} ({rh['syncopation_pct']}% {tip('off-beat', 'Syncopation')})" if "groove" in rh else ""),
+          f"- **{tip('Percussive', 'Percussive')} vs tonal:** {rh['percussive_pct']}% percussive energy",
           f"- **Tone:** {s['tone']} ({s['brightness_hz']} Hz centroid), {s['texture']}",
-          f"- **Loudness:** avg {s['avg_loudness_db']} dBFS, dynamic range {s['dynamic_range_db']} dB",
-          f"- **Energy arc:** `{sparkline(s['energy_curve'])}`"
+          f"- **Loudness:** avg {s['avg_loudness_db']} {tip('dBFS')}, {tip('dynamic range', 'Dynamic range')} "
+          f"{s['dynamic_range_db']} dB",
+          f"- **{tip('Energy arc', 'Energy')}:** `{sparkline(s['energy_curve'])}`"
           + (f" — biggest build into **{s['biggest_build']['time']}**" if s["biggest_build"] else "")
           + (f", quietest around **{s['quietest_moment']}**" if s["quietest_moment"] else ""),
-          "", "**Frequency balance**", "", "```"]
+          "", f"**{tip('Frequency balance')}**", "", "```"]
     for name, pct in s["frequency_balance_pct"].items():
         L.append(f"{name:<18} {bar(pct):<20} {pct:>5}%")
     L.append("```")
@@ -1099,17 +1285,53 @@ def track_report(r):
     return L
 
 
+def instruments_report(r):
+    d, b = r.get("drums") or {}, r.get("bass") or {}
+    if not d.get("present") and not b.get("present"):
+        return []
+    how = ("separated with Demucs (AI source separation)" if r.get("separation") == "demucs" else
+           "separated with a lighter harmonic/percussive split (Demucs not installed)")
+    L = ["", "### Instruments", "", f"_Drums and the rest were {how}._", ""]
+    if d.get("present") and d.get("grid"):
+        where = [sec["label"] for sec in r["sections"] if sec.get("drums")]
+        parts = [f"plays in sections {' '.join(where)}" if where else "plays throughout",
+                 f"{tip('groove repetition', 'Groove repetition')}: {d['repetition']}"]
+        parts += d.get("traits", [])
+        if d.get("fills"):
+            parts.append("likely fills at " + ", ".join(fmt_time(t) for t in d["fills"]))
+        g = d["grid"]
+        rows = ["         1 e & a 2 e & a 3 e & a 4 e & a", "Drums    " + " ".join(g)]
+        if d.get("hats"):
+            rows.append("Cymbals  " + " ".join(d["hats"]))
+        L += [f"**🥁 Drums** — " + " · ".join(parts), "", f"Main groove ({tip('how to read', 'Drum grid')}):", "",
+              "```", *rows, "```", ""]
+    elif d.get("present"):
+        L += ["**🥁 Drums** — present, but no clear repeating pattern was found.", ""]
+    if b.get("present"):
+        notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
+        parts = [f"plays {b['plays_pct']}% of the time", f"range {b['range']}", f"style: {b['style']}",
+                 f"main notes: {notes}", f"on the chord root {b['follows_roots_pct']}% of the time"]
+        if b.get("riff"):
+            parts.append(f"repeating riff: `{' '.join(b['riff'])}`")
+        L += [f"**🎸 Bass** — " + " · ".join(parts), ""]
+    else:
+        L += ["**🎸 Bass** — no clear bass line detected.", ""]
+    return L
+
+
 def build_report(results):
     ok = [r for r in results if "error" not in r]
     L = ["# 🎵 Music Inspiration Report", "", f"_{len(results)} track(s) analysed_", ""]
     if ok:
-        L += ["| Track | Length | Tempo | Key | Camelot | Mode | Form | Energy |",
-              "|-------|--------|-------|-----|---------|------|------|--------|"]
+        heads = ["Length", "Tempo", "Key", "Camelot", "Mode", "Form", "Energy"]
+        L += ["| Track | " + " | ".join(tip(h) for h in heads) + " |",
+              "|-------|" + "|".join("-" * (len(h) + 2) for h in heads) + "|"]
         for r in ok:
             tempo = f"{r['tempo_bpm']:.0f}" if r["tempo_bpm"] else "—"
-            L.append(f"| {r['file']} | {r['duration']} | {tempo} | {r['key']} | {r['camelot']} | {r['mode']} | "
+            L.append(f"| {r['file']} | {r['duration']} | {tempo} | {r['key']} | {r['camelot']} | {mode_tip(r['mode'])} | "
                      f"{' '.join(s['label'] for s in r['sections'])} | `{sparkline(r['sound']['energy_curve'])}` |")
         L.append("")
+        L += guide()
     for r in results:
         L += track_report(r)
 
