@@ -31,4 +31,4 @@ VOLUME /data
 EXPOSE 8000
 
 # One worker: jobs run in a background thread inside the process.
-CMD gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:${PORT} app:app
+CMD gunicorn --workers 1 --threads 4 --timeout 120 --access-logfile - --bind 0.0.0.0:${PORT} app:app
