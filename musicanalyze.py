@@ -37,22 +37,47 @@ MINOR_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B"]
 KEY_NAMES = [f"{n} major" for n in MAJOR_NAMES] + [f"{n} minor" for n in MINOR_NAMES]
 # Key index k: 0-11 = major with tonic k, 12-23 = minor with tonic k-12.
 
-# Key timeline settings: estimate the key every STEP seconds from a WINDOW-second slice,
-# then drop key "sections" shorter than MIN_SECTION (usually just a passing chord).
+# Key timeline settings: estimate the key every STEP seconds from a WINDOW-second slice.
+# Changing key costs KEY_SWITCH_PENALTY (Viterbi smoothing), so the key only changes when the
+# evidence stays different for a while; sections shorter than MIN_SECTION are then dropped.
 STEP, WINDOW, MIN_SECTION = 2.0, 10.0, 8.0
+KEY_SWITCH_PENALTY = 0.6
 
-# Chord vocabulary for detection (intervals above the root). 7th chords get a small
-# penalty so plain triads win unless the 7th is clearly there.
+# Chord vocabulary for detection (intervals above the root). 7th and power chords get a small
+# penalty so plain triads win unless the 7th is clearly there / the third is clearly missing.
 DETECT_QUALITIES = {"": ([0, 4, 7], 1.0), "m": ([0, 3, 7], 1.0),
-                    "7": ([0, 4, 7, 10], 0.92), "m7": ([0, 3, 7, 10], 0.92)}
+                    "7": ([0, 4, 7, 10], 0.92), "m7": ([0, 3, 7, 10], 0.92),
+                    "5": ([0, 7], 0.86)}
+CHORD_SWITCH_PENALTY = 0.12
 # Wider vocabulary accepted when reading chord names (e.g. from the AI) for MIDI export.
-CHORD_INTERVALS = {"": [0, 4, 7], "maj": [0, 4, 7], "m": [0, 3, 7], "min": [0, 3, 7],
-                   "7": [0, 4, 7, 10], "m7": [0, 3, 7, 10], "maj7": [0, 4, 7, 11],
-                   "dim": [0, 3, 6], "sus2": [0, 2, 7], "sus4": [0, 5, 7]}
+# The longest matching quality wins, so "m7b5" beats "m7" and "m".
+CHORD_INTERVALS = {"": [0, 4, 7], "maj": [0, 4, 7], "M": [0, 4, 7], "m": [0, 3, 7], "min": [0, 3, 7],
+                   "-": [0, 3, 7], "5": [0, 7], "6": [0, 4, 7, 9], "m6": [0, 3, 7, 9],
+                   "7": [0, 4, 7, 10], "m7": [0, 3, 7, 10], "maj7": [0, 4, 7, 11], "M7": [0, 4, 7, 11],
+                   "9": [0, 4, 7, 10, 14], "m9": [0, 3, 7, 10, 14], "maj9": [0, 4, 7, 11, 14],
+                   "add9": [0, 4, 7, 14], "madd9": [0, 3, 7, 14],
+                   "dim": [0, 3, 6], "dim7": [0, 3, 6, 9], "m7b5": [0, 3, 6, 10], "aug": [0, 4, 8],
+                   "+": [0, 4, 8], "sus2": [0, 2, 7], "sus4": [0, 5, 7], "sus": [0, 5, 7],
+                   "7sus4": [0, 5, 7, 10], "11": [0, 4, 7, 10, 14, 17], "13": [0, 4, 7, 10, 14, 21]}
+
+# Modes, as intervals above the tonic, with the "colour" degree that defines each one.
+MODES = {
+    "Ionian (major)": ([0, 2, 4, 5, 7, 9, 11], 4),
+    "Lydian": ([0, 2, 4, 6, 7, 9, 11], 6),
+    "Mixolydian": ([0, 2, 4, 5, 7, 9, 10], 10),
+    "Phrygian dominant": ([0, 1, 4, 5, 7, 8, 10], 1),
+    "Dorian": ([0, 2, 3, 5, 7, 9, 10], 9),
+    "Aeolian (natural minor)": ([0, 2, 3, 5, 7, 8, 10], 8),
+    "Harmonic minor": ([0, 2, 3, 5, 7, 8, 11], 11),
+    "Phrygian": ([0, 1, 3, 5, 7, 8, 10], 1),
+}
 ROMAN = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII", "VII"]
 
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_MODEL = "google/gemma-4-31b-it"
+# Tried in order if the main model times out or has been retired (comma-separated, overridable
+# with MUSIC_FALLBACK_MODELS).
+NVIDIA_FALLBACK_MODELS = "nvidia/nemotron-3-super-120b-a12b,openai/gpt-oss-20b"
 ANTHROPIC_MODEL = "claude-haiku-4-5"
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -135,18 +160,22 @@ def chord_name(root, q, key):
 
 def roman(root, q, key):
     r = ROMAN[(root - key_tonic(key)) % 12]
-    if q in ("m", "m7", "dim"):
+    is_minor = q.startswith("m") and not q.startswith("maj")
+    if is_minor or q in ("dim", "dim7"):
         r = r.lower()
-    return r + {"7": "7", "m7": "7", "maj7": "maj7", "dim": "°", "sus2": "sus2", "sus4": "sus4"}.get(q, "")
+    special = {"": "", "m": "", "dim": "°", "dim7": "°7", "m7b5": "ø7", "aug": "+"}
+    return r + special.get(q, q[1:] if is_minor else q)
 
 
 def parse_chord(name):
-    """'F#m7' -> (6, 'm7', [0,3,7,10]); returns None if unparseable."""
-    m = re.fullmatch(r"\s*([A-Ga-g])(##|bb|[b#]?)(maj7|maj|min|m7|m|7|dim|sus2|sus4)?\s*", str(name))
+    """'F#m7' -> (6, 'm7', [0,3,7,10]). Unknown extensions fall back to the longest known
+    quality prefix ('B7alt' -> B7, 'Em9/G' -> Em9). Returns None if there's no recognisable root."""
+    m = re.fullmatch(r"\s*([A-Ga-g])(##|bb|[b#]?)([^/\s]*)(?:/[A-Ga-g][b#]?)?\s*", str(name))
     if not m:
         return None
     root = (LETTER_PC[m.group(1).upper()] + m.group(2).count("#") - m.group(2).count("b")) % 12
-    q = {"maj": "", "min": "m"}.get(m.group(3) or "", m.group(3) or "")
+    q = max((k for k in CHORD_INTERVALS if m.group(3).startswith(k)), key=len, default="")
+    q = {"maj": "", "M": "", "min": "m", "-": "m", "M7": "maj7", "+": "aug", "sus": "sus4"}.get(q, q)
     return root, q, CHORD_INTERVALS[q]
 
 
@@ -163,17 +192,33 @@ def mode_of(labels):
 
 # ---------------------------------------------------------------- harmony
 
+def viterbi(scores, penalty):
+    """Best label path through a (time x labels) score matrix, where switching label costs
+    `penalty`. Smooths out flicker far better than a majority vote."""
+    T, K = scores.shape
+    dp, back = scores[0].copy(), np.zeros((T, K), dtype=int)
+    for t in range(1, T):
+        best = int(np.argmax(dp))
+        switch = dp[best] - penalty
+        back[t] = np.where(dp >= switch, np.arange(K), best)
+        dp = np.maximum(dp, switch) + scores[t]
+    path = [int(np.argmax(dp))]
+    for t in range(T - 1, 0, -1):
+        path.append(int(back[t, path[-1]]))
+    return path[::-1]
+
+
 def key_timeline(chroma, duration):
     """Return [(start, end, key_index)] sections, smoothed and merged."""
     fps = SR / HOP
     times = np.arange(0, duration, STEP)
-    keys = []
+    scores = []
     for t in times:
         a = int(max(0, t + STEP / 2 - WINDOW / 2) * fps)
         b = int(min(duration, t + STEP / 2 + WINDOW / 2) * fps)
-        keys.append(int(np.argmax(key_scores(chroma[:, a:max(b, a + 1)].mean(axis=1)))))
-    smooth = [mode_of(keys[max(0, i - 2): i + 3]) for i in range(len(keys))]
-    spans = [(t, min(t + STEP, duration), k) for t, k in zip(times, smooth)]
+        scores.append(key_scores(chroma[:, a:max(b, a + 1)].mean(axis=1)))
+    keys = viterbi(np.array(scores), KEY_SWITCH_PENALTY)
+    spans = [(t, min(t + STEP, duration), k) for t, k in zip(times, keys)]
     return absorb_short(merge_runs(spans), MIN_SECTION)
 
 
@@ -209,52 +254,57 @@ def key_at(sections, t):
     return sections[-1][2]
 
 
-def mode_and_scale(chroma, frames, key):
-    """Guess the mode from characteristic scale degrees, and list the notes used most."""
+def mode_and_scale(chroma, frames, tonic):
+    """Fit the pitch-class profile (tonic fixed) against each mode's scale. Also detects a
+    drone/pedal on the tonic and a mix of major and minor thirds."""
     pc = chroma[:, frames].mean(axis=1)
-    pc = pc / (pc.max() + 1e-9)
-    t = key_tonic(key)
-    rel = np.roll(pc, -t)  # rel[i] = strength of the note i semitones above the tonic
-    note = lambda off: spell((t + off) % 12, key)
-    if key_is_minor(key):
-        if rel[11] > rel[10] * 1.15:
-            mode, color = "Harmonic minor", 11
-        elif rel[9] > rel[8] * 1.15:
-            mode, color = "Dorian", 9
-        elif rel[1] > rel[2] * 1.1:
-            mode, color = "Phrygian", 1
-        else:
-            mode, color = "Aeolian (natural minor)", 8
-    else:
-        if rel[10] > rel[11] * 1.15:
-            mode, color = "Mixolydian", 10
-        elif rel[6] > rel[5] * 1.15:
-            mode, color = "Lydian", 6
-        else:
-            mode, color = "Ionian (major)", 4
-    top7 = sorted(np.argsort(rel)[::-1][:7])
+    rel = np.roll(pc / (pc.max() + 1e-9), -tonic)  # rel[i] = strength of the note i semitones above tonic
+    # Fit on degrees 1-11 only: a loud tonic (drone) would otherwise dominate the correlation.
+    fits = {}
+    for name, (ivs, _) in MODES.items():
+        tmpl = np.zeros(12)
+        tmpl[ivs] = 1
+        fits[name] = float(_zscore(rel[1:]) @ _zscore(tmpl[1:]) / 11)
+        if name in ("Ionian (major)", "Aeolian (natural minor)"):
+            fits[name] += 0.04  # prefer the plain label unless an exotic mode clearly fits better
+    ranked = sorted(fits, key=fits.get, reverse=True)
+    mode, runner_up = ranked[0], ranked[1]
+    margin = fits[mode] - fits[runner_up]
+    if margin <= 0.06:  # unsure: report the plain major/minor with the same third, mention the exotic one
+        plain = "Aeolian (natural minor)" if 3 in MODES[mode][0] else "Ionian (major)"
+        if mode != plain:
+            mode, runner_up = plain, mode
+    key = tonic + (12 if 3 in MODES[mode][0] else 0)
+    note = lambda off: spell((tonic + off) % 12, key)
+    others = np.delete(rel, 0)
+    lo, hi = sorted((rel[3], rel[4]))
     return {
+        "key_index": key,
         "mode": mode,
-        "color_note": note(color),
-        "color_degree": ROMAN[color] if color else "I",
-        "scale_notes": [note(i) for i in top7],
+        "mode_confidence": "high" if margin > 0.15 else "medium" if margin > 0.06 else "low",
+        "mode_runner_up": runner_up,
+        "color_note": note(MODES[mode][1]),
+        "scale_notes": [note(i) for i in MODES[mode][0]],
+        # Drone/pedal: the tonic sounds strongly in nearly every moment, whatever the chord.
+        "drone_pct": round(100 * float(np.mean(chroma[tonic, frames] >= 0.5))),
+        "drone": bool(np.mean(chroma[tonic, frames] >= 0.5) >= 0.75),
+        "third_mix": bool(lo > 0.6 * hi and lo > np.median(others)),
+        "thirds": f"{note(3)} / {note(4)}",
         "note_strength": {note(i): round(float(rel[i]), 2) for i in range(12)},
     }
 
 
 def detect_chords(chroma, rms_db, bounds, btimes):
-    """One chord per beat, smoothed and merged. Returns list of dicts (named later, per key)."""
+    """One chord per beat, Viterbi-smoothed and merged. Returns list of dicts (named later, per key)."""
     import librosa
     sync = librosa.util.sync(chroma, bounds, aggregate=np.median, pad=False)
     loud = librosa.util.sync(rms_db[None, :], bounds, aggregate=np.mean, pad=False)[0]
-    labels = []
-    for i in range(sync.shape[1]):
-        if loud[i] < rms_db.max() - 35:
-            labels.append(-1)  # silence / no chord
-            continue
-        v = sync[:, i] / (np.linalg.norm(sync[:, i]) + 1e-9)
-        labels.append(int(np.argmax(CHORD_TEMPLATES @ v)))
-    labels = [mode_of(labels[max(0, i - 1): i + 2]) for i in range(len(labels))]
+    v = sync / (np.linalg.norm(sync, axis=0, keepdims=True) + 1e-9)
+    scores = (CHORD_TEMPLATES @ v).T  # (beats, chords)
+    silent = loud < rms_db.max() - 35
+    scores = np.hstack([scores, np.where(silent, 1.0, 0.0)[:, None]])  # last column = no chord
+    labels = viterbi(scores, CHORD_SWITCH_PENALTY)
+    labels = [-1 if lab == len(CHORD_LABELS) else lab for lab in labels]
     spans = merge_runs([(btimes[i], btimes[i + 1], lab) for i, lab in enumerate(labels)])
     beat_len = float(np.median(np.diff(btimes))) if len(btimes) > 1 else 0.5
     spans = absorb_short(spans, 1.5 * beat_len)  # a chord must last ~2 beats
@@ -356,10 +406,14 @@ def rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr):
     out["percussive_pct"] = round(100 * pe / (pe + he + 1e-9))
 
     if clear_beat and len(beat_times) > 4:
-        local = librosa.feature.tempo(onset_envelope=env, sr=sr, hop_length=HOP, aggregate=None)
-        out["tempo_variation_bpm"] = round(float(np.std(local)), 1)
-        out["tempo_feel"] = ("steady (likely to a click/grid)" if out["tempo_variation_bpm"] < 2 else
-                             "slightly loose" if out["tempo_variation_bpm"] < 6 else "free / rubato")
+        # Steadiness from the gaps between detected beats (ignoring missed/extra beats).
+        ibi = np.diff(beat_times)
+        ibi = ibi[(ibi > 0.6 * np.median(ibi)) & (ibi < 1.6 * np.median(ibi))]
+        cv = float(np.std(ibi) / np.mean(ibi)) if len(ibi) > 3 else 0.0
+        out["tempo_variation_pct"] = round(100 * cv, 1)
+        out["tempo_feel"] = ("steady (likely to a click/grid)" if cv < 0.025 else
+                             "steady, played by feel" if cv < 0.07 else
+                             "loose / pushing and pulling" if cv < 0.12 else "free / rubato")
         # Only judge syncopation on the stronger half of onsets (weak ones are often note decays).
         of = librosa.time_to_frames(onsets, sr=sr, hop_length=HOP)
         strong = onsets[env[of] >= np.median(env[of])] if len(of) else onsets
@@ -395,12 +449,12 @@ def sound_features(y, sr, rms_db, duration):
     fps = sr / HOP
     per_sec = np.array([rms_db[int(i * fps):int((i + 1) * fps)].mean() for i in range(int(duration))])
     rise_t, rise_db, quiet_t = None, 0.0, None
-    if len(per_sec) >= 12:
-        rises = [(per_sec[t:t + 2].mean() - per_sec[t - 4:t].mean(), t) for t in range(4, len(per_sec) - 2)]
+    edge = 8  # ignore the first/last seconds: the recording starting/stopping isn't a "build"
+    if len(per_sec) >= 2 * edge + 12:
+        rises = [(per_sec[t:t + 4].mean() - per_sec[t - 6:t].mean(), t) for t in range(edge, len(per_sec) - edge)]
         rise_db, rise_t = max(rises)
-        inner = per_sec[3:-3]
-        win = np.convolve(inner, np.ones(4) / 4, mode="valid")
-        quiet_t = int(np.argmin(win)) + 3
+        win = np.convolve(per_sec[edge:-edge], np.ones(6) / 6, mode="valid")
+        quiet_t = int(np.argmin(win)) + edge + 3  # centre of the quietest 6-second stretch
     curve = np.array_split(10 ** (rms_db / 20), 24)
     curve = np.array([c.mean() for c in curve])
     audible = rms_db[rms_db > rms_db.max() - 60]
@@ -455,8 +509,11 @@ def analyze(path):
     if not clear_beat:  # ambient / rubato: fall back to half-second steps
         beat_frames = librosa.time_to_frames(np.arange(0.5, duration, 0.5), sr=sr, hop_length=HOP)
 
-    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, hop_length=HOP, n_mfcc=13)
+    # Instruments are often not at A440 (phone demos, detuned guitars). Correct for it, or every
+    # note smears across two semitones and keys/chords come out wrong.
+    tuning = float(librosa.estimate_tuning(y=y_harm, sr=sr))
+    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP, tuning=tuning)
+    mfcc =librosa.feature.mfcc(y=y, sr=sr, hop_length=HOP, n_mfcc=13)
     rms_db = 20 * np.log10(librosa.feature.rms(y=y, hop_length=HOP)[0] + 1e-9)
     n = min(chroma.shape[1], mfcc.shape[1], len(rms_db))
     chroma, mfcc, rms_db = chroma[:, :n], mfcc[:, :n], rms_db[:n]
@@ -467,15 +524,24 @@ def analyze(path):
 
     # --- key & mode
     ksec = key_timeline(chroma, duration)
+    # The home note (tonic) is reliable; major vs minor often isn't (a drone, power chords, or
+    # blues-style mixing of both thirds). So find the main tonic first, then let the mode fit
+    # over all of its sections decide major vs minor, and relabel those sections consistently.
+    tonic_time = Counter()
+    for s, e, k in ksec:
+        tonic_time[key_tonic(k)] += e - s
+    main_tonic = tonic_time.most_common(1)[0][0]
+    fps = sr / HOP
+    frames = np.concatenate([np.arange(int(s * fps), min(int(e * fps), n))
+                             for s, e, k in ksec if key_tonic(k) == main_tonic])
+    scale = mode_and_scale(chroma, frames, main_tonic)
+    main_key = scale.pop("key_index")
+    ksec = merge_runs([(s, e, main_key if key_tonic(k) == main_tonic else k) for s, e, k in ksec])
     time_in_key = Counter()
     for s, e, k in ksec:
         time_in_key[k] += e - s
-    main_key = time_in_key.most_common(1)[0][0]
-    fps = sr / HOP
-    frames = np.concatenate([np.arange(int(s * fps), min(int(e * fps), n)) for s, e, k in ksec if k == main_key])
     scores = key_scores(chroma[:, frames].mean(axis=1))
     runner_up = next(int(i) for i in np.argsort(scores)[::-1] if i != main_key)
-    scale = mode_and_scale(chroma, frames, main_key)
 
     # --- chords
     chords = detect_chords(chroma, rms_db, bounds, btimes)
@@ -515,6 +581,7 @@ def analyze(path):
         "file": Path(path).name,
         "duration_sec": round(duration, 1),
         "duration": fmt_time(duration),
+        "tuning_cents": int(round(tuning * 100)),
         "tempo_bpm": round(tempo, 1) if clear_beat else None,
         "key": KEY_NAMES[main_key],
         "key_index": int(main_key),
@@ -552,33 +619,90 @@ def rule_based_ideas(r):
     note = lambda off: spell((t + off) % 12, k)
     ideas = []
 
-    # Mode colour
+    used = {c["chord"] for c in r["chord_timeline"]}
+    roots_used = {parse_chord(c)[0] for c in used if parse_chord(c)}
+
+    def chord(off, q=""):
+        """Chord on a scale degree, spelled for the key, e.g. chord(5, 'm') -> 'Am' in E."""
+        return spell((t + off) % 12, k) + q
+
+    # Tuning: matters as soon as the musician plays along with anything else.
+    cents = r.get("tuning_cents", 0)
+    if abs(cents) >= 15:
+        ideas.append({"area": "tuning", "idea":
+                      f"Your instrument is tuned about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of "
+                      f"standard pitch (A = {440 * 2 ** (cents / 1200):.0f} Hz). The MIDI sketches below include a "
+                      f"pitch bend so they match this recording; for anything else (other players, samples, synths) "
+                      f"either retune to A440 or detune those by {cents:+d} cents."})
+
+    # Mode colour (only stated firmly when the fit is clear)
     tips = {
-        "Harmonic minor": f"The raised 7th ({note(11)}) is this track's signature — it pulls hard to {note(0)}. "
+        "Harmonic minor": f"The raised 7th ({note(11)}) is the signature — it pulls hard to {note(0)}. "
                           f"Land melody phrases on {note(11)}→{note(0)}, or try the exotic {note(8)}→{note(11)} "
                           f"step in a lead line.",
         "Dorian": f"The major 6th ({note(9)}) is the Dorian colour. Feature it in a melody, or use a major IV chord "
-                  f"({note(5)}) for that soulful/funky lift.",
-        "Phrygian": f"The b2 ({note(1)}) gives Phrygian tension — a {note(1)} major chord resolving to {note(0)}m "
-                    f"sounds cinematic/Spanish.",
-        "Aeolian (natural minor)": f"Natural minor: the b6 ({note(8)}) carries the melancholy. A bVI chord "
-                                   f"({note(8)}) → bVII ({note(10)}) → i is a classic epic lift.",
-        "Ionian (major)": f"Bright major. Borrow the minor iv ({note(5)}m) from {note(0)} minor for a bittersweet "
-                          f"turn before returning to {note(0)}.",
-        "Mixolydian": f"The b7 ({note(10)}) gives a Mixolydian, bluesy-rock feel. A bVII ({note(10)}) → I "
+                  f"({chord(5)}) for that soulful/funky lift.",
+        "Phrygian": f"The b2 ({note(1)}) gives Phrygian tension — a {chord(1)} chord resolving to {chord(0, 'm')} "
+                    f"sounds dark and cinematic.",
+        "Phrygian dominant": f"Phrygian dominant (the 'Spanish'/flamenco scale): the b2 ({note(1)}) against the major "
+                             f"3rd ({note(4)}). The classic move is {chord(8)} → {chord(1)} → {chord(0)} "
+                             f"(Andalusian cadence), or a {chord(1)}–{chord(0)} vamp.",
+        "Aeolian (natural minor)": f"Natural minor: the b6 ({note(8)}) carries the melancholy. A bVI ({chord(8)}) "
+                                   f"→ bVII ({chord(10)}) → i lift is a classic epic move.",
+        "Ionian (major)": f"Plain major, so the strongest colour is the leading tone ({note(11)}) → {note(0)} at "
+                          f"phrase ends, or a V ({chord(7)}) → I cadence to land sections.",
+        "Mixolydian": f"The b7 ({note(10)}) gives a Mixolydian, bluesy-rock feel. A bVII ({chord(10)}) → I "
                       f"cadence will feel natural here.",
-        "Lydian": f"The #4 ({note(6)}) is the Lydian colour — a II major chord ({note(2)}) over a {note(0)} "
+        "Lydian": f"The #4 ({note(6)}) is the Lydian colour — a II major chord ({chord(2)}) over a {note(0)} "
                   f"bass gives a dreamy, floating lift.",
     }
-    ideas.append({"area": "melody/harmony", "idea": tips[r["mode"]]})
-
-    # Borrowed chord from the parallel key
-    if key_is_minor(k):
-        ideas.append({"area": "harmony", "idea": f"Borrow from {note(0)} major: swap the iv ({note(5)}m) for a "
-                      f"major IV ({note(5)}), or end a section on a major I ({note(0)}) — a 'Picardy' surprise."})
+    if r.get("mode_confidence") == "low":
+        ideas.append({"area": "melody/harmony", "idea":
+                      f"The scale is ambiguous between {r['mode']} and {r['mode_runner_up']} — the notes that "
+                      f"would decide it barely appear. That's an opportunity: commit with a melody note. "
+                      + tips[r["mode"]]})
     else:
-        ideas.append({"area": "harmony", "idea": f"Borrow from {note(0)} minor: try bVI ({note(8)}) or bVII "
-                      f"({note(10)}) before the last I chord of a section."})
+        ideas.append({"area": "melody/harmony", "idea": tips[r["mode"]]})
+
+    # Drone / pedal tone
+    if r.get("drone"):
+        ideas.append({"area": "harmony", "idea":
+                      f"{note(0)} rings through almost everything (a drone/pedal). Use it: move chords on top of the "
+                      f"{note(0)} bass — e.g. {chord(5)}/{note(0)} or {chord(2)}/{note(0)} — for tension without "
+                      f"leaving home, or drop the drone for one section so its return hits harder."})
+
+    # Major/minor thirds both present
+    if r.get("third_mix"):
+        ideas.append({"area": "melody", "idea":
+                      f"Both thirds ({r['thirds']}) show up — a bluesy major/minor blur. Bend from the minor to the "
+                      f"major third in a lead line, or keep one section strictly major and another strictly minor."})
+
+    # Borrowed chords from the parallel key — only suggest what isn't already in the track
+    if key_is_minor(k):
+        options = [(5, "", "a major IV"), (7, "", "a major V for a stronger pull home"),
+                   (0, "", "a major I to end a section (a 'Picardy third' surprise)")]
+        source = f"{note(0)} major"
+    else:
+        options = [(5, "m", "a minor iv"), (8, "", "a bVI"), (10, "", "a bVII"), (3, "", "a bIII")]
+        source = f"{note(0)} minor"
+    fresh = [(off, q, label) for off, q, label in options if chord(off, q) not in used]
+    already = [chord(off, q) for off, q, _ in options if chord(off, q) in used]
+    if fresh:
+        text = f"Borrow from {source}: try " + ", or ".join(f"{label} — {chord(off, q)}" for off, q, label in fresh[:2])
+        text += "." + (f" You already use {', '.join(already)} from there, so this colour suits the track." if already else "")
+        ideas.append({"area": "harmony", "idea": text})
+
+    # A chord from the scale the track never touches
+    scale_degrees = MODES[r["mode"]][0]
+    unused = [off for off in scale_degrees[1:] if (t + off) % 12 not in roots_used]
+    if unused:
+        off = unused[0]
+        has = lambda iv: (off + iv) % 12 in scale_degrees
+        q = "dim" if has(3) and has(6) and not has(7) else "m" if has(3) and not has(4) else ""
+        numeral = roman((t + off) % 12, q, k)
+        ideas.append({"area": "harmony", "idea":
+                      f"The track never visits the {numeral} chord ({chord(off, q)}), which fits the scale — a fresh "
+                      f"place to go for a bridge or a new section."})
 
     # Key-change / set-list targets
     nb = camelot_neighbours(k)
@@ -607,11 +731,19 @@ def rule_based_ideas(r):
         mid = fmt_time(r["duration_sec"] / 2)
         ideas.append({"area": "arrangement", "idea": f"The energy stays almost flat. Create a breakdown around {mid} "
                       f"(drop the drums and bass for 4–8 bars) and bring everything back for a bigger return."})
-    elif s["biggest_build"]:
-        ideas.append({"area": "arrangement", "idea": f"The strongest moment is the build into {s['biggest_build']['time']} "
-                      f"(+{s['biggest_build']['db']} dB). Set it up harder: a riser, a drum fill, or a bar of silence "
+    build, quiet = s["biggest_build"], s["quietest_moment"]
+    to_sec = lambda ts: int(ts.split(":")[0]) * 60 + int(ts.split(":")[1])
+    if build and quiet and abs(to_sec(build["time"]) - to_sec(quiet)) <= 10:
+        # The quietest moment and the biggest build are one event: a dip and a comeback.
+        ideas.append({"area": "arrangement", "idea": f"The biggest contrast is the dip around {quiet} that comes back "
+                      f"+{build['db']} dB by {build['time']}. Make it a real breakdown: strip it to one instrument for "
+                      f"4–8 bars, then hit the return with everything (a riser or a bar of silence just before helps)."})
+        quiet = None
+    elif build and not s["energy_flat"]:
+        ideas.append({"area": "arrangement", "idea": f"The strongest moment is the build into {build['time']} "
+                      f"(+{build['db']} dB). Set it up harder: a riser, a drum fill, or a bar of silence "
                       f"right before it."})
-    if s["quietest_moment"]:
+    if quiet:
         ideas.append({"area": "arrangement", "idea": f"The quietest stretch is around {s['quietest_moment']} — a natural "
                       f"spot for a solo instrument, a field recording, or a new melodic motif."})
 
@@ -626,7 +758,12 @@ def rule_based_ideas(r):
 
     # Sound balance
     bands = s["frequency_balance_pct"]
-    if bands["air (>6k)"] < 2:
+    if bands["sub (<60 Hz)"] < 1 and bands["air (>6k)"] < 1:
+        ideas.append({"area": "sound", "idea": "Almost nothing below 60 Hz or above 6 kHz — typical of a phone/voice-memo "
+                      "recording, so judge the mix from a proper recording. When producing it, those empty ranges are "
+                      "space to fill: a sub-bass under the roots, and something airy on top (shimmer, hi-hats, a high "
+                      "counter-melody)."})
+    elif bands["air (>6k)"] < 2:
         ideas.append({"area": "sound", "idea": "Very little high-end 'air' — a bright layer (hi-hats, shimmer reverb, "
                       "airy pad, or a high counter-melody) would open up the mix."})
     if bands["sub (<60 Hz)"] + bands["bass (60–250)"] < 15:
@@ -646,8 +783,10 @@ def _vlq(n):
     return bytes(out)
 
 
-def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2):
-    """Write a simple 1-track MIDI file: bass root + mid-range chord, one chord per bar."""
+def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2, cents=0):
+    """Write a simple 1-track MIDI file: bass root + mid-range chord, one chord per bar.
+    `cents` adds a pitch bend so it plays in tune with a recording that isn't at A440
+    (assumes the usual ±2 semitone bend range)."""
     tpq = 480
     events = []  # (tick, on/off, note)
     tick = 0
@@ -661,6 +800,9 @@ def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2):
     events.sort(key=lambda e: (e[0], e[1]))
     us = int(60_000_000 / max(30, min(300, bpm or 90)))
     data = b"\x00\xff\x51\x03" + us.to_bytes(3, "big")
+    if cents:
+        bend = int(np.clip(8192 + cents / 200 * 8192, 0, 16383))
+        data += b"\x00" + bytes([0xE0, bend & 0x7F, bend >> 7])
     last = 0
     for t, on, n in events:
         data += _vlq(t - last) + bytes([0x90 if on else 0x80, n, 90 if on else 0])
@@ -673,8 +815,9 @@ def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2):
 def export_midis(r, out_dir):
     """Write MIDI for each detected loop, a relative-substitution variation, and AI progressions."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(r["file"]).stem
+    stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
     bpm = r["tempo_bpm"] or 90
+    cents = r.get("tuning_cents", 0) if abs(r.get("tuning_cents", 0)) >= 10 else 0
     files = []
 
     def save(label, names):
@@ -682,7 +825,7 @@ def export_midis(r, out_dir):
         if len(parsed) < 2:
             return
         fname = f"{stem}_{re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')}.mid"
-        write_midi(out_dir / fname, parsed, bpm)
+        write_midi(out_dir / fname, parsed, bpm, cents=cents)
         files.append({"file": fname, "label": label, "chords": names})
 
     for i, loop in enumerate(r["loops"], 1):
@@ -694,6 +837,11 @@ def export_midis(r, out_dir):
         k = KEY_NAMES.index(loop["key"])
         sub = chord_name((root - 3) % 12, "m", k) if q not in ("m", "m7") else chord_name((root + 3) % 12, "", k)
         save(f"loop {i} variation relative sub", [sub] + loop["chords"][1:])
+    if not r["loops"]:
+        # No strict loop: sketch the 4 most-used chords in the order the track first plays them.
+        top = [c["chord"] for c in r["chords_used"][:4]]
+        first_seen = list(dict.fromkeys(c["chord"] for c in r["chord_timeline"] if c["chord"] in top))
+        save("main chords", first_seen)
     for i, alt in enumerate((r.get("ai") or {}).get("alt_progressions", []), 1):
         save(f"ai {i} {alt.get('name', '')}", alt.get("chords", []))
     return files
@@ -719,7 +867,10 @@ RULES:
   section for the detected loop. Chord names: letter + optional b/# + optional quality from m, 7, m7, maj7, dim, sus2, sus4
   (e.g. "Bm", "F#7", "Gmaj7").
 - Facts about the track must come from the data. Never claim instruments, genre or anything the data can't show.
-  Automatic analysis can be wrong; if key_confidence < 0.6 treat the key as uncertain.
+  Automatic analysis can be wrong; if key_confidence < 0.6 treat the key as uncertain, and if
+  mode_confidence is "low" don't build ideas on the exact mode.
+- When you mention a time or a section, copy its start/end exactly from the data.
+- Prefer chords the track doesn't already use (see chords_used) for alternative progressions.
 
 ANALYSIS:
 {data}
@@ -731,17 +882,30 @@ def make_llm():
     if os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY"):
         import openai
         if os.environ.get("NVIDIA_API_KEY"):
-            client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"])
-            model, label = os.environ.get("MUSIC_MODEL", NVIDIA_MODEL), "nvidia"
+            client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"],
+                                   timeout=90, max_retries=1)
+            models = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] + [
+                m.strip() for m in os.environ.get("MUSIC_FALLBACK_MODELS", NVIDIA_FALLBACK_MODELS).split(",") if m.strip()]
+            label = "nvidia"
         else:
-            client = openai.OpenAI()
-            model, label = os.environ.get("MUSIC_MODEL", OPENAI_MODEL), "openai"
+            client = openai.OpenAI(timeout=90, max_retries=1)
+            models, label = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)], "openai"
 
         def call(prompt):
-            r = client.chat.completions.create(model=model, temperature=0.8, max_tokens=3000,
-                                               messages=[{"role": "user", "content": prompt}])
-            return r.choices[0].message.content or ""
-        return call, f"{label}/{model}"
+            # NVIDIA's free endpoints sometimes time out (504) or retire models (410):
+            # fall through to the next model instead of failing the brainstorm.
+            last_error = None
+            for model in dict.fromkeys(models):
+                try:
+                    r = client.chat.completions.create(model=model, temperature=0.8, max_tokens=1800,
+                                                       messages=[{"role": "user", "content": prompt}])
+                    return r.choices[0].message.content or ""
+                except (openai.APIStatusError, openai.APITimeoutError, openai.APIConnectionError) as e:
+                    if getattr(e, "status_code", 500) in (400, 401, 403):  # bad request / key: don't hammer
+                        raise
+                    last_error = e
+            raise last_error
+        return call, f"{label}/{models[0]}"
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
@@ -844,12 +1008,25 @@ def track_report(r):
           f"{rh['tempo_feel']} · {s['tone']}", ""]
 
     # Harmony
+    conf = r["key_confidence"]
+    conf_note = "clear" if conf >= 0.75 else "fairly clear" if conf >= 0.6 else "low — the harmony is ambiguous"
+    mode_note = ("" if r["mode_confidence"] == "high" else
+                 f"; could also be {r['mode_runner_up']}" if r["mode_confidence"] == "medium" else
+                 f"; uncertain — {r['mode_runner_up']} fits almost as well")
     L += ["### Harmony", "",
-          f"- **Key:** {r['key']} (confidence {r['key_confidence']}; runner-up {r['runner_up_key']})",
-          f"- **Mode:** {r['mode']} — colour note **{r['color_note']}**",
-          f"- **Notes used most (scale):** {' '.join(r['scale_notes'])}",
-          f"- **Chords used most:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]),
+          f"- **Key:** {r['key']} (confidence {conf}: {conf_note}; runner-up {r['runner_up_key']})",
+          f"- **Mode:** {r['mode']} ({r['mode_confidence']} confidence{mode_note}) — colour note **{r['color_note']}**",
+          f"- **Scale:** {' '.join(r['scale_notes'])}",
           ]
+    if r.get("drone"):
+        L.append(f"- **Drone / pedal:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the track")
+    if r.get("third_mix"):
+        L.append(f"- **Major/minor blur:** both thirds ({r['thirds']}) are prominent")
+    cents = r.get("tuning_cents", 0)
+    if abs(cents) >= 10:
+        L.append(f"- **Tuning:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
+                 f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz); the analysis corrects for this")
+    L.append(f"- **Chords used most:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
     if r["harmonic_rhythm_beats"]:
         L.append(f"- **Harmonic rhythm:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     L += ["", "**Time in each key**", "", "| Key | Time | Share |", "|-----|------|-------|"]
@@ -877,7 +1054,8 @@ def track_report(r):
 
     # Rhythm & sound
     L += ["", "### Groove & sound", "",
-          f"- **Pulse:** {rh['tempo_feel']}" + (f" (±{rh['tempo_variation_bpm']} BPM)" if "tempo_variation_bpm" in rh else ""),
+          f"- **Pulse:** {rh['tempo_feel']}"
+          + (f" (beat-to-beat variation {rh['tempo_variation_pct']}%)" if "tempo_variation_pct" in rh else ""),
           f"- **Rhythm:** {rh['busyness']} ({rh['onsets_per_sec']} notes/hits per sec)"
           + (f", {rh['groove']} ({rh['syncopation_pct']}% off-beat)" if "groove" in rh else ""),
           f"- **Percussive vs tonal:** {rh['percussive_pct']}% percussive energy",
