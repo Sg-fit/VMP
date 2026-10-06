@@ -94,7 +94,12 @@ def worker():
             # Each job runs in its own process: the web server stays responsive while it works,
             # and a crash or out-of-memory kill fails only this job, not the whole site.
             runner = Path(__file__).with_name("job_runner.py")
-            proc = subprocess.run([sys.executable, str(runner), str(d)], timeout=JOB_TIMEOUT_MIN * 60)
+            # Low priority and single-threaded maths libraries: the web server and anything else on the
+            # machine stay responsive while a job runs.
+            env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+                   "NUMBA_NUM_THREADS": "1"}
+            proc = subprocess.run([sys.executable, str(runner), str(d)], timeout=JOB_TIMEOUT_MIN * 60, env=env,
+                                  preexec_fn=(lambda: os.nice(10)) if hasattr(os, "nice") else None)
             if read_status(d).get("state") != "done":
                 if proc.returncode in (-9, 137):
                     msg = "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."

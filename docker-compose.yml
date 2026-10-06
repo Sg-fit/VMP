@@ -10,6 +10,11 @@ services:
       # Only reachable from the server itself; put nginx/Caddy/Cloudflare Tunnel in front.
       # Change HOST_PORT in .env if 8090 is taken by another site.
       - "127.0.0.1:${HOST_PORT:-8090}:8000"
+    # Hard caps so an analysis can never starve the other sites on this server.
+    # A job that exceeds the memory cap fails with a clear message instead of freezing the machine.
+    cpus: ${CPU_LIMIT:-1.0}
+    mem_limit: ${MEM_LIMIT:-1500m}
+    memswap_limit: ${MEM_LIMIT:-1500m}
     env_file:
       - path: .env
         required: false

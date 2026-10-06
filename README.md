@@ -61,6 +61,7 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `DATA_DIR` | `./jobs` | Where results are stored |
 | `HOST_PORT` | 8090 | Docker only: the localhost port your proxy forwards to |
 | `MUSIC_SEPARATION` | `auto` | `auto` uses Demucs if installed, `demucs` requires it, `simple` always uses the fast built-in split |
+| `CPU_LIMIT` / `MEM_LIMIT` | 1.0 / 1500m | Docker only: caps on CPU cores and memory for the analyzer, so jobs can't slow down other sites on the server. A job that needs more memory fails with a message instead of freezing the machine |
 | `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI drum separation (about 1 GB larger image, 1–2 min of CPU per track). Rebuild with `docker compose up -d --build` after changing it |
 
 ### Behind a domain (nginx)
