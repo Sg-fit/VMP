@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets — never commit API keys
+.env
+
+# Web app job data and CLI output
+jobs/
+data/
+out/
+midi/
+music_report.md
+music_results.json
+
+# Audio (keep recordings out of git)
+*.mp3
+*.m4a
+*.wav
+*.ogg
+*.flac
+*.aac
+
+# Local tooling
+.claude/
+.vscode/
+.idea/

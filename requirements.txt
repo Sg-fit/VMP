@@ -1,0 +1,13 @@
+# Analysis
+librosa>=0.10,<2
+numpy
+av>=11            # decodes m4a/aac (bundles ffmpeg)
+
+# Web app
+flask>=3
+markdown>=3.5
+gunicorn>=22; platform_system != "Windows"
+
+# Optional AI brainstorm. NVIDIA and OpenAI both use the `openai` package; Anthropic uses `anthropic`.
+openai>=1.40
+anthropic>=0.40

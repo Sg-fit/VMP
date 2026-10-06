@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block head %}
+<style>
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 14px; padding: 36px 20px; text-align: center;
+          cursor: pointer; transition: border-color .15s, background .15s; margin: 20px 0; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--soft); }
+  .drop input { display: none; }
+  .drop .big { font-size: 2.2rem; }
+  #chosen { list-style: none; padding: 0; margin: 0 0 16px; font-size: .95rem; }
+  #chosen li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 24px; }
+  .features div { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font-size: .92rem; }
+  .features b { display: block; margin-bottom: 2px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Turn your tracks into ideas</h1>
+  <p class="muted">Upload instrumental recordings to get their key, mode, chord loops, structure, groove, ideas to try,
+    and MIDI sketches you can drag into your DAW.</p>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data">
+    <label class="drop" id="drop">
+      <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
+      <div class="big">🎧</div>
+      <div><b>Choose audio files</b> or drop them here</div>
+      <div class="muted">{{ exts }} · up to {{ max_files }} files, {{ max_mb }} MB total</div>
+    </label>
+    <ul id="chosen"></ul>
+    <div class="row">
+      {% if ai_label %}
+        <label><input type="checkbox" name="ai" value="1" checked> Include AI brainstorm
+          <span class="muted">({{ ai_label }})</span></label>
+      {% else %}
+        <span class="muted">AI brainstorm is off (no API key set on the server).</span>
+      {% endif %}
+      <button class="btn" id="go" type="submit">Analyse</button>
+    </div>
+  </form>
+</div>
+
+<div class="features">
+  <div><b>🎼 Harmony</b>Key timeline, mode and colour note, chord loops with Roman numerals</div>
+  <div><b>🧱 Structure</b>Sections, energy arc, biggest build, quietest moment</div>
+  <div><b>🥁 Groove &amp; sound</b>Tempo, syncopation, tone, frequency balance</div>
+  <div><b>💡 Ideas &amp; MIDI</b>Concrete suggestions, plus chord loops and variations as .mid files</div>
+</div>
+<p class="muted" style="font-size:.85rem;margin-top:20px">Uploaded audio is deleted as soon as it's analysed. Results are
+  kept for {{ ttl|round|int }} hours, and anyone with a results link can open it. Only the analysis numbers go to the AI, never the audio.</p>
+
+<script>
+  const input = document.getElementById('tracks'), drop = document.getElementById('drop'),
+        list = document.getElementById('chosen'), form = document.getElementById('form'), go = document.getElementById('go');
+  function show() {
+    list.innerHTML = '';
+    for (const f of input.files) {
+      const li = document.createElement('li');
+      li.textContent = `${f.name} — ${(f.size / 1048576).toFixed(1)} MB`;
+      list.appendChild(li);
+    }
+  }
+  input.addEventListener('change', show);
+  ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', ev => { input.files = ev.dataTransfer.files; show(); });
+  form.addEventListener('submit', ev => {
+    if (!input.files.length) { ev.preventDefault(); alert('Please choose at least one audio file.'); return; }
+    go.disabled = true; go.textContent = 'Uploading…';
+  });
+</script>
+{% endblock %}
