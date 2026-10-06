@@ -12,7 +12,7 @@ Environment variables (all optional):
   NVIDIA_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY   enable the AI brainstorm
   APP_PASSWORD     require this password (HTTP basic auth, any username)
   DATA_DIR         where jobs are stored (default ./jobs)
-  MAX_UPLOAD_MB    max total upload size per request (default 200)
+  MAX_UPLOAD_MB    max total upload size per request (default 95; Cloudflare free plan caps at 100)
   MAX_FILES        max tracks per job (default 10)
   JOB_TTL_HOURS    delete finished jobs after this long (default 24)
 """
@@ -38,7 +38,7 @@ from werkzeug.utils import secure_filename
 import musicanalyze as ma
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "jobs"))
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 200))
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 95))
 MAX_FILES = int(os.environ.get("MAX_FILES", 10))
 JOB_TTL_HOURS = float(os.environ.get("JOB_TTL_HOURS", 24))
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")

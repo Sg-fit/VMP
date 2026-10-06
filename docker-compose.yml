@@ -3,7 +3,9 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Only reachable from the server itself; put nginx/Caddy/Cloudflare Tunnel in front.
+      # Change HOST_PORT in .env if 8000 is taken by another site.
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
     env_file:
       - path: .env
         required: false
