@@ -18,7 +18,7 @@ RUN if [ "$WITH_DEMUCS" = "1" ]; then \
       pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install demucs; \
     fi
 
-COPY musicanalyze.py instruments.py app.py ./
+COPY musicanalyze.py instruments.py job_runner.py app.py ./
 COPY templates ./templates
 
 RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data
@@ -30,5 +30,5 @@ RUN if [ "$WITH_DEMUCS" = "1" ]; then \
 VOLUME /data
 EXPOSE 8000
 
-# One worker: jobs run in a background thread inside the process.
+# One worker: a background thread queues jobs and runs each one in its own subprocess.
 CMD gunicorn --workers 1 --threads 4 --timeout 120 --access-logfile - --bind 0.0.0.0:${PORT} app:app

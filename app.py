@@ -15,6 +15,7 @@ Environment variables (all optional):
   MAX_UPLOAD_MB    max total upload size per request (default 95; Cloudflare free plan caps at 100)
   MAX_FILES        max tracks per job (default 10)
   JOB_TTL_HOURS    delete finished jobs after this long (default 24)
+  JOB_TIMEOUT_MIN  stop a job that runs longer than this (default 30)
 """
 
 import hmac
@@ -24,6 +25,8 @@ import os
 import queue
 import re
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -36,11 +39,13 @@ from flask import (Flask, Response, abort, jsonify, redirect, render_template, r
 from werkzeug.utils import secure_filename
 
 import musicanalyze as ma
+from job_runner import read_status, write_status
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "jobs"))
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 95))
 MAX_FILES = int(os.environ.get("MAX_FILES", 10))
 JOB_TTL_HOURS = float(os.environ.get("JOB_TTL_HOURS", 24))
+JOB_TIMEOUT_MIN = float(os.environ.get("JOB_TIMEOUT_MIN", 30))
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
@@ -53,25 +58,6 @@ job_queue = queue.Queue()
 
 
 # ---------------------------------------------------------------- job storage (one folder per job)
-
-def status_path(d):
-    return d / "status.json"
-
-
-def read_status(d):
-    try:
-        return json.loads(status_path(d).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"state": "unknown", "message": ""}
-
-
-def write_status(d, **changes):
-    s = read_status(d) if status_path(d).exists() else {}
-    s.update(changes, updated=time.time())
-    tmp = d / "status.tmp"
-    tmp.write_text(json.dumps(s), encoding="utf-8")
-    tmp.replace(status_path(d))
-
 
 def get_job_dir(job_id):
     if not JOB_ID.match(job_id):
@@ -105,11 +91,23 @@ def worker():
         d = DATA_DIR / job_id
         try:
             write_status(d, state="running", message="Starting…")
-            files = sorted((d / "input").iterdir())
-            llm = LLM if read_status(d).get("use_ai") else None
-            ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg))
-            write_status(d, state="done", message="Done")
-        except Exception as e:  # never let one bad job kill the worker
+            # Each job runs in its own process: the web server stays responsive while it works,
+            # and a crash or out-of-memory kill fails only this job, not the whole site.
+            runner = Path(__file__).with_name("job_runner.py")
+            proc = subprocess.run([sys.executable, str(runner), str(d)], timeout=JOB_TIMEOUT_MIN * 60)
+            if read_status(d).get("state") != "done":
+                if proc.returncode in (-9, 137):
+                    msg = "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."
+                elif read_status(d).get("state") == "error":
+                    msg = read_status(d).get("message")
+                else:
+                    msg = f"The analysis process stopped unexpectedly (exit code {proc.returncode})."
+                app.logger.error("job %s failed: %s", job_id, msg)
+                write_status(d, state="error", message=msg)
+        except subprocess.TimeoutExpired:
+            write_status(d, state="error", message=f"The analysis took longer than {JOB_TIMEOUT_MIN:.0f} minutes and "
+                                                   "was stopped. Try fewer or shorter tracks.")
+        except Exception as e:  # never let one bad job kill the worker thread
             app.logger.exception("job %s failed", job_id)
             write_status(d, state="error", message=f"Analysis failed: {str(e)[:300]}")
         finally:
