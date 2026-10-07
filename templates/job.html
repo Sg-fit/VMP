@@ -23,6 +23,8 @@
   .report abbr[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
   .report details > summary { font-weight: 600; }
   .report details ul { padding-left: 20px; } .report details li { margin: 4px 0; }
+  .aibar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+           margin-top: 16px; padding: 10px 14px; border-radius: 12px; background: var(--soft); border: 1px solid var(--line); }
   #tip { position: absolute; z-index: 10; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
          background: var(--text); color: var(--bg); border-radius: 10px; font-size: .85rem; line-height: 1.4;
          box-shadow: 0 6px 24px rgba(0,0,0,.25); display: none; }
@@ -43,6 +45,37 @@
       <div class="midis">🎹 {% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
   </div>
+  {% if s.ai_pending %}
+    <div id="aibar" class="aibar">⏳ <span id="aitext">Your analysis is ready. The AI is still writing ideas — keep reading, we'll let you know.</span>
+      <button id="aibtn" class="btn" style="display:none;padding:6px 12px">Show them</button></div>
+    <script>
+      (function () {
+        async function poll() {
+          try {
+            const s = await (await fetch("{{ url_for('job_status', job_id=job_id) }}")).json();
+            if (!s.ai_pending) {
+              document.getElementById('aitext').textContent = s.state === 'error'
+                ? 'The AI ideas could not be added this time.' : '✅ The AI ideas are ready.';
+              if (s.state !== 'error') document.getElementById('aibtn').style.display = 'inline-flex';
+              return;
+            }
+          } catch (e) { /* keep trying */ }
+          setTimeout(poll, 3000);
+        }
+        document.getElementById('aibtn').onclick = () => {
+          try { sessionStorage.setItem('scroll-{{ job_id }}', String(window.scrollY)); } catch (e) {}
+          location.reload();
+        };
+        setTimeout(poll, 3000);
+      })();
+    </script>
+  {% endif %}
+  <script>
+    try {  // after "Show them", come back to the same place in the report
+      const y = sessionStorage.getItem('scroll-{{ job_id }}');
+      if (y) { sessionStorage.removeItem('scroll-{{ job_id }}'); window.addEventListener('load', () => window.scrollTo(0, +y)); }
+    } catch (e) {}
+  </script>
   <p class="muted" style="font-size:.88rem;margin:20px 0 0">Tip: underlined terms explain themselves — hover (or tap on a phone).
     The full guide is under “📖 How to read this report”.</p>
   <div class="report">{{ report_html|safe }}</div>
@@ -74,7 +107,7 @@
     <div class="spinner"></div>
     <h1>Analysing your music…</h1>
     <p id="msg" class="muted">{{ s.message }}</p>
-    <p class="muted" style="font-size:.85rem">This takes about 30–60 seconds per track (a few minutes with AI drum separation). This page updates by itself.</p>
+    <p class="muted" style="font-size:.85rem">This takes about 30–60 seconds per track (seconds if a track was analysed before). Results appear as soon as the analysis is done — AI ideas follow. This page updates by itself.</p>
   </div>
   <script>
     async function poll() {

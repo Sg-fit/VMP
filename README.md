@@ -63,6 +63,10 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `DATA_DIR` | `./jobs` | Where results are stored |
 | `HOST_PORT` | 8090 | Docker only: the localhost port your proxy forwards to |
 | `MUSIC_SEPARATION` | `auto` | `auto` uses Demucs if installed, `demucs` requires it, `simple` always uses the fast built-in split |
+| `MUSIC_MODEL` / `MUSIC_FALLBACK_MODELS` | provider default | Main AI model, and backups that are raced in if it's slow or fails. Run `--bench-llm` (below) to pick the fastest |
+| `MUSIC_AI_HEDGE_SECONDS` / `MUSIC_AI_DEADLINE_SECONDS` | 15 / 60 | Ask a backup model in parallel after this many seconds; give up on AI ideas after this many |
+| `MUSIC_LLM_BASE_URL` | NVIDIA's API | Any OpenAI-compatible endpoint, for example a self-hosted model |
+| `MUSIC_CACHE_DIR` | `DATA_DIR/cache` (web), `~/.cache/music-analyzer` (CLI) | Cached analyses. A re-upload of the same recording skips the slow analysis. Entries unused for 30 days are deleted |
 | `CPU_LIMIT` / `MEM_LIMIT` | 1.0 / 1500m | Docker only: caps on CPU cores and memory for the analyzer, so jobs can't slow down other sites on the server. A job that needs more memory fails with a message instead of freezing the machine |
 | `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI drum separation (about 1 GB larger image, 1–2 min of CPU per track). Rebuild with `docker compose up -d --build` after changing it |
 
@@ -107,7 +111,21 @@ python musicanalyze.py ./music_folder --melody "copy 4: A E F E A E D E"   # one
 - Accepts `.mp3 .m4a .wav .ogg .flac .aac`, as single files or whole folders.
 - Writes `music_report.md`, `music_results.json` and `midi/*.mid` to `--out`.
 - The AI brainstorm runs when an API key is set. On Windows PowerShell, set it with `$env:NVIDIA_API_KEY="nvapi-..."`, not `export`. Use `--no-llm` to skip it.
-- Speed: about 20 s per 1-minute track on CPU, plus a few seconds for the AI.
+- Speed: about 20 s per minute of audio on CPU. Re-running the same recording (to add a melody or retry the AI) takes about 1 s, because the analysis is cached by file content. Use `--no-cache` to force a fresh analysis.
+- **Pick the fastest AI model** for your API key (it times each configured model on a real prompt):
+
+  ```bash
+  python musicanalyze.py --bench-llm
+  # on the server:  docker compose exec music-analyzer python musicanalyze.py --bench-llm
+  ```
+
+## How it saves time
+
+- **Results first, AI second.** The web page shows the full analysis as soon as it's ready. The AI section fills in by itself when it arrives.
+- **The AI never holds you up for long.** It gets a compact summary instead of the full data (about 2.5k characters, down from about 12k). If the main model hasn't answered after 15 s, a backup model is asked *in parallel*, and the first good answer wins. After 60 s it gives up and your results stay as they are.
+- **Overlap.** With several tracks, the AI works on one track while the next is being analyzed.
+- **Cache.** Uploading the same recording again skips the analysis (seconds instead of a minute).
+- **A warm worker.** One background worker process loads everything once at start-up, so uploads don't each pay that ~15–30 s start-up cost. If a job crashes it or runs out of memory, only that job fails, and a fresh worker takes over.
 
 ## Reading the report
 

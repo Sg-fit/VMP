@@ -19,6 +19,14 @@ DRUM_BANDS = {"Kick": (30, 120), "Snare": (180, 1200), "Hi-hat": (4000, 11000)}
 _demucs_model = None
 
 
+def separation_method():
+    """The method separate() will actually use ("demucs" or "simple"), e.g. for cache keys."""
+    if SEPARATION == "simple":
+        return "simple"
+    import importlib.util
+    return "demucs" if importlib.util.find_spec("demucs") else "simple"
+
+
 # ---------------------------------------------------------------- separation
 
 def separate(y, sr):
@@ -175,10 +183,10 @@ def bass_notes(music, sr, btimes, tuning):
     """One MIDI bass note per beat span (None where the bass rests), from the drumless audio."""
     import librosa
     import scipy.signal as ss
-    low_sr = 8000
+    low_sr = 4000  # bass lives below 280 Hz; 4 kHz is plenty and ~2.5x faster than 8 kHz
     yb = librosa.resample(music, orig_sr=sr, target_sr=low_sr)
     yb = ss.sosfiltfilt(ss.butter(4, 260, btype="low", fs=low_sr, output="sos"), yb)
-    f0, voiced, prob = librosa.pyin(yb, fmin=30, fmax=280, sr=low_sr, frame_length=2048, hop_length=128)
+    f0, voiced, prob = librosa.pyin(yb, fmin=30, fmax=280, sr=low_sr, frame_length=1024, hop_length=128)
     times = librosa.times_like(f0, sr=low_sr, hop_length=128)
     midi = librosa.hz_to_midi(np.where(voiced, f0, np.nan)) - tuning
     notes = []

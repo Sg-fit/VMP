@@ -77,7 +77,8 @@ MODES = {
 }
 ROMAN = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII", "VII"]
 
-NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+# Any OpenAI-compatible endpoint works (e.g. a self-hosted model); NVIDIA is the default.
+NVIDIA_BASE_URL = os.environ.get("MUSIC_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 NVIDIA_MODEL = "google/gemma-4-31b-it"
 # Tried in order if the main model times out or has been retired (comma-separated, overridable
 # with MUSIC_FALLBACK_MODELS).
@@ -498,7 +499,8 @@ def load_audio(path):
         return np.concatenate(chunks).astype(np.float32), SR
 
 
-def analyze(path, melody_text=None):
+def _analyze_audio(path):
+    """The expensive part: everything that depends only on the audio (cacheable)."""
     import librosa
 
     y, sr = load_audio(path)
@@ -642,18 +644,73 @@ def analyze(path, melody_text=None):
     if not any(sec["bass"] for sec in sections):  # no low end anywhere: the "bass notes" were chord tones
         result["bass"] = {"present": False}
 
-    # --- melody: best-effort top line, plus the musician's own typed melody if given
+    # --- best-effort top line (the musician's typed melody is added later, in analyze())
     top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
     result["top_line"] = top_line_summary(top, grid, chords, main_key)
+    return result, {"chroma": chroma.astype(np.float32), "bounds": np.asarray(bounds)}
+
+
+# Bump when the analysis changes, so cached results from older code aren't reused.
+ANALYSIS_VERSION = "2026-10-07a"
+
+
+def _cache_key(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return f"{h.hexdigest()[:32]}-{ANALYSIS_VERSION}-{instruments.separation_method()}"
+
+
+def analyze(path, melody_text=None, cache_dir=None):
+    """Analyse one track. The audio analysis (the slow part) is cached by file content, so
+    re-running the same recording - e.g. to add a melody or retry the AI - is near-instant."""
+    import pickle
+    result = extras = None
+    cache_file = None
+    if cache_dir:
+        cache_file = Path(cache_dir) / f"{_cache_key(path)}.pkl"
+        try:
+            with open(cache_file, "rb") as f:
+                result, extras = pickle.load(f)
+            result = {**result, "file": Path(path).name, "cached": True}
+        except (OSError, pickle.PickleError, EOFError, ValueError):
+            result = None
+    if result is None:
+        result, extras = _analyze_audio(path)
+        if cache_file:
+            try:
+                cache_file.parent.mkdir(parents=True, exist_ok=True)
+                tmp = cache_file.with_suffix(".tmp")
+                with open(tmp, "wb") as f:
+                    pickle.dump((result, extras), f)
+                tmp.replace(cache_file)
+            except OSError:
+                pass  # caching is an optimisation only
+
+    main_key = result["key_index"]
     if melody_text:
         result["melody"] = inspiration.analyse_melody(melody_text, key_tonic(main_key), result["mode"], MODES,
                                                       lambda pc: spell(pc, main_key))
         if "error" not in result["melody"]:
             pcs = [n % 12 for n in result["melody"]["variations_midi"]["original"]]
-            result["melody"]["check"] = check_melody(chroma, bounds, pcs, main_key)
-    result["references"] = shared_dna(result, chords)
+            result["melody"]["check"] = check_melody(extras["chroma"], extras["bounds"], pcs, main_key)
+    result["references"] = shared_dna(result)
     result["ideas"] = rule_based_ideas(result)
     return result
+
+
+def prune_cache(cache_dir, max_age_days=30):
+    """Delete cache entries not used for a while (called occasionally)."""
+    import time as _time
+    cutoff = _time.time() - max_age_days * 86400
+    for p in Path(cache_dir).glob("*.pkl"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
 
 
 def check_melody(chroma, bounds, pcs, key):
@@ -728,7 +785,7 @@ def top_line_summary(notes, grid, chords, key):
     }
 
 
-def shared_dna(r, chords):
+def shared_dna(r):
     """What the track has in common with well-known music: progressions, mode, groove, melody."""
     out = {"progressions": [], "mode": None, "groove": None, "melody": []}
     loops = [l["chords"] for l in r["loops"] if len(l["chords"]) >= 2]
@@ -1112,106 +1169,168 @@ def export_midis(r, out_dir):
 
 # ---------------------------------------------------------------- optional AI brainstorm
 
-BRAINSTORM_PROMPT = """You are a creative music producer helping a musician brainstorm ideas from an
-instrumental track they made. Below is automatic audio analysis of the track (JSON).
+BRAINSTORM_PROMPT = """You are a creative music producer helping a musician develop an instrumental demo.
+Below is an automatic analysis of the track. Reply with ONLY this JSON (no other text):
+{{"vibe": "<1-2 sentences on the feel the data suggests>",
+ "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 30 words, specific: cite a time, section, chord or note>"}}],
+ "alt_progressions": [{{"name": "<short>", "chords": ["<chord>", "..."], "why": "<one short sentence>"}}],
+ "title_ideas": ["<title>", "<title>", "<title>"],
+ "references": [{{"artist": "<artist>", "track": "<recording>", "shared": "<the one specific element it shares>"}}]}}
 
-Return ONLY a JSON object, no other text:
-{{
-  "vibe": "<at most 2 sentences on the feel the data suggests; phrase interpretations as such, e.g. 'the slow tempo and dark tone suggest...'>",
-  "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure|remix>", "idea": "<one concrete, actionable suggestion that references a specific time, section, chord, note or number from the data>"}}],
-  "alt_progressions": [{{"name": "<short name>", "chords": ["<chord>", "..."], "why": "<one sentence>"}}],
-  "title_ideas": ["<title>", "<title>", "<title>"],
-  "references": [{{"artist": "<artist>", "track": "<well-known recording>", "shared": "<the specific element it shares with this track (progression, mode, groove, melodic device, tempo), one sentence>"}}]
-}}
+Rules: exactly 5 ideas, different from each other and from the "already suggested" list; no generic advice.
+2 alt_progressions in {key}, 3-6 chords each (names like Bm, F#7, Gmaj7), preferring chords the track doesn't use.
+2 references only if you are certain the recording exists and really shares that element; otherwise [].
+Use only facts given below; the analysis is approximate, so don't build on anything marked uncertain.
 
-RULES:
-- Give 6 ideas, each different, specific and under 40 words. No generic advice like "add more layers" or "experiment".
-- Keep the whole reply short (under 600 words) so it isn't cut off.
-- Do not repeat these ideas the musician already has: {existing}
-- Give 2-3 alt_progressions in the track's key ({key}), 3-6 chords each, as alternatives or a contrasting
-  section for the detected loop. Chord names: letter + optional b/# + optional quality from m, 7, m7, maj7, dim, sus2, sus4
-  (e.g. "Bm", "F#7", "Gmaj7").
-- Facts about the track must come from the data. Never claim instruments, genre or anything the data can't show.
-  Automatic analysis can be wrong; if key_confidence < 0.6 treat the key as uncertain, and if
-  mode_confidence is "low" don't build ideas on the exact mode.
-- When you mention a time or a section, copy its start/end exactly from the data.
-- references: 2-3 widely known recordings that share a SPECIFIC element with this data (same chord loop,
-  mode, groove or melodic device). Only name recordings you are certain exist and certain about.
-  Don't repeat ones already in references in the data.
-- Prefer chords the track doesn't already use (see chords_used) for alternative progressions.
-
-ANALYSIS:
-{data}
+ANALYSIS
+{summary}
 """
+
+# How long to wait for the main model before also asking a backup model in parallel, and the
+# overall limit for one brainstorm. A musician shouldn't wait longer than this for ideas.
+AI_HEDGE_SECONDS = float(os.environ.get("MUSIC_AI_HEDGE_SECONDS", 15))
+AI_DEADLINE_SECONDS = float(os.environ.get("MUSIC_AI_DEADLINE_SECONDS", 60))
+
+
+def ai_summary(r):
+    """A compact plain-text digest of the analysis (~1.5k characters instead of ~10k of JSON):
+    smaller prompts are answered much faster and cut the chance of time-outs."""
+    rh, s, d, b = r["rhythm"], r["sound"], r.get("drums") or {}, r.get("bass") or {}
+    lines = [
+        f"Length {r['duration']}, {r['tempo_bpm'] or 'free'} BPM ({rh['tempo_feel']}), {s['tone']} tone.",
+        f"Key {r['key']} (confidence {r['key_confidence']}{', uncertain' if r['key_confidence'] < 0.6 else ''}); "
+        f"mode {r['mode']} ({r['mode_confidence']} confidence); scale {' '.join(r['scale_notes'])}."
+        + (f" Tuned {r['tuning_cents']:+d} cents." if abs(r.get('tuning_cents', 0)) >= 10 else ""),
+        "Sections: " + "; ".join(f"{x['label']} {fmt_time(x['start'])}-{fmt_time(x['end'])} {x['energy']} energy "
+                                 f"[{', '.join(x['main_chords'][:3])}]" for x in r["sections"]) + ".",
+        "Most used chords: " + ", ".join(c["chord"] for c in r["chords_used"][:6]) + ".",
+    ]
+    if r["loops"]:
+        lines.append("Chord loops: " + "; ".join(f"{' - '.join(l['chords'])} ({' - '.join(l['roman'])})"
+                                                 for l in r["loops"]) + ".")
+    if d.get("grid"):
+        lines.append(f"Drums: {', '.join(d.get('traits') or ['groove'])}; {d['repetition']} repetition; "
+                     f"16-step grid {d['grid']} (K kick, S snare, X both)"
+                     + (f"; fills at {', '.join(fmt_time(t) for t in d['fills'])}" if d.get("fills") else "; no fills")
+                     + ".")
+    if b.get("present"):
+        lines.append(f"Bass: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
+                     + ".")
+    if s.get("biggest_build"):
+        lines.append(f"Energy: biggest build into {s['biggest_build']['time']} (+{s['biggest_build']['db']} dB); "
+                     f"quietest around {s['quietest_moment']}.")
+    m = r.get("melody") or {}
+    if m.get("notes"):
+        lines.append(f"Melody typed by the musician: {' '.join(m['notes'])} (degrees {' '.join(m['degrees'])}; "
+                     f"{m['shape']}).")
+    refs = r.get("references") or {}
+    known = [p["progression"] for p in refs.get("progressions", [])] + ([refs["mode"]["mode"]] if refs.get("mode") else [])
+    if known:
+        lines.append("Already compared with: " + "; ".join(known) + ".")
+    lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
+    return "\n".join(lines)
 
 
 def make_llm():
-    """Return (fn(prompt)->text, label) for whichever API key is set, or (None, None)."""
+    """Return (fn(prompt, info=None) -> text, label) for whichever API key is set, or (None, None).
+    fn records which model answered in info["model"] (thread-safe: tracks are brainstormed in parallel)."""
     if os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY"):
         import openai
         if os.environ.get("NVIDIA_API_KEY"):
             client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"],
-                                   timeout=90, max_retries=1)
+                                   timeout=AI_DEADLINE_SECONDS, max_retries=0)
             models = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] + [
                 m.strip() for m in os.environ.get("MUSIC_FALLBACK_MODELS", NVIDIA_FALLBACK_MODELS).split(",") if m.strip()]
             label = "nvidia"
         else:
-            client = openai.OpenAI(timeout=90, max_retries=1)
+            client = openai.OpenAI(timeout=AI_DEADLINE_SECONDS, max_retries=0)
             models, label = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)], "openai"
+        models = list(dict.fromkeys(models))
 
-        def call(prompt):
-            # NVIDIA's free endpoints sometimes time out (504), retire models (410), or (reasoning
-            # models) spend the whole budget thinking and return nothing. Fall through to the next
-            # model in all of those cases instead of failing the brainstorm.
-            problems = []
-            for model in dict.fromkeys(models):
-                try:
-                    r = client.chat.completions.create(model=model, temperature=0.8, max_tokens=4096,
-                                                       messages=[{"role": "user", "content": prompt}])
-                except (openai.APIStatusError, openai.APITimeoutError, openai.APIConnectionError) as e:
-                    if getattr(e, "status_code", 500) in (400, 401, 403):  # bad request / key: don't hammer
-                        raise
-                    problems.append(f"{model}: {type(e).__name__} {getattr(e, 'status_code', '')}".strip())
-                    continue
-                text = r.choices[0].message.content or ""
-                if "{" in text:
-                    call.model_used = model
-                    return text
-                problems.append(f"{model}: empty reply")
-            raise RuntimeError("no model gave an answer (" + "; ".join(problems) + ")")
+        def ask(model, prompt):
+            r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=1200,
+                                               messages=[{"role": "user", "content": prompt}])
+            return r.choices[0].message.content or ""
+
+        def call(prompt, info=None):
+            return _race(models, lambda model: ask(model, prompt), info,
+                         fatal=lambda e: getattr(e, "status_code", None) in (400, 401, 403))
         return call, f"{label}/{models[0]}"
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(timeout=AI_DEADLINE_SECONDS, max_retries=0)
         model = os.environ.get("MUSIC_MODEL", ANTHROPIC_MODEL)
 
-        def call(prompt):
-            m = client.messages.create(model=model, max_tokens=3000, temperature=0.8,
+        def call(prompt, info=None):
+            m = client.messages.create(model=model, max_tokens=1200, temperature=0.7,
                                        messages=[{"role": "user", "content": prompt}])
-            call.model_used = model
+            if info is not None:
+                info["model"] = model
             return "".join(b.text for b in m.content if b.type == "text")
         return call, f"anthropic/{model}"
 
     return None, None
 
 
-def ai_brainstorm(r, llm):
-    data = {k: v for k, v in r.items() if k not in ("chord_timeline", "ideas", "note_strength", "key_index")}
-    data["chord_timeline_start"] = r["chord_timeline"][:24]
-    prompt = BRAINSTORM_PROMPT.format(existing=json.dumps([i["idea"][:80] for i in r["ideas"]]),
-                                      key=r["key"], data=json.dumps(data, ensure_ascii=False))
+def _race(models, ask, info, fatal):
+    """Ask models[0]; if it hasn't answered after AI_HEDGE_SECONDS (or fails), also ask the next
+    model - in parallel, not after it - and take the first usable answer. Gives up at
+    AI_DEADLINE_SECONDS. Slow free endpoints then cost seconds, not minutes."""
+    import concurrent.futures as cf
+    import time as _time
+    pool = cf.ThreadPoolExecutor(max_workers=len(models))
+    start, nxt, pending, problems = _time.time(), 0, {}, []
+
+    def launch():
+        nonlocal nxt
+        pending[pool.submit(ask, models[nxt])] = models[nxt]
+        nxt += 1
     try:
-        raw = llm(prompt)
+        launch()
+        while pending:
+            left = AI_DEADLINE_SECONDS - (_time.time() - start)
+            if left <= 0:
+                break
+            wait = min(left, AI_HEDGE_SECONDS) if nxt < len(models) else left
+            done, _ = cf.wait(pending, timeout=wait, return_when=cf.FIRST_COMPLETED)
+            for f in done:
+                model = pending.pop(f)
+                try:
+                    text = f.result()
+                except Exception as e:  # time-out, 5xx, retired model...
+                    if fatal(e):
+                        raise
+                    problems.append(f"{model}: {type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip())
+                    continue
+                if "{" in text:
+                    if info is not None:
+                        info["model"] = model
+                    return text
+                problems.append(f"{model}: empty reply")
+            # Nothing usable yet (one failed, or the hedge timer ran out): bring in the next model.
+            if nxt < len(models):
+                launch()
+        problems += [f"{m}: no answer within {AI_DEADLINE_SECONDS:.0f}s" for m in pending.values()]
+        raise RuntimeError("no model answered in time (" + "; ".join(problems) + ")")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)  # don't wait for slow stragglers
+
+
+def ai_brainstorm(r, llm):
+    prompt = BRAINSTORM_PROMPT.format(key=r["key"], summary=ai_summary(r))
+    info = {}
+    try:
+        raw = llm(prompt, info)
     except Exception as e:
-        return {"error": f"AI brainstorm unavailable: {str(e)[:150]}"}
+        return {"error": f"AI brainstorm unavailable: {str(e)[:220]}"}
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
     raw = re.sub(r"```(?:json)?", "", raw)
     obj = _parse_json_reply(raw)
     if obj is None:
         return {"error": "AI reply could not be parsed", "raw": raw.strip()[:1500]}
     return {
-        "model": getattr(llm, "model_used", None),
+        "model": info.get("model"),
         "vibe": _clean(obj.get("vibe", "")),
         "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _clean(i["idea"])}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
@@ -1223,6 +1342,60 @@ def ai_brainstorm(r, llm):
         "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
                        for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
     }
+
+
+BENCH_SUMMARY = """Length 2:43, 83 BPM (steady, played by feel), dark/warm tone.
+Key E major (confidence 0.83); mode Ionian (major) (medium confidence); scale E F# G# A B C# D#.
+Sections: A 0:00-1:00 medium energy [A, E, Em]; B 1:00-1:14 high energy [Bm, C#m7, B]; A 1:14-2:11 medium energy [E, A, Em]; C 2:11-2:43 medium energy [E, C#m].
+Most used chords: E, A, Em, C#m, B, Bm.
+Chord loops: Em - A (i - IV).
+Drums: backbeat (snare on 2 and 4); tight repetition; 16-step grid X...S...X...S... (K kick, S snare, X both); no fills.
+Bass: plays the chord roots; main notes E 73%, A 16%, C# 3%.
+Energy: biggest build into 2:17 (+14.8 dB); quietest around 2:13."""
+
+
+def bench_llm():
+    """Time each configured model on a realistic prompt, so the fastest reliable one can be the default."""
+    import time as _time
+    if not (os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+        sys.exit("Set NVIDIA_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY first.")
+    prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY)
+    if os.environ.get("NVIDIA_API_KEY"):
+        import openai
+        client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=90, max_retries=0)
+        extra = os.environ.get("MUSIC_BENCH_MODELS", "")
+        models = list(dict.fromkeys([os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] +
+                                    [m.strip() for m in (NVIDIA_FALLBACK_MODELS + "," + extra).split(",") if m.strip()]))
+    else:
+        call, label = make_llm()
+        models, client = [label], None
+    print(f"Timing {len(models)} model(s) with a {len(prompt)}-character brainstorm prompt, 2 runs each...\n")
+    rows = []
+    for model in models:
+        times, ok = [], 0
+        for _ in range(2):
+            t = _time.time()
+            try:
+                if client:
+                    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=1200,
+                                                       messages=[{"role": "user", "content": prompt}])
+                    text = r.choices[0].message.content or ""
+                else:
+                    text = call(prompt)
+                ok += _parse_json_reply(text) is not None
+                times.append(_time.time() - t)
+            except Exception as e:
+                times.append(float("inf"))
+                print(f"  {model}: {type(e).__name__} {getattr(e, 'status_code', '') or ''}")
+        rows.append((model, ok, times))
+        shown = ", ".join("fail" if x == float("inf") else f"{x:.1f}s" for x in times)
+        print(f"  {model:45} usable answers {ok}/2   times: {shown}")
+    good = [r for r in rows if r[1] == 2]
+    if good:
+        best = min(good, key=lambda r: sum(r[2]))
+        print(f"\nFastest reliable model: {best[0]}  ->  set MUSIC_MODEL={best[0]} in .env")
+    else:
+        print("\nNo model answered reliably right now; try again later or add candidates with MUSIC_BENCH_MODELS.")
 
 
 def _parse_json_reply(raw):
@@ -1477,7 +1650,9 @@ def track_report(r):
     ai = r.get("ai")
     if ai:
         L += ["", "### 🤖 AI brainstorm", ""] + ([f"_Suggestions by {ai['model']}._", ""] if ai.get("model") else [])
-        if ai.get("error"):
+        if ai.get("pending"):
+            L.append("_⏳ The AI is still writing ideas for this track — they'll appear here in a moment._")
+        elif ai.get("error"):
             L.append(f"_{ai['error']}_")
         else:
             if ai["vibe"]:
@@ -1652,41 +1827,75 @@ def collect_files(paths):
     return files
 
 
-def run_analysis(files, out, llm=None, progress=None, melody_text=None):
-    """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
-    `progress(message)` is called as work proceeds. Returns (results, report_markdown)."""
-    progress = progress or (lambda msg: None)
-    out = Path(out)
-    results = []
-    for i, f in enumerate(files, 1):
-        f = Path(f)
-        progress(f"[{i}/{len(files)}] Analysing {f.name}...")
-        try:
-            r = analyze(f, inspiration.melody_for(f.name, melody_text))
-            if llm:
-                progress(f"[{i}/{len(files)}] Brainstorming ideas for {f.name}...")
-                r["ai"] = ai_brainstorm(r, llm)
-            r["midi"] = export_midis(r, out / "midi")
-        except Exception as e:  # unreadable / corrupt file — keep going
-            progress(f"  ! {f.name}: {e}")
-            r = {"file": f.name, "error": "unreadable or unsupported audio" if "Error opening" in str(e)
-                 or "Invalid data" in str(e) else str(e)[:200]}
-        results.append(r)
+DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache" / "music-analyzer"))
 
+
+def _write_outputs(results, out):
     report = build_report(results)
     out.mkdir(parents=True, exist_ok=True)
     (out / "music_report.md").write_text(report, encoding="utf-8")
     (out / "music_results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
+
+
+def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analysis_done=None,
+                 cache_dir=DEFAULT_CACHE_DIR):
+    """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
+
+    Built to keep the musician waiting as little as possible:
+    - the slow audio analysis is cached by file content (re-runs are near-instant);
+    - each track's AI brainstorm runs in the background while the next track is analysed;
+    - on_analysis_done(report) is called as soon as the analysis is finished, before the AI
+      ideas arrive, so a UI can show results immediately and add the AI section later.
+    Returns (results, report_markdown)."""
+    import concurrent.futures as cf
+    progress = progress or (lambda msg: None)
+    out = Path(out)
+    results, pending = [], []
+    ai_pool = cf.ThreadPoolExecutor(max_workers=3) if llm else None
+    try:
+        for i, f in enumerate(files, 1):
+            f = Path(f)
+            progress(f"[{i}/{len(files)}] Analysing {f.name}...")
+            try:
+                r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir)
+                r["midi"] = export_midis(r, out / "midi")
+                if ai_pool:
+                    pending.append((r, ai_pool.submit(ai_brainstorm, r, llm)))  # overlaps the next track
+            except Exception as e:  # unreadable / corrupt file — keep going
+                progress(f"  ! {f.name}: {e}")
+                r = {"file": f.name, "error": "unreadable or unsupported audio" if "Error opening" in str(e)
+                     or "Invalid data" in str(e) else str(e)[:200]}
+            results.append(r)
+
+        if pending:
+            for r, _ in pending:
+                r["ai"] = {"pending": True}
+            report = _write_outputs(results, out)
+            if on_analysis_done:
+                on_analysis_done(report)
+            for n, (r, fut) in enumerate(pending, 1):
+                progress(f"Analysis done — waiting for AI ideas ({n}/{len(pending)})...")
+                r["ai"] = fut.result()
+                r["midi"] = export_midis(r, out / "midi")  # adds MIDI for the AI's progressions
+    finally:
+        if ai_pool:
+            ai_pool.shutdown(wait=False, cancel_futures=True)
+    if cache_dir:
+        prune_cache(cache_dir)
+    report = _write_outputs(results, out)
     return results, report
 
 
 def main():
     ap = argparse.ArgumentParser(description="Analyse instrumental tracks and generate ideas for musicians.")
-    ap.add_argument("paths", nargs="+", help="audio files and/or folders")
+    ap.add_argument("paths", nargs="*", help="audio files and/or folders")
     ap.add_argument("--out", default=".", help="output folder for the report, JSON and MIDI files")
     ap.add_argument("--no-llm", action="store_true", help="skip the AI brainstorm")
     ap.add_argument("--melody", help="melody/riff notes to analyse, e.g. \"A E F E A E D E\" "
                                      "(prefix with part of a file name to target one track: \"copy 4: A E F E\")")
+    ap.add_argument("--no-cache", action="store_true", help="re-analyse even if this recording was analysed before")
+    ap.add_argument("--bench-llm", action="store_true", help="time the AI models and recommend the fastest")
     args = ap.parse_args()
 
     for stream in (sys.stdout, sys.stderr):
@@ -1695,6 +1904,9 @@ def main():
         except Exception:
             pass
 
+    if args.bench_llm:
+        bench_llm()
+        return
     files = collect_files(args.paths)
     if not files:
         sys.exit("No audio files found.")
@@ -1707,7 +1919,7 @@ def main():
 
     out = Path(args.out)
     _, report = run_analysis(files, out, llm, progress=lambda msg: print(msg, file=sys.stderr),
-                             melody_text=args.melody)
+                             melody_text=args.melody, cache_dir=None if args.no_cache else DEFAULT_CACHE_DIR)
     print(report)
     print(f"\nWrote {out / 'music_report.md'}, {out / 'music_results.json'} and MIDI files in {out / 'midi'}",
           file=sys.stderr)

@@ -85,33 +85,78 @@ def fail_interrupted_jobs():
             shutil.rmtree(d / "input", ignore_errors=True)
 
 
+class Runner:
+    """One long-lived analysis worker process (job_runner.py --serve).
+
+    It warms up once at start-up, then runs jobs one after another, so uploads don't pay the
+    ~15 s start-up cost each time. If it crashes, runs out of memory or a job takes too long,
+    it is killed and replaced; only that job fails."""
+
+    def __init__(self):
+        self.proc, self.lines = None, queue.Queue()
+
+    def ensure_started(self):
+        if self.proc and self.proc.poll() is None:
+            return
+        runner = Path(__file__).with_name("job_runner.py")
+        # Low priority and single-threaded maths libraries keep the site (and anything else on the
+        # server) responsive while a job runs.
+        env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+               "NUMBA_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"}
+        self.proc = subprocess.Popen([sys.executable, str(runner), "--serve"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, env=env,
+                                     preexec_fn=(lambda: os.nice(10)) if hasattr(os, "nice") else None)
+        self.lines = queue.Queue()
+        proc, lines = self.proc, self.lines
+        threading.Thread(target=lambda: [lines.put(l.strip()) for l in proc.stdout] + [lines.put(None)],
+                         daemon=True).start()
+
+    def run(self, job_dir, timeout):
+        """Send a job and wait for it. Returns None on success, or an error message."""
+        self.ensure_started()
+        try:
+            self.proc.stdin.write(str(job_dir) + "\n")
+            self.proc.stdin.flush()
+        except OSError:
+            self.proc.kill()
+            return "The analysis worker stopped unexpectedly. Please try again."
+        deadline = time.time() + timeout
+        while True:
+            try:
+                line = self.lines.get(timeout=max(0.1, deadline - time.time()))
+            except queue.Empty:
+                self.proc.kill()  # stuck: replace the worker, fail only this job
+                return (f"The analysis took longer than {JOB_TIMEOUT_MIN:.0f} minutes and was stopped. "
+                        "Try fewer or shorter tracks.")
+            if line is None:  # the worker died mid-job
+                code = self.proc.wait()
+                if code in (-9, 137):
+                    return "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."
+                return f"The analysis process stopped unexpectedly (exit code {code})."
+            if line == f"@@done {job_dir}":
+                return None
+
+
+runner = Runner()
+
+
 def worker():
+    try:
+        runner.ensure_started()  # warm up now, before the first upload arrives
+    except Exception:
+        app.logger.exception("could not start the analysis worker")
     while True:
         job_id = job_queue.get()
         d = DATA_DIR / job_id
         try:
             write_status(d, state="running", message="Starting…")
-            # Each job runs in its own process: the web server stays responsive while it works,
-            # and a crash or out-of-memory kill fails only this job, not the whole site.
-            runner = Path(__file__).with_name("job_runner.py")
-            # Low priority and single-threaded maths libraries: the web server and anything else on the
-            # machine stay responsive while a job runs.
-            env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
-                   "NUMBA_NUM_THREADS": "1"}
-            proc = subprocess.run([sys.executable, str(runner), str(d)], timeout=JOB_TIMEOUT_MIN * 60, env=env,
-                                  preexec_fn=(lambda: os.nice(10)) if hasattr(os, "nice") else None)
-            if read_status(d).get("state") != "done":
-                if proc.returncode in (-9, 137):
-                    msg = "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."
-                elif read_status(d).get("state") == "error":
-                    msg = read_status(d).get("message")
+            problem = runner.run(d, JOB_TIMEOUT_MIN * 60)
+            if problem:
+                app.logger.error("job %s failed: %s", job_id, problem)
+                if read_status(d).get("state") == "done":  # analysis already shown; only the AI part was lost
+                    write_status(d, ai_pending=False, message="The AI ideas could not be added this time.")
                 else:
-                    msg = f"The analysis process stopped unexpectedly (exit code {proc.returncode})."
-                app.logger.error("job %s failed: %s", job_id, msg)
-                write_status(d, state="error", message=msg)
-        except subprocess.TimeoutExpired:
-            write_status(d, state="error", message=f"The analysis took longer than {JOB_TIMEOUT_MIN:.0f} minutes and "
-                                                   "was stopped. Try fewer or shorter tracks.")
+                    write_status(d, state="error", message=problem)
         except Exception as e:  # never let one bad job kill the worker thread
             app.logger.exception("job %s failed", job_id)
             write_status(d, state="error", message=f"Analysis failed: {str(e)[:300]}")
@@ -203,7 +248,7 @@ def job(job_id):
 @app.get("/jobs/<job_id>/status")
 def job_status(job_id):
     s = read_status(get_job_dir(job_id))
-    return jsonify(state=s.get("state"), message=s.get("message"))
+    return jsonify(state=s.get("state"), message=s.get("message"), ai_pending=bool(s.get("ai_pending")))
 
 
 @app.get("/jobs/<job_id>/files/<path:name>")
