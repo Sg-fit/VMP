@@ -1332,9 +1332,7 @@ def make_llm():
         models = list(dict.fromkeys(models))
 
         def ask(model, prompt):
-            r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=1200,
-                                               messages=[{"role": "user", "content": prompt}])
-            return r.choices[0].message.content or ""
+            return _chat(client, model, prompt)
 
         def call(prompt, info=None):
             return _race(models, lambda model: ask(model, prompt), info,
@@ -1355,6 +1353,21 @@ def make_llm():
         return call, f"anthropic/{model}"
 
     return None, None
+
+
+# "Reasoning" models think before answering; with a small token budget they can use it all up and
+# return nothing. Each family has a documented plain-text switch to keep the thinking short.
+REASONING_HINTS = {"gpt-oss": "Reasoning: low", "nemotron": "/no_think", "qwen3": "/no_think"}
+
+
+def _chat(client, model, prompt, quick=True):
+    """One chat request (OpenAI-compatible). quick=True asks reasoning models to skip long thinking
+    and gives them more room to answer."""
+    hint = next((h for k, h in REASONING_HINTS.items() if k in model.lower()), None)
+    messages = ([{"role": "system", "content": hint}] if hint and quick else []) +         [{"role": "user", "content": prompt}]
+    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=3000 if hint else 1200,
+                                       messages=messages)
+    return r.choices[0].message.content or ""
 
 
 def _race(models, ask, info, fatal):
@@ -1439,47 +1452,52 @@ Energy: biggest build into 2:17 (+14.8 dB); quietest around 2:13."""
 
 
 def bench_llm():
-    """Time each configured model on a realistic prompt, so the fastest reliable one can be the default."""
+    """Time each configured model on a realistic prompt - with and without the 'think less' switch for
+    reasoning models - and print the .env settings for the fastest reliable setup."""
+    import math
     import time as _time
-    if not (os.environ.get("NVIDIA_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
-        sys.exit("Set NVIDIA_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY first.")
+    if not os.environ.get("NVIDIA_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            sys.exit("--bench-llm compares NVIDIA/OpenAI models; with Anthropic there is only one model to use.")
+        sys.exit("Set NVIDIA_API_KEY or OPENAI_API_KEY first.")
+    import openai
     prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY)
     if os.environ.get("NVIDIA_API_KEY"):
-        import openai
-        client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=90, max_retries=0)
-        extra = os.environ.get("MUSIC_BENCH_MODELS", "")
-        models = list(dict.fromkeys([os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] +
-                                    [m.strip() for m in (NVIDIA_FALLBACK_MODELS + "," + extra).split(",") if m.strip()]))
+        client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=120, max_retries=0)
+        names = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] +             [m.strip() for m in (NVIDIA_FALLBACK_MODELS + "," + os.environ.get("MUSIC_BENCH_MODELS", "")).split(",")]
     else:
-        call, label = make_llm()
-        models, client = [label], None
-    print(f"Timing {len(models)} model(s) with a {len(prompt)}-character brainstorm prompt, 2 runs each...\n")
-    rows = []
+        client = openai.OpenAI(timeout=120, max_retries=0)
+        names = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)] + os.environ.get("MUSIC_BENCH_MODELS", "").split(",")
+    models = [m for m in dict.fromkeys(n.strip() for n in names) if m]
+    print(f"Testing {len(models)} model(s), one request at a time ({len(prompt)}-character prompt, 120 s limit).\n")
+    results = []
     for model in models:
-        times, ok = [], 0
-        for _ in range(2):
+        reasoning = any(k in model.lower() for k in REASONING_HINTS)
+        for quick in ([True, False] if reasoning else [True]):
+            label = model + ("  (think less)" if reasoning and quick else "  (normal)" if reasoning else "")
             t = _time.time()
             try:
-                if client:
-                    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=1200,
-                                                       messages=[{"role": "user", "content": prompt}])
-                    text = r.choices[0].message.content or ""
-                else:
-                    text = call(prompt)
-                ok += _parse_json_reply(text) is not None
-                times.append(_time.time() - t)
+                text = _chat(client, model, prompt, quick=quick)
+                secs = _time.time() - t
+                usable = _parse_json_reply(text) is not None
+                note = "usable" if usable else ("EMPTY reply" if not text.strip() else "reply not usable")
             except Exception as e:
-                times.append(float("inf"))
-                print(f"  {model}: {type(e).__name__} {getattr(e, 'status_code', '') or ''}")
-        rows.append((model, ok, times))
-        shown = ", ".join("fail" if x == float("inf") else f"{x:.1f}s" for x in times)
-        print(f"  {model:45} usable answers {ok}/2   times: {shown}")
-    good = [r for r in rows if r[1] == 2]
-    if good:
-        best = min(good, key=lambda r: sum(r[2]))
-        print(f"\nFastest reliable model: {best[0]}  ->  set MUSIC_MODEL={best[0]} in .env")
-    else:
-        print("\nNo model answered reliably right now; try again later or add candidates with MUSIC_BENCH_MODELS.")
+                secs, usable = _time.time() - t, False
+                note = f"{type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip()
+            print(f"  {label:55} {secs:6.1f}s   {note}")
+            results.append((model, quick, secs, usable))
+    good = sorted([r for r in results if r[3]], key=lambda r: r[2])
+    if not good:
+        print("\nNo model gave a usable answer. NVIDIA's free models may be overloaded right now - try again in a "
+              "while, try others with MUSIC_BENCH_MODELS=model1,model2, or use an OpenAI/Anthropic key.")
+        return
+    order = list(dict.fromkeys(r[0] for r in good))
+    deadline = min(180, max(60, math.ceil(good[0][2] * 2 / 10) * 10))
+    print("\nRecommended .env settings (then run: docker compose up -d):\n")
+    print(f"MUSIC_MODEL={order[0]}")
+    if len(order) > 1:
+        print(f"MUSIC_FALLBACK_MODELS={','.join(order[1:])}")
+    print(f"MUSIC_AI_DEADLINE_SECONDS={deadline}")
 
 
 def _parse_json_reply(raw):
@@ -1953,7 +1971,7 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
     progress = progress or (lambda msg: None)
     out = Path(out)
     results, pending = [], []
-    ai_pool = cf.ThreadPoolExecutor(max_workers=3) if llm else None
+    ai_pool = cf.ThreadPoolExecutor(max_workers=2) if llm else None  # free endpoints queue bursts
     try:
         for i, f in enumerate(files, 1):
             f = Path(f)
