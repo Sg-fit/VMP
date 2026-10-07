@@ -79,10 +79,12 @@ ROMAN = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII",
 
 # Any OpenAI-compatible endpoint works (e.g. a self-hosted model); NVIDIA is the default.
 NVIDIA_BASE_URL = os.environ.get("MUSIC_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = "google/gemma-4-31b-it"
+# Measured with --bench-llm on the free tier (Oct 2026): gpt-oss-20b 17 s, nemotron-3-super 22 s (both
+# with their "think less" switch); gemma-4-31b timed out at 120 s, so it's no longer a default.
+NVIDIA_MODEL = "openai/gpt-oss-20b"
 # Tried in order if the main model times out or has been retired (comma-separated, overridable
 # with MUSIC_FALLBACK_MODELS).
-NVIDIA_FALLBACK_MODELS = "nvidia/nemotron-3-super-120b-a12b,openai/gpt-oss-20b"
+NVIDIA_FALLBACK_MODELS = "nvidia/nemotron-3-super-120b-a12b"
 ANTHROPIC_MODEL = "claude-haiku-4-5"
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -1493,7 +1495,8 @@ def bench_llm():
               "while, try others with MUSIC_BENCH_MODELS=model1,model2, or use an OpenAI/Anthropic key.")
         return
     order = list(dict.fromkeys(r[0] for r in good))
-    deadline = min(180, max(60, math.ceil(good[0][2] * 2 / 10) * 10))
+    # Real jobs ask for two tracks at once and free endpoints slow down under load: leave headroom.
+    deadline = min(180, max(90, math.ceil(good[0][2] * 4 / 10) * 10))
     print("\nRecommended .env settings (then run: docker compose up -d):\n")
     print(f"MUSIC_MODEL={order[0]}")
     if len(order) > 1:
