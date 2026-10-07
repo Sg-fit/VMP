@@ -117,7 +117,7 @@ def to_midi(parsed):
         if octave is not None:
             n = 12 * (octave + 1) + pc
         elif prev is None:
-            n = 60 + pc if pc <= 7 else 48 + pc  # first note lands between G#3 and G4
+            n = 60 + pc  # first note lands between C4 and B4, where most melodies sit
         else:
             n = min((12 * o + pc for o in range(2, 9)), key=lambda c: abs(c - prev))
         midi.append(n)
@@ -169,6 +169,14 @@ def analyse_melody(text, tonic, mode, modes, spell):
     if (5, 7) in pairs or (7, 5) in pairs:
         devices.append({"device": f"whole-step neighbour 4–5 ({spell((tonic + 5) % 12)}/{spell((tonic + 7) % 12)})",
                         "reference": "a folk/blues-style move that keeps the line hovering on the 5th"})
+    major_key = 4 in scale
+    if major_key and 3 in used:
+        devices.append({"device": f"borrowed minor third ({spell((tonic + 3) % 12)}) in a major key",
+                        "reference": "modal mixture — a note borrowed from the parallel minor for a sudden "
+                                     "bittersweet shade; a staple of pop, film and classical writing"})
+    elif not major_key and 4 in used:
+        devices.append({"device": f"borrowed major third ({spell((tonic + 4) % 12)}) in a minor key",
+                        "reference": "modal mixture — a brief brightening borrowed from the parallel major"})
     if all(r in {0, 3, 5, 7, 10} for r in used):
         devices.append({"device": "uses only minor-pentatonic notes",
                         "reference": "the core of blues and rock riffing"})

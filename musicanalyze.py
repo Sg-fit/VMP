@@ -318,9 +318,44 @@ def detect_chords(chroma, rms_db, bounds, btimes):
         if lab < 0:
             continue
         root, q = CHORD_LABELS[lab]
+        if q in ("", "m"):
+            # Don't claim major or minor without hearing a third: if neither third is clearly
+            # present (open fifths, or a quiet melody note), call it a power chord.
+            cols = [i for i in range(len(btimes) - 1) if s <= btimes[i] < e and i < sync.shape[1]]
+            if cols:
+                v = sync[:, cols].mean(axis=1)
+                third = max(v[(root + 3) % 12], v[(root + 4) % 12])
+                # Measured on chords with known content: real thirds sit at >= 0.27 of the root/fifth,
+                # chords without an audible third at <= 0.19.
+                if third < 0.22 * max(v[root], v[(root + 7) % 12]):
+                    q = "5"
         chords.append({"start": round(float(s), 2), "end": round(float(e), 2),
                        "beats": max(1, int(round((e - s) / beat_len))), "root": root, "q": q})
     return chords
+
+
+def detect_meter(rms_db, chroma, bounds, clear_beat):
+    """3/4 or 4/4: do strong beats and chord changes recur every 3 beats or every 4?
+    Only says 3/4 when the evidence is clearly stronger; otherwise 4/4 (the most common)."""
+    import librosa
+    default = {"beats_per_bar": 4, "label": "4/4", "confidence": "assumed"}
+    if not clear_beat or len(bounds) < 14:
+        return default
+    loud = librosa.util.sync(rms_db[None, :], bounds, aggregate=np.max, pad=False)[0]
+    accent = np.r_[0, np.diff(loud)]                      # rise in loudness at each beat
+    C = librosa.util.sync(chroma, bounds, aggregate=np.median, pad=False)
+    C = C / (np.linalg.norm(C, axis=0, keepdims=True) + 1e-9)
+    change = np.r_[0, 1 - np.sum(C[:, 1:] * C[:, :-1], axis=0)]  # harmonic change at each beat
+    z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
+    feat = z(accent) + z(change)
+    score = {m: max(feat[p::m].mean() - np.delete(feat, np.arange(p, len(feat), m)).mean() for p in range(m))
+             for m in (3, 4)}
+    if score[3] > score[4] + 0.3 and score[3] > 0.6:
+        return {"beats_per_bar": 3, "label": "3/4", "confidence": "detected",
+                "scores": {k: round(float(v), 2) for k, v in score.items()}}
+    conf = "detected" if score[4] > score[3] + 0.3 else "assumed"
+    return {"beats_per_bar": 4, "label": "4/4", "confidence": conf,
+            "scores": {k: round(float(v), 2) for k, v in score.items()}}
 
 
 def find_loop(names, key):
@@ -512,7 +547,22 @@ def _analyze_audio(path):
 
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=HOP)
     tempo = float(np.atleast_1d(tempo)[0])
+    if len(beat_frames) < 0.5 * duration * tempo / 60:
+        # The default onset curve (a median across frequencies) is built for drums and nearly erases
+        # soft onsets such as bowed strings or sustained piano; the standard (mean) curve keeps them.
+        env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
+        tempo2, frames2 = librosa.beat.beat_track(onset_envelope=env, sr=sr, hop_length=HOP)
+        if len(frames2) > len(beat_frames):
+            tempo, beat_frames = float(np.atleast_1d(tempo2)[0]), frames2
     clear_beat = len(beat_frames) >= 8
+    tracked_frames = beat_frames  # beats actually heard (the meter is judged on these only)
+    if clear_beat:
+        # The tracker often stops at the last clear hit; keep counting beats to the end so a final
+        # ringing chord isn't lumped into one long "silent" span.
+        period = int(np.median(np.diff(beat_frames)))
+        end = librosa.time_to_frames(duration, sr=sr, hop_length=HOP)
+        extra = np.arange(beat_frames[-1] + period, end - period // 2, period)
+        beat_frames = np.concatenate([beat_frames, extra]).astype(int)
     if not clear_beat:  # ambient / rubato: fall back to half-second steps
         beat_frames = librosa.time_to_frames(np.arange(0.5, duration, 0.5), sr=sr, hop_length=HOP)
 
@@ -554,6 +604,33 @@ def _analyze_audio(path):
 
     # --- chords
     chords = detect_chords(chroma, rms_db, bounds, btimes)
+
+    # A key read as "X Mixolydian" only because of a prominent X7 chord that sits next to the chord a
+    # fourth above it is, musically, that chord's key with X7 as its V7 (e.g. A - E7 is A major, not
+    # E Mixolydian). Re-home the key in that case.
+    if scale["mode"] == "Mixolydian" and chords:
+        dom = sum(c["end"] - c["start"] for c in chords if c["q"] == "7" and c["root"] == main_tonic)
+        target = (main_tonic + 5) % 12
+        resolves = any(a["q"] == "7" and a["root"] == main_tonic and b["root"] == target or
+                       b["q"] == "7" and b["root"] == main_tonic and a["root"] == target
+                       for a, b in zip(chords, chords[1:]))
+        if dom >= 0.15 * duration and resolves:
+            old_key = main_key
+            frames_t = np.concatenate([np.arange(int(s * fps), min(int(e * fps), n))
+                                       for s, e, k in ksec if key_tonic(k) == main_tonic])
+            scale = mode_and_scale(chroma, frames_t, target)
+            main_key = scale.pop("key_index")
+            main_tonic = target
+            ksec = merge_runs([(s, e, main_key if k == old_key else k) for s, e, k in ksec])
+            time_in_key = Counter()
+            for s, e, k in ksec:
+                time_in_key[k] += e - s
+            scores = key_scores(chroma[:, frames_t].mean(axis=1))
+            runner_up = old_key
+            scale["mode_confidence"] = "medium" if scale["mode_confidence"] == "high" else scale["mode_confidence"]
+
+    meter = detect_meter(rms_db, chroma,
+                         librosa.util.fix_frames(tracked_frames[tracked_frames < n], x_min=0, x_max=n), clear_beat)
     bass = instruments.bass_notes(y_harm, sr, btimes, tuning)  # one note (or None) per beat span
     for c in chords:
         k = key_at(ksec, (c["start"] + c["end"]) / 2)
@@ -620,6 +697,7 @@ def _analyze_audio(path):
         "duration": fmt_time(duration),
         "tuning_cents": int(round(tuning * 100)),
         "tempo_bpm": round(tempo, 1) if clear_beat else None,
+        "meter": meter,
         "key": KEY_NAMES[main_key],
         "key_index": int(main_key),
         "camelot": camelot(main_key),
@@ -640,7 +718,8 @@ def _analyze_audio(path):
         "rhythm": rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr),
         "sound": sound_features(y, sr, rms_db, duration),
         "separation": separation,
-        "drums": instruments.drum_analysis(y_perc, sr, 256, beat_times, float(np.sum(y ** 2)))
+        "drums": instruments.drum_analysis(y_perc, sr, 256, beat_times, float(np.sum(y ** 2)),
+                                           beats_per_bar=meter["beats_per_bar"])
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
@@ -654,7 +733,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-07b"
+ANALYSIS_VERSION = "2026-10-08b"
 
 
 def _cache_key(path):
@@ -746,8 +825,9 @@ def check_melody(chroma, bounds, pcs, key):
         order_pct = round(100 * float(np.mean([mine > x for x in shuffled])))
 
     if weak:
-        verdict = (f"{', '.join(weak)} barely sound{'s' if len(weak) == 1 else ''} in the recording — "
-                   f"double-check {'that note' if len(weak) == 1 else 'those notes'}.")
+        verdict = (f"{', '.join(weak)} {'is' if len(weak) == 1 else 'are'} very quiet in the recording. If you're "
+                   f"sure {'it is' if len(weak) == 1 else 'they are'} there, {'it is' if len(weak) == 1 else 'they are'} "
+                   f"probably just mixed low; if not, double-check.")
     else:
         verdict = "All the notes you typed clearly sound in the recording."
     if order_pct is None:
@@ -1569,6 +1649,10 @@ def track_report(r):
         return L + [f"⚠️ Could not analyse this file: {r['error']}", ""]
     rh, s = r["rhythm"], r["sound"]
     tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
+    meter = r.get("meter") or {}
+    if r["tempo_bpm"] and meter.get("label"):
+        tempo += f" in {meter['label']}" + (" (waltz feel)" if meter["beats_per_bar"] == 3 else "") + \
+            (" (assumed)" if meter.get("confidence") == "assumed" else "")
     L += [f"**{r['duration']}** · **{tempo}** · **{tip(r['key'], 'Key')}** "
           f"({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · {rh['tempo_feel']} · {s['tone']}", ""]
 
@@ -1694,7 +1778,7 @@ def melody_report(r):
                   f"_Note strength rank in this track: {strengths}._", ""]
         L += [
               f"- **{tip('Scale degrees', 'Scale degree')}:** {' '.join(m['degrees'])} (1 = {r['scale_notes'][0]}, the home note)",
-              f"- **Fits:** {', '.join(mode_tip(x) for x in m['fits_modes']) or 'none of the 8 modes on this home note'}"
+              f"- **Fits:** {', '.join(mode_tip(x) for x in m['fits_modes']) or 'no single mode — it mixes notes from the major and minor scales on ' + r['scale_notes'][0]}"
               + (f" · outside the detected scale: {', '.join(m['outside_detected_scale'])}" if m["outside_detected_scale"] else ""),
               f"- **Shape:** {m['shape']} · range {m['range']} · {m['steps_pct']}% steps, {m['leaps_pct']}% leaps",
               f"- **Moves:** {', '.join(m['intervals'])}"]
@@ -1762,7 +1846,8 @@ def instruments_report(r):
         if d.get("fills"):
             parts.append("likely fills at " + ", ".join(fmt_time(t) for t in d["fills"]))
         g = d["grid"]
-        rows = ["         1 e & a 2 e & a 3 e & a 4 e & a", "Drums    " + " ".join(g)]
+        counts = " ".join(f"{b + 1} e & a" for b in range(len(g) // 4))  # 4 beats in 4/4, 3 in 3/4
+        rows = ["         " + counts, "Drums    " + " ".join(g)]
         if d.get("hats"):
             rows.append("Cymbals  " + " ".join(d["hats"]))
         L += [f"**🥁 Drums** — " + " · ".join(parts), "", f"Main groove ({tip('how to read', 'Drum grid')}):", "",

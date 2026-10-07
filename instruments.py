@@ -69,7 +69,7 @@ def _demucs_split(y, sr):
 
 # ---------------------------------------------------------------- drums
 
-def drum_analysis(drums, sr, hop, beat_times, total_energy):
+def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4):
     """Where in the bar the drums hit, and whether each spot is kick- or snare-heavy.
 
     Rather than labelling every single hit (fragile on demos: one full-kit hit lights up every
@@ -101,10 +101,11 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy):
             band[name] = at_slots(librosa.onset.onset_strength(S=db[sel], sr=sr, hop_length=hop))
 
     def bar_profile(v, offset):
-        n = (len(v) - 4 * offset) // 16
-        return v[4 * offset:4 * offset + 16 * n].reshape(n, 16)
+        n = (len(v) - 4 * offset) // slots
+        return v[4 * offset:4 * offset + slots * n].reshape(n, slots)
 
     z = lambda p: (p - p.mean()) / (p.std() + 1e-9)
+    slots = 4 * beats_per_bar  # 16 in 4/4, 12 in 3/4
     kick, snare = band.get("Kick"), band.get("Snare")
 
     # Bar 1 starts where the strongest, most kick-heavy hit usually is.
@@ -113,7 +114,7 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy):
         if kick is not None and snare is not None:
             score += (z(bar_profile(kick, o).mean(0)) - z(bar_profile(snare, o).mean(0)))[0]
         return score
-    offset = max(range(4), key=downbeat_score)
+    offset = max(range(beats_per_bar), key=downbeat_score)
     bars = bar_profile(overall, offset)
     if len(bars) < 4:
         out["present"] = False
@@ -125,8 +126,8 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy):
 
     grid = []
     k_minus_s = (z(bar_profile(kick, offset)[active].mean(0)) - z(bar_profile(snare, offset)[active].mean(0))
-                 if kick is not None and snare is not None else np.zeros(16))
-    for i in range(16):
+                 if kick is not None and snare is not None else np.zeros(slots))
+    for i in range(slots):
         if hit[i] <= 0.3:
             grid.append(".")
         elif k_minus_s[i] > 0.4:
@@ -144,13 +145,22 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy):
     mean = bars.mean(0)
     corr = np.array([np.corrcoef(b, mean)[0, 1] if b.std() > 0 else 0 for b in bars])
     busy = bars.sum(axis=1)
-    bar_times = np.array([beat_times[min(4 * offset + 4 * b, len(beat_times) - 1)]
+    bar_times = np.array([beat_times[min(offset + beats_per_bar * b, len(beat_times) - 1)]
                           for b in range(len(active))])[active]
     fills = [float(bar_times[i]) for i in range(1, len(bars) - 1)
              if corr[i] < 0.15 and busy[i] > 1.2 * np.median(busy) and corr[i - 1] > 0.3 and corr[i + 1] > 0.3]
 
     g = "".join(grid)
     traits = []
+    if beats_per_bar == 3:
+        traits.append("3/4 (waltz) pattern")
+    if beats_per_bar != 4:  # the trait rules below are written for 16-step (4/4) bars
+        out.update({"grid": g, "hats": hats, "beats_per_bar": beats_per_bar,
+                    "repetition": "tight (very repetitive)" if float(np.mean(corr)) > 0.6 else
+                    "medium" if float(np.mean(corr)) > 0.35 else "loose / varied",
+                    "repetition_score": round(float(np.mean(corr)), 2), "fills": fills[:6], "traits": traits,
+                    "bars": int(active.sum())})
+        return out
     if all(g[i] in "KX" for i in (0, 4, 8, 12)):
         traits.append("four-on-the-floor")
     if g[4] in "SX" and g[12] in "SX" and "S" in (g[4], g[12]):
@@ -168,6 +178,7 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy):
     out.update({
         "grid": g,
         "hats": hats,
+        "beats_per_bar": beats_per_bar,
         "repetition": "tight (very repetitive)" if r > 0.6 else "medium" if r > 0.35 else "loose / varied",
         "repetition_score": round(r, 2),
         "fills": fills[:6],
@@ -214,8 +225,14 @@ def top_line(music, sr, btimes, tuning, lo_midi=45, hi_midi=81):
     for off, w in ((0, 1.0), (12, 0.8), (19, 0.6), (24, 0.5), (28, 0.4)):  # fundamental + overtones
         sal[:n_bins - off] += w * C[off:]
     lo, hi = lo_midi - fmin_midi, hi_midi - fmin_midi
-    best = sal[lo:hi].argmax(axis=0) + lo_midi
-    strength = sal[lo:hi].max(axis=0)
+    # The melody is usually the highest clear voice, not the loudest (accompaniment is often louder):
+    # take the highest local peak that reaches 45% of the strongest pitch in that frame.
+    seg = sal[lo:hi]
+    peak = (seg >= np.roll(seg, 1, axis=0)) & (seg >= np.roll(seg, -1, axis=0)) & (seg >= 0.45 * seg.max(axis=0))
+    idx = np.arange(seg.shape[0])[:, None]
+    best = np.where(peak, idx, -1).max(axis=0)
+    best = np.where(best < 0, seg.argmax(axis=0), best) + lo_midi
+    strength = seg.max(axis=0)
     floor = np.percentile(strength, 30)
     times = librosa.times_like(C[0], sr=sr, hop_length=512)
     grid = np.concatenate([np.linspace(a, b, 2, endpoint=False) for a, b in zip(btimes[:-1], btimes[1:])]
