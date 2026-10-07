@@ -1271,9 +1271,10 @@ ANALYSIS
 """
 
 # How long to wait for the main model before also asking a backup model in parallel, and the
-# overall limit for one brainstorm. A musician shouldn't wait longer than this for ideas.
-AI_HEDGE_SECONDS = float(os.environ.get("MUSIC_AI_HEDGE_SECONDS", 15))
-AI_DEADLINE_SECONDS = float(os.environ.get("MUSIC_AI_DEADLINE_SECONDS", 60))
+# overall limit for one brainstorm. Results are shown before the AI finishes, so the limit can be
+# generous: NVIDIA's free models often need 60-90+ seconds.
+AI_HEDGE_SECONDS = float(os.environ.get("MUSIC_AI_HEDGE_SECONDS", 30))
+AI_DEADLINE_SECONDS = float(os.environ.get("MUSIC_AI_DEADLINE_SECONDS", 150))
 
 
 def ai_summary(r):
@@ -1918,7 +1919,7 @@ def build_report(results):
           "(often confusing relative keys like B minor ↔ D major); chord detection works best on clear, "
           "sustained harmony and simplifies to major/minor/7th chords; tempo can come out at half or "
           "double the felt tempo; section letters are a rough guide. Use it as a starting point for ideas, "
-          "not as a transcription._"]
+          "not as a transcription._", "", f"_Analyzer version {CODE_VERSION}._"]
     return "\n".join(L)
 
 
@@ -1947,6 +1948,20 @@ def _timed_brainstorm(r, llm):
 
 
 DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache" / "music-analyzer"))
+
+
+def _code_version():
+    import hashlib
+    h = hashlib.sha256()
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py"):
+        try:
+            h.update((Path(__file__).with_name(name)).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:8]
+
+
+CODE_VERSION = _code_version()
 
 
 def _write_outputs(results, out):
@@ -1978,6 +1993,7 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
             progress(f"[{i}/{len(files)}] Analysing {f.name}...")
             try:
                 r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir)
+                r["analyzer_version"] = CODE_VERSION
                 r["midi"] = export_midis(r, out / "midi")
                 if ai_pool:
                     pending.append((r, ai_pool.submit(_timed_brainstorm, r, llm)))  # overlaps the next track
