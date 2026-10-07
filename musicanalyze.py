@@ -1918,6 +1918,16 @@ def collect_files(paths):
     return files
 
 
+def _timed_brainstorm(r, llm):
+    """ai_brainstorm, plus one log line per track (visible in `docker compose logs`)."""
+    import time as _time
+    t0 = _time.time()
+    ai = ai_brainstorm(r, llm)
+    outcome = f"ideas from {ai.get('model')}" if not ai.get("error") else f"FAILED: {ai['error']}"
+    print(f"[ai] {r['file']}: {outcome} ({_time.time() - t0:.1f}s)", file=sys.stderr, flush=True)
+    return ai
+
+
 DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache" / "music-analyzer"))
 
 
@@ -1952,7 +1962,7 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
                 r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir)
                 r["midi"] = export_midis(r, out / "midi")
                 if ai_pool:
-                    pending.append((r, ai_pool.submit(ai_brainstorm, r, llm)))  # overlaps the next track
+                    pending.append((r, ai_pool.submit(_timed_brainstorm, r, llm)))  # overlaps the next track
             except Exception as e:  # unreadable / corrupt file — keep going
                 progress(f"  ! {f.name}: {e}")
                 r = {"file": f.name, "error": "unreadable or unsupported audio" if "Error opening" in str(e)

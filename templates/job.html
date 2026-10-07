@@ -37,6 +37,7 @@
     <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }} · results kept for a limited time — download anything you want to keep</div>
     <div class="toolbar">
       <a class="btn" href="{{ url_for('job_zip', job_id=job_id) }}">⬇ Download everything (.zip)</a>
+      {% if s.ai_pending %}<span class="muted" style="align-self:center;font-size:.88rem">The AI ideas aren't in the download yet — wait for “✅ ready” for the complete package.</span>{% endif %}
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}">Report (.md)</a>
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}">Data (.json)</a>
       <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>

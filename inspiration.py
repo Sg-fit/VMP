@@ -72,7 +72,9 @@ def _signature(chords):
 
 
 def _same(sig, ref):
-    return len(sig) == len(ref) and all(a[0] == b[0] and (a[1] is None or a[1] == b[1]) for a, b in zip(sig, ref))
+    # A power chord (no audible third) can't confirm a progression whose identity depends on major vs
+    # minor, so it never matches (e.g. "E5 - A" is not evidence of the i-IV Dorian vamp).
+    return len(sig) == len(ref) and all(a[0] == b[0] and a[1] == b[1] for a, b in zip(sig, ref))
 
 
 def match_progression(chords, cyclic=True):
