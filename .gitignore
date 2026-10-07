@@ -27,3 +27,6 @@ music_results.json
 .claude/
 .vscode/
 .idea/
+
+# Presentations made from your results (personal, not part of the app)
+presentation/

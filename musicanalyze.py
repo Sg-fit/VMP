@@ -585,6 +585,12 @@ def analyze(path, melody_text=None):
 
     # --- structure (with each section's key, main chords and which instruments play)
     drum_rms = librosa.feature.rms(y=y_perc, hop_length=HOP)[0]
+    # Bass presence from low-end energy in the drumless audio (pitch tracking alone misses quiet
+    # or busy bass on phone recordings): 40-200 Hz power and its ratio to the 200-2000 Hz band.
+    spec = np.abs(librosa.stft(y_harm, n_fft=4096, hop_length=HOP)) ** 2
+    spec_f = librosa.fft_frequencies(sr=sr, n_fft=4096)
+    low_band = spec[(spec_f >= 40) & (spec_f < 200)].sum(axis=0)
+    mid_band = spec[(spec_f >= 200) & (spec_f < 2000)].sum(axis=0)
     sections = detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, [e for _, e, _ in ksec[:-1]])
     for sec in sections:
         top = Counter()
@@ -595,11 +601,14 @@ def analyze(path, melody_text=None):
         sec["main_chords"] = [name for name, _ in top.most_common(4)]
         a, b = int(sec["start"] * sr / HOP), max(int(sec["end"] * sr / HOP), int(sec["start"] * sr / HOP) + 1)
         sec["drums_level"] = float(np.mean(drum_rms[a:b] ** 2)) if a < len(drum_rms) else 0.0
-        in_sec = [n for i, n in enumerate(bass) if sec["start"] <= (btimes[i] + btimes[i + 1]) / 2 < sec["end"]]
-        sec["bass"] = bool(in_sec) and sum(n is not None for n in in_sec) >= 0.4 * len(in_sec)
+        sec["bass_low_db"] = float(10 * np.log10(np.mean(low_band[a:b]) + 1e-12))
+        sec["bass_ratio_db"] = float(10 * np.log10(np.mean(low_band[a:b]) / (np.mean(mid_band[a:b]) + 1e-12) + 1e-12))
     loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
+    loudest_low = max((sec["bass_low_db"] for sec in sections), default=0.0)
     for sec in sections:
         sec["drums"] = loudest_drums > 0 and sec.pop("drums_level") >= 0.1 * loudest_drums
+        # Bass plays here if the low end is within 12 dB of its loudest section and isn't swamped by mids.
+        sec["bass"] = sec.pop("bass_low_db") >= loudest_low - 12 and sec.pop("bass_ratio_db") >= -9
 
     result = {
         "file": Path(path).name,
@@ -630,6 +639,9 @@ def analyze(path, melody_text=None):
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
+    if not any(sec["bass"] for sec in sections):  # no low end anywhere: the "bass notes" were chord tones
+        result["bass"] = {"present": False}
+
     # --- melody: best-effort top line, plus the musician's own typed melody if given
     top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
     result["top_line"] = top_line_summary(top, grid, chords, main_key)
@@ -785,7 +797,7 @@ def bass_summary(notes, btimes, chords, key, duration):
     lo, hi = (int(v) for v in np.percentile([n for _, n in voiced], [10, 90]))  # ignore stray octave errors
     return {
         "present": True,
-        "plays_pct": round(100 * len(voiced) / len(notes)),
+        "tracked_pct": round(100 * len(voiced) / len(notes)),
         "main_notes": [{"note": spell(pc, key), "pct": round(100 * c / len(voiced))} for pc, c in pcs.most_common(5)],
         "range": f"{note_name(lo, key)}–{note_name(hi, key)}",
         "style": style,
@@ -1578,7 +1590,9 @@ def instruments_report(r):
         L += ["**🥁 Drums** — present, but no clear repeating pattern was found.", ""]
     if b.get("present"):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
-        parts = [f"plays {b['plays_pct']}% of the time", f"range {b['range']}", f"style: {b['style']}",
+        where = [sec["label"] for sec in r["sections"] if sec.get("bass")]
+        parts = [f"plays in sections {' '.join(where)}" if where else "barely audible",
+                 f"clear notes on {b['tracked_pct']}% of beats", f"range {b['range']}", f"style: {b['style']}",
                  f"main notes: {notes}", f"on the chord root {b['follows_roots_pct']}% of the time"]
         if b.get("riff"):
             parts.append(f"repeating riff: `{' '.join(b['riff'])}`")

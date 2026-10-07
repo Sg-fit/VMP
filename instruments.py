@@ -178,13 +178,13 @@ def bass_notes(music, sr, btimes, tuning):
     low_sr = 8000
     yb = librosa.resample(music, orig_sr=sr, target_sr=low_sr)
     yb = ss.sosfiltfilt(ss.butter(4, 260, btype="low", fs=low_sr, output="sos"), yb)
-    f0, voiced, prob = librosa.pyin(yb, fmin=30, fmax=280, sr=low_sr, frame_length=1024, hop_length=128)
+    f0, voiced, prob = librosa.pyin(yb, fmin=30, fmax=280, sr=low_sr, frame_length=2048, hop_length=128)
     times = librosa.times_like(f0, sr=low_sr, hop_length=128)
     midi = librosa.hz_to_midi(np.where(voiced, f0, np.nan)) - tuning
     notes = []
     for a, b in zip(btimes[:-1], btimes[1:]):
         span = (times >= a) & (times < b)
-        good = span & voiced & (prob > 0.2)
+        good = span & voiced & (prob > 0.1)
         notes.append(int(np.rint(np.nanmedian(midi[good]))) if span.sum() and good.sum() >= 0.3 * span.sum() else None)
     return notes
 
