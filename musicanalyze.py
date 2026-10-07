@@ -606,6 +606,8 @@ def _analyze_audio(path):
         sec["bass_low_db"] = float(10 * np.log10(np.mean(low_band[a:b]) + 1e-12))
         sec["bass_ratio_db"] = float(10 * np.log10(np.mean(low_band[a:b]) / (np.mean(mid_band[a:b]) + 1e-12) + 1e-12))
     loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
+    if float(np.sum(y_perc ** 2)) < 0.03 * float(np.sum(y ** 2)):
+        loudest_drums = 0.0  # no real drums anywhere (same rule as instruments.drum_analysis)
     loudest_low = max((sec["bass_low_db"] for sec in sections), default=0.0)
     for sec in sections:
         sec["drums"] = loudest_drums > 0 and sec.pop("drums_level") >= 0.1 * loudest_drums
@@ -629,7 +631,8 @@ def _analyze_audio(path):
         "key_changes": len(ksec) - 1,
         **scale,
         "chords_used": [{"chord": name, "seconds": round(t, 1)} for name, t in chord_time.most_common(8)],
-        "harmonic_rhythm_beats": round(float(np.mean([c["beats"] for c in chords])), 1) if chords else None,
+        "harmonic_rhythm_beats": round(float(np.mean([c["beats"] for c in chords])), 1) if chords and clear_beat else None,
+        "harmonic_rhythm_sec": round(float(np.mean([c["end"] - c["start"] for c in chords])), 1) if chords else None,
         "chord_timeline": [{"time": fmt_time(c["start"]), "chord": c["name"], "roman": c["roman"],
                             "with_bass": c.get("slash", c["name"]), "beats": c["beats"]} for c in chords],
         "loops": loops,
@@ -651,7 +654,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-07a"
+ANALYSIS_VERSION = "2026-10-07b"
 
 
 def _cache_key(path):
@@ -789,14 +792,15 @@ def shared_dna(r):
     """What the track has in common with well-known music: progressions, mode, groove, melody."""
     out = {"progressions": [], "mode": None, "groove": None, "melody": []}
     loops = [l["chords"] for l in r["loops"] if len(l["chords"]) >= 2]
-    if not loops:  # no strict loop: use the 4 most-used chords in the order they first appear
+    cyclic = bool(loops)
+    if not loops:  # no repeating loop: the 4 most-used chords in the order they first appear (no wrap-around)
         top = [c["chord"] for c in r["chords_used"][:4]]
         first = list(dict.fromkeys(c["chord"] for c in r["chord_timeline"] if c["chord"] in top))
         loops = [first] if len(first) >= 2 else []
     seen = set()
     for names in loops:
         parsed = [parse_chord(n) for n in names]
-        for m in inspiration.match_progression([(p[0], p[1]) for p in parsed if p]):
+        for m in inspiration.match_progression([(p[0], p[1]) for p in parsed if p], cyclic=cyclic):
             if m["progression"] not in seen:
                 seen.add(m["progression"])
                 out["progressions"].append({**m, "your_chords": names})
@@ -1594,6 +1598,8 @@ def track_report(r):
     L.append(f"- **Chords used most:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
     if r["harmonic_rhythm_beats"]:
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
+    elif r.get("harmonic_rhythm_sec"):
+        L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_sec']} seconds")
     L += ["", "**Time in each key**", "", "| Key | Time | Share |", "|-----|------|-------|"]
     for k, v in r["time_in_key"].items():
         L.append(f"| {k} | {fmt_time(v['seconds'])} | {v['percent']}% |")
@@ -1746,7 +1752,7 @@ def instruments_report(r):
     if not d.get("present") and not b.get("present"):
         return []
     how = ("separated with Demucs (AI source separation)" if r.get("separation") == "demucs" else
-           "separated with a lighter harmonic/percussive split (Demucs not installed)")
+           "separated with a lighter harmonic/percussive split (Demucs AI separation not in use)")
     L = ["", "### Instruments", "", f"_Drums and the rest were {how}._", ""]
     if d.get("present") and d.get("grid"):
         where = [sec["label"] for sec in r["sections"] if sec.get("drums")]

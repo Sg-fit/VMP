@@ -75,12 +75,14 @@ def _same(sig, ref):
     return len(sig) == len(ref) and all(a[0] == b[0] and (a[1] is None or a[1] == b[1]) for a, b in zip(sig, ref))
 
 
-def match_progression(chords):
-    """chords: [(root_pc, quality)] of one loop. Returns library matches (exact or contained)."""
+def match_progression(chords, cyclic=True):
+    """chords: [(root_pc, quality)]. Returns library matches (exact or contained).
+    cyclic=True for a detected loop (it repeats, so it may wrap from last chord to first);
+    cyclic=False for chords that were just played in order, which must match without wrapping."""
     found = []
     n = len(chords)
     for name, ref, examples in PROGRESSIONS:
-        rots = [chords[i:] + chords[:i] for i in range(n)]
+        rots = [chords[i:] + chords[:i] for i in range(n)] if cyclic else             [chords[i:] for i in range(n - len(ref) + 1)]
         if any(_same(_signature(r), ref) for r in rots):
             found.append({"progression": name, "match": "same loop", "examples": examples})
         elif len(ref) >= 3 and n > len(ref) and any(_same(_signature(r[:len(ref)]), ref) for r in rots):
