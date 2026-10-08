@@ -1364,7 +1364,14 @@ def _check_times(text, r, tolerance=3):
             where = ", ".join(f"{fmt_time(s0)}-{fmt_time(e0)}" for s0, e0 in spans)
             problems.append(f"section {lab} is at {where}")
     # "<chord> at m:ss": is that chord (same root) really playing around then?
-    for name, t in re.findall(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text):
+    # Skip chords the AI suggests adding: the verb governs the chord directly ("play A7", "add a G#7").
+    # With a preposition in between ("add G#7 before C#m"), the second chord is a claim to check.
+    suggest = re.compile(r"\b(?:insert|add|play|use|try|layer|introduce|swap|put|with)\s+"
+                         r"(?:(?!(?:before|after|over|under|on|into|to|than|from|of|at|in|the)\b)[\w#'-]+\s+){0,3}$", re.I)
+    for m_ in re.finditer(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text):
+        name, t = m_.group(1), m_.group(2)
+        if suggest.search(text[max(0, m_.start() - 30):m_.start()]):
+            continue  # a chord the AI suggests adding, not a claim about the recording
         want = parse_chord(name)
         if not want:
             continue
@@ -1396,7 +1403,8 @@ def make_llm():
 
         def call(prompt, info=None):
             return _race(models, lambda model: ask(model, prompt), info,
-                         fatal=lambda e: getattr(e, "status_code", None) in (400, 401, 403))
+                         fatal=lambda e: getattr(e, "status_code", None) in (400, 401, 403),
+                         complete=_complete_answer)
         return call, f"{label}/{models[0]}"
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -1425,19 +1433,27 @@ def _chat(client, model, prompt, quick=True):
     and gives them more room to answer."""
     hint = next((h for k, h in REASONING_HINTS.items() if k in model.lower()), None)
     messages = ([{"role": "system", "content": hint}] if hint and quick else []) +         [{"role": "user", "content": prompt}]
-    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=3000 if hint else 1200,
+    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=4096 if hint else 1200,
                                        messages=messages)
     return r.choices[0].message.content or ""
 
 
-def _race(models, ask, info, fatal):
+def _complete_answer(text):
+    """A brainstorm reply is complete when it has several ideas and at least one progression
+    (a reply cut off at the token limit usually loses the progressions at the end)."""
+    obj = _parse_json_reply(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL))
+    return bool(obj) and len(obj.get("ideas") or []) >= 3 and bool(obj.get("alt_progressions"))
+
+
+def _race(models, ask, info, fatal, complete=lambda text: True):
     """Ask models[0]; if it hasn't answered after AI_HEDGE_SECONDS (or fails), also ask the next
-    model - in parallel, not after it - and take the first usable answer. Gives up at
-    AI_DEADLINE_SECONDS. Slow free endpoints then cost seconds, not minutes."""
+    model - in parallel, not after it - and take the first complete answer. A partial answer is kept
+    as a last resort while the others finish. Gives up at AI_DEADLINE_SECONDS."""
     import concurrent.futures as cf
     import time as _time
     pool = cf.ThreadPoolExecutor(max_workers=len(models))
     start, nxt, pending, problems = _time.time(), 0, {}, []
+    partial = None  # (text, model): a usable but incomplete answer, used only if nothing better arrives
 
     def launch():
         nonlocal nxt
@@ -1460,14 +1476,23 @@ def _race(models, ask, info, fatal):
                         raise
                     problems.append(f"{model}: {type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip())
                     continue
-                if "{" in text:
+                if "{" in text and complete(text):
                     if info is not None:
                         info["model"] = model
                     return text
-                problems.append(f"{model}: empty reply")
+                if "{" in text:
+                    partial = partial or (text, model)
+                    problems.append(f"{model}: incomplete reply")
+                else:
+                    problems.append(f"{model}: empty reply")
             # Nothing usable yet (one failed, or the hedge timer ran out): bring in the next model.
             if nxt < len(models):
                 launch()
+        if partial:
+            if info is not None:
+                info["model"] = partial[1]
+                info["partial"] = True
+            return partial[0]
         problems += [f"{m}: no answer within {AI_DEADLINE_SECONDS:.0f}s" for m in pending.values()]
         raise RuntimeError("no model answered in time (" + "; ".join(problems) + ")")
     finally:
@@ -1488,6 +1513,7 @@ def ai_brainstorm(r, llm):
         return {"error": "AI reply could not be parsed", "raw": raw.strip()[:1500]}
     return {
         "model": info.get("model"),
+        "partial": bool(info.get("partial")),
         "vibe": _clean(obj.get("vibe", "")),
         "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _check_times(_clean(i["idea"]), r)}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
@@ -1818,7 +1844,9 @@ def track_report(r):
 
     ai = r.get("ai")
     if ai:
-        L += ["", "### 🤖 AI brainstorm", ""] + ([f"_Suggestions by {ai['model']}._", ""] if ai.get("model") else [])
+        L += ["", "### 🤖 AI brainstorm", ""] + ([f"_Suggestions by {ai['model']}"
+                                                + (" (its reply was cut short, so some parts may be missing)" if ai.get("partial") else "")
+                                                + "._", ""] if ai.get("model") else [])
         if ai.get("pending"):
             L.append("_⏳ The AI is still writing ideas for this track — they'll appear here in a moment._")
         elif ai.get("error"):

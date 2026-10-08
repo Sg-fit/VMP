@@ -287,6 +287,21 @@ def unit_checks():
     info = {}
     out = ma._race(["slow", "fast"], lambda m: (time.sleep(5 if m == "slow" else 0.1), '{"a":1}')[1], info, lambda e: False)
     check("unit", "AI race: a slow model is overtaken by the backup", info.get("model") == "fast" and time.time() - t0 < 1.5)
+    full = '{"ideas":[{"idea":"a"},{"idea":"b"},{"idea":"c"}],"alt_progressions":[{"chords":["G","C"]}]}'
+    cut = '{"ideas":[{"idea":"a"},{"idea":"b"},{"idea":"c"}],"alt_prog'
+    info = {}
+    out = ma._race(["quick-but-cut", "slower-complete"],
+                   lambda m: (time.sleep(0.05 if m.startswith("quick") else 0.6), cut if m.startswith("quick") else full)[1],
+                   info, lambda e: False, complete=ma._complete_answer)
+    check("unit", "AI race: waits for a complete answer instead of a cut-off one", info.get("model") == "slower-complete")
+    info = {}
+    out = ma._race(["quick-but-cut", "broken"],
+                   lambda m: cut if m.startswith("quick") else (_ for _ in ()).throw(TimeoutError()),
+                   info, lambda e: False, complete=ma._complete_answer)
+    check("unit", "AI race: a cut-off answer is still used when nothing better arrives", info.get("partial") is True)
+    fake2 = {"chord_timeline": [{"time": "0:12", "chord": "D"}], "sections": [], "drums": {}, "sound": {}}
+    check("unit", "AI fact-check ignores chords the AI suggests adding",
+          "⚠" not in ma._check_times("Insert an A7 before the D chord at 0:12 (play A7 at 0:11)", fake2))
 
 
 # ---------------------------------------------------------------- full web-app run (simulated AI)
