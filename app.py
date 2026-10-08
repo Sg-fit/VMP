@@ -171,9 +171,17 @@ threading.Thread(target=worker, daemon=True).start()
 
 # ---------------------------------------------------------------- auth
 
+@app.get("/health")
+def health():
+    """For deploy checks and monitoring: no password needed, reveals nothing private."""
+    alive = bool(runner.proc and runner.proc.poll() is None)
+    return jsonify(status="ok", version=ma.CODE_VERSION, worker_running=alive, ai_configured=bool(LLM),
+                   jobs_waiting=job_queue.qsize())
+
+
 @app.before_request
 def require_password():
-    if not APP_PASSWORD:
+    if not APP_PASSWORD or request.path == "/health":
         return None
     auth = request.authorization
     if not auth or not hmac.compare_digest((auth.password or "").encode(), APP_PASSWORD.encode()):
@@ -184,7 +192,7 @@ def require_password():
 # ---------------------------------------------------------------- pages
 
 def form_page(error=None, code=200):
-    return render_template("index.html", error=error, ai_label=LLM_LABEL, max_files=MAX_FILES,
+    return render_template("index.html", error=error, ai_label=LLM_LABEL, max_files=MAX_FILES, version=ma.CODE_VERSION,
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS), code
 
 
@@ -242,7 +250,8 @@ def job(job_id):
                       f'⬇ {m.group(1)}</a>', report_html)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
-    return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files)
+    return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
+                           version=ma.CODE_VERSION)
 
 
 @app.get("/jobs/<job_id>/status")

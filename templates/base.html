@@ -47,6 +47,7 @@
 <main>
   <header class="top"><a href="{{ url_for('index') }}">🎵 Music Inspiration Analyzer</a></header>
   {% block content %}{% endblock %}
+  <p style="color:var(--muted);font-size:.78rem;margin-top:40px">Music Inspiration Analyzer{% if version %} · version {{ version }}{% endif %}</p>
 </main>
 </body>
 </html>

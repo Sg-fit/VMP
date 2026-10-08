@@ -327,9 +327,12 @@ def detect_chords(chroma, rms_db, bounds, btimes):
             if cols:
                 v = sync[:, cols].mean(axis=1)
                 third = max(v[(root + 3) % 12], v[(root + 4) % 12])
-                # Measured on chords with known content: real thirds sit at >= 0.27 of the root/fifth,
-                # chords without an audible third at <= 0.19.
-                if third < 0.22 * max(v[root], v[(root + 7) % 12]):
+                # Compare the third with the background level of notes that aren't in the chord (not with
+                # the root, which a bass doubling makes very loud). Measured on chords with known
+                # content: real thirds are >= 5x the background, missing ones <= 1.5x.
+                chordish = {root, (root + 3) % 12, (root + 4) % 12, (root + 7) % 12, (root + 10) % 12, (root + 11) % 12}
+                floor = float(np.median([v[i] for i in range(12) if i not in chordish])) + 1e-9
+                if third < 3 * floor:
                     q = "5"
         chords.append({"start": round(float(s), 2), "end": round(float(e), 2),
                        "beats": max(1, int(round((e - s) / beat_len))), "root": root, "q": q})
@@ -735,7 +738,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-08b"
+ANALYSIS_VERSION = "2026-10-09a"
 
 
 def _cache_key(path):

@@ -99,6 +99,28 @@ Keep `MAX_UPLOAD_MB` under 100, because Cloudflare's free plan rejects larger up
 - Results (report, JSON, MIDI) are kept for `JOB_TTL_HOURS`, under an unguessable link.
 - Anyone who has a results link can open it, so set `APP_PASSWORD` if that matters.
 
+## Updating the server and checking it works
+
+After you push changes, run this on the server:
+
+```bash
+cd ~/VMP && bash deploy.sh
+```
+
+It pulls the latest code, rebuilds, waits until the app is healthy, then runs a **self-test inside the server**. The self-test analyzes music with known answers (a 4/4 pop song, a 3/4 waltz, power chords, a key change, a phone-style `.m4a` clip, and a corrupt file) and sends one real request to your AI model. It ends with `RESULT: PASS` or `RESULT: FAIL` plus the reasons, so you don't need to download results to find out whether an update works.
+
+- At any time, `https://your-site/health` shows the running version, whether the analysis worker is up, and whether AI is configured. No password is needed, and it shows nothing private.
+- Every page footer and every report shows the analyzer version.
+
+### Before shipping changes (developers)
+
+```bash
+python selftest.py --full                      # adds logic checks and a complete web-app run with a simulated AI
+python selftest.py --facts my_facts.json       # plus facts you've confirmed about your own recordings
+```
+
+`my_facts.json` holds facts a musician has confirmed, from a score or by ear (tempo, meter, key, chords in order, bass presence, claims that must not be made). Each one becomes a permanent check, so a later change can't silently undo it. The file is git-ignored because it points to private recordings.
+
 ## Command line
 
 ```bash

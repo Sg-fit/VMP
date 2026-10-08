@@ -30,3 +30,6 @@ music_results.json
 
 # Presentations made from your results (personal, not part of the app)
 presentation/
+
+# Your confirmed facts about your own recordings (private file paths)
+my_facts.json
