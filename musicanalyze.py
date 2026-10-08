@@ -1264,6 +1264,10 @@ Below is an automatic analysis of the track. Reply with ONLY this JSON (no other
  "references": [{{"artist": "<artist>", "track": "<recording>", "shared": "<the one specific element it shares>"}}]}}
 
 Rules: exactly 5 ideas, different from each other and from the "already suggested" list; no generic advice.
+At most one rhythm idea and one sound/production idea; favour harmony, melody, arrangement and structure.
+Only cite times that appear in the analysis (chord timeline, section starts, key moments) - never invent one.
+When explaining a chord, be musically exact (e.g. a dominant 7th leads to the chord a fifth below it).
+Titles: evocative but specific to this track; avoid stock words like "Midnight", "Echo", "Pulse".
 2 alt_progressions in {key}, 3-6 chords each (names like Bm, F#7, Gmaj7), preferring chords the track doesn't use.
 2 references only if you are certain the recording exists and really shares that element; otherwise [].
 Use only facts given below; the analysis is approximate, so don't build on anything marked uncertain.
@@ -1291,6 +1295,8 @@ def ai_summary(r):
         "Sections: " + "; ".join(f"{x['label']} {fmt_time(x['start'])}-{fmt_time(x['end'])} {x['energy']} energy "
                                  f"[{', '.join(x['main_chords'][:3])}]" for x in r["sections"]) + ".",
         "Most used chords: " + ", ".join(c["chord"] for c in r["chords_used"][:6]) + ".",
+        "Chord timeline: " + ", ".join(f"{c['time']} {c['chord']}" for c in r["chord_timeline"][:28])
+        + (" ..." if len(r["chord_timeline"]) > 28 else "") + ".",
     ]
     if r["loops"]:
         lines.append("Chord loops: " + "; ".join(f"{' - '.join(l['chords'])} ({' - '.join(l['roman'])})"
@@ -1303,6 +1309,9 @@ def ai_summary(r):
     if b.get("present"):
         lines.append(f"Bass: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
                      + ".")
+    moments = _key_moments(r)
+    if moments:
+        lines.append("Key moments: " + "; ".join(f"{t} {what}" for t, what in moments) + ".")
     if s.get("biggest_build"):
         lines.append(f"Energy: biggest build into {s['biggest_build']['time']} (+{s['biggest_build']['db']} dB); "
                      f"quietest around {s['quietest_moment']}.")
@@ -1316,6 +1325,51 @@ def ai_summary(r):
         lines.append("Already compared with: " + "; ".join(known) + ".")
     lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
     return "\n".join(lines)
+
+
+def _key_moments(r):
+    """Times worth citing: section starts, drum fills, the biggest build and the quietest moment."""
+    out = [(fmt_time(x["start"]), f"section {x['label']} starts") for x in r["sections"][1:]]
+    out += [(fmt_time(t), "drum fill") for t in (r.get("drums") or {}).get("fills", [])]
+    snd = r["sound"]
+    if snd.get("biggest_build"):
+        out.append((snd["biggest_build"]["time"], "biggest build"))
+    if snd.get("quietest_moment"):
+        out.append((snd["quietest_moment"], "quietest moment"))
+    return sorted(out, key=lambda x: _to_sec(x[0]))
+
+
+def _to_sec(ts):
+    m, s = ts.split(":")
+    return int(m) * 60 + int(s)
+
+
+def _check_times(text, r, tolerance=3):
+    """Flag an idea whose cited time doesn't fit the analysis: nothing happens then, or the time is
+    named as part of a section (e.g. "1:45, just before section C") that is nowhere near it."""
+    times = re.findall(r"\b(\d{1,2}:\d{2})\b", text)
+    if not times:
+        return text
+    known = [_to_sec(c["time"]) for c in r["chord_timeline"]] + [_to_sec(t) for t, _ in _key_moments(r)]
+    known += [x["start"] for x in r["sections"]] + [x["end"] for x in r["sections"]]
+    problems = [f"nothing in the analysis happens at {t}" for t in times
+                if not any(abs(_to_sec(t) - k) <= tolerance for k in known)]
+    labels = {a or b for a, b in re.findall(r"\bsection ([A-J])\b|\b([A-J]) section\b", text)}
+    for lab in labels:
+        spans = [(x["start"], x["end"]) for x in r["sections"] if x["label"] == lab]
+        if spans and not any(s0 - 5 <= _to_sec(t) <= e0 + 5 for t in times for s0, e0 in spans):
+            where = ", ".join(f"{fmt_time(s0)}-{fmt_time(e0)}" for s0, e0 in spans)
+            problems.append(f"section {lab} is at {where}")
+    # "<chord> at m:ss": is that chord (same root) really playing around then?
+    for name, t in re.findall(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text):
+        want = parse_chord(name)
+        if not want:
+            continue
+        near = [c for c in r["chord_timeline"] if abs(_to_sec(c["time"]) - _to_sec(t)) <= tolerance]
+        if not any((parse_chord(c["chord"]) or (None,))[0] == want[0] for c in near):
+            when = [c["time"] for c in r["chord_timeline"] if (parse_chord(c["chord"]) or (None,))[0] == want[0]][:3]
+            problems.append(f"{name} isn't playing at {t}" + (f" (it's at {', '.join(when)})" if when else ""))
+    return text + (f" (⚠ check this: {'; '.join(problems)})" if problems else "")
 
 
 def make_llm():
@@ -1432,7 +1486,7 @@ def ai_brainstorm(r, llm):
     return {
         "model": info.get("model"),
         "vibe": _clean(obj.get("vibe", "")),
-        "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _clean(i["idea"])}
+        "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _check_times(_clean(i["idea"]), r)}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
         "alt_progressions": [{"name": _clean(p.get("name", "")), "why": _clean(p.get("why", "")),
                               "chords": [_clean(c) for c in p["chords"]]}
@@ -1958,7 +2012,7 @@ def _code_version():
     h = hashlib.sha256()
     for name in ("musicanalyze.py", "instruments.py", "inspiration.py"):
         try:
-            h.update((Path(__file__).with_name(name)).read_bytes())
+            h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
             pass
     return h.hexdigest()[:8]
