@@ -93,7 +93,7 @@ class Runner:
     it is killed and replaced; only that job fails."""
 
     def __init__(self):
-        self.proc, self.lines = None, queue.Queue()
+        self.proc, self.lines, self.last_exit = None, queue.Queue(), None
 
     def ensure_started(self):
         if self.proc and self.proc.poll() is None:
@@ -130,8 +130,11 @@ class Runner:
                         "Try fewer or shorter tracks.")
             if line is None:  # the worker died mid-job
                 code = self.proc.wait()
+                self.last_exit = code
                 if code in (-9, 137):
                     return "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."
+                if code in (-11, 139):
+                    return "The analysis crashed inside an audio/maths library (segmentation fault, exit code -11)."
                 return f"The analysis process stopped unexpectedly (exit code {code})."
             if line == f"@@done {job_dir}":
                 return None
@@ -151,6 +154,19 @@ def worker():
         try:
             write_status(d, state="running", message="Starting…")
             problem = runner.run(d, JOB_TIMEOUT_MIN * 60)
+            crashed = problem and runner.last_exit not in (None, -9, 137) and "longer than" not in problem
+            if crashed and read_status(d).get("state") != "done":
+                # A native crash can be a one-off: retry once in a fresh worker before giving up.
+                where = read_status(d).get("message", "")
+                app.logger.error("job %s crashed (%s) while: %s - retrying once", job_id, runner.last_exit, where)
+                write_status(d, state="running", message="Retrying after a worker crash…")
+                runner.last_exit = None
+                problem2 = runner.run(d, JOB_TIMEOUT_MIN * 60)
+                if problem2:
+                    problem = (f"{problem2} It happened twice, while: {where}. "
+                               "Please send the server log (docker compose logs --tail 150) so it can be fixed.")
+                else:
+                    problem = None
             if problem:
                 app.logger.error("job %s failed: %s", job_id, problem)
                 if read_status(d).get("state") == "done":  # analysis already shown; only the AI part was lost

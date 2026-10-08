@@ -44,6 +44,11 @@ def run_job(job_dir):
     import musicanalyze as ma
 
     d = Path(job_dir)
+    flag = os.environ.get("MUSIC_SELFTEST_CRASH_ONCE")  # self-test only: crash the worker once, for real
+    if flag and not Path(flag).exists():
+        Path(flag).write_text("crashed")
+        import ctypes
+        ctypes.string_at(0)  # invalid memory read -> the same kind of crash as a library segfault
     try:
         files = sorted((d / "input").iterdir())
         llm = ma.make_llm()[0] if read_status(d).get("use_ai") else None
@@ -84,6 +89,10 @@ def warm_up():
 
 
 def serve():
+    import faulthandler
+    # If a compiled library crashes the process (segfault), print where every thread was, so the
+    # cause shows up in `docker compose logs` instead of only an exit code.
+    faulthandler.enable(file=sys.stderr, all_threads=True)
     # stdout carries the protocol; send everything else libraries might print to stderr.
     proto = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1)
     sys.stdout = sys.stderr
@@ -97,6 +106,7 @@ def serve():
     for line in sys.stdin:
         job = line.strip()
         if job:
+            print(f"[worker] starting job {Path(job).name}", file=sys.stderr, flush=True)
             run_job(job)
             proto.write(DONE_PREFIX + job + "\n")
 

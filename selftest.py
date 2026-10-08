@@ -343,7 +343,7 @@ def web_checks(tmp, files):
     fake = fake_ai_server(ai_port)
     env = {**os.environ, "PORT": str(port), "DATA_DIR": str(Path(tmp) / "jobs"), "APP_PASSWORD": "selftest",
            "NVIDIA_API_KEY": "nvapi-selftest", "MUSIC_LLM_BASE_URL": f"http://127.0.0.1:{ai_port}/v1",
-           "MUSIC_SEPARATION": "simple"}
+           "MUSIC_SEPARATION": "simple", "MUSIC_SELFTEST_CRASH_ONCE": str(Path(tmp) / "crash-flag")}
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MUSIC_MODEL", "MUSIC_FALLBACK_MODELS"):
         env.pop(k, None)
     proc = subprocess.Popen([sys.executable, str(HERE / "app.py")], env=env, cwd=HERE,
@@ -377,6 +377,8 @@ def web_checks(tmp, files):
 
         job, s, first, total = run_job([files["pop4"], files["corrupt"]], "pop: G A B D")
         check("web", "upload → analysis → AI ideas completes", s["state"] == "done", f"{s['state']} after {total:.0f}s")
+        check("web", "a worker crash (segfault-style) is retried automatically",
+              (Path(tmp) / "crash-flag").exists() and s["state"] == "done", "the first job crashed once and still finished")
         check("web", "results shown before the AI finished", first is not None and first < total,
               f"results {first:.0f}s, AI {total:.0f}s" if first else "")
         page = requests.get(f"{base}/jobs/{job}", auth=auth, timeout=10).text
@@ -410,7 +412,7 @@ def web_checks(tmp, files):
             if s3["state"] in ("error", "done"):
                 break
             time.sleep(1)
-        check("web", "a crashed job fails with a clear message", s3["state"] == "error" and s3["message"], s3.get("message", ""))
+        check("web", "a killed worker is replaced and the job finishes", s3["state"] == "done", s3.get("message", ""))
         job4, s4, _, _ = run_job([files["short_m4a"]])
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
     finally:
