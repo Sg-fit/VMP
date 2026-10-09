@@ -93,6 +93,9 @@ def serve():
     # If a compiled library crashes the process (segfault), print where every thread was, so the
     # cause shows up in `docker compose logs` instead of only an exit code.
     faulthandler.enable(file=sys.stderr, all_threads=True)
+    if hasattr(os, "nice"):
+        os.nice(10)  # low priority, so the web server and other sites stay responsive
+    print(f"[worker] started (pid {os.getpid()})", file=sys.stderr, flush=True)
     # stdout carries the protocol; send everything else libraries might print to stderr.
     proto = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1)
     sys.stdout = sys.stderr

@@ -460,6 +460,63 @@ def facts_checks(facts_file, tmp):
                   "; ".join(p["progression"] for p in r["references"]["progressions"]))
 
 
+# ---------------------------------------------------------------- live check against the running server
+
+def live_checks(base, tmp):
+    """Upload a real test track through the RUNNING website and wait for the result. This exercises
+    the real worker process on the server (e.g. how it is started under gunicorn on Linux)."""
+    import base64
+    import urllib.error
+    import urllib.request
+    import uuid
+    print(f"\n== Live upload through the running app ({base}) ==")
+    pw = os.environ.get("APP_PASSWORD", "")
+    headers = {"Authorization": "Basic " + base64.b64encode(f"selftest:{pw}".encode()).decode()} if pw else {}
+
+    def get(path):
+        req = urllib.request.Request(base + path, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read().decode("utf-8", "replace")
+    try:
+        h = json.loads(get("/health"))
+    except Exception as e:
+        check("live", "app answers on /health", False, str(e))
+        return
+    check("live", "app answers on /health", h.get("status") == "ok", json.dumps(h))
+    track = write(Path(tmp) / "live_test_waltz.wav",
+                  song([("A", ""), ("E", "7"), ("A", ""), ("D", "")], 120, 3, loops=3, drums=False, waltz=True, soft=True))
+    boundary = uuid.uuid4().hex
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"tracks\"; filename=\"{track.name}\"\r\n"
+            f"Content-Type: audio/wav\r\n\r\n").encode() + track.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    req = urllib.request.Request(base + "/analyze", data=body, method="POST",
+                                 headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        urllib.request.build_opener(NoRedirect).open(req, timeout=60)
+        check("live", "upload accepted", False, "no redirect to a job page")
+        return
+    except urllib.error.HTTPError as e:
+        if e.code != 302:
+            check("live", "upload accepted", False, f"HTTP {e.code}")
+            return
+        job = e.headers["Location"].rsplit("/", 1)[-1]
+    check("live", "upload accepted", True, f"job {job[:8]}")
+    t0, s = time.time(), {}
+    while time.time() - t0 < 400:
+        s = json.loads(get(f"/jobs/{job}/status"))
+        if s["state"] == "error" or (s["state"] == "done" and not s.get("ai_pending")):
+            break
+        time.sleep(2)
+    ok = check("live", "the worker analyses it (no crash)", s.get("state") == "done",
+               f"{s.get('state')}: {s.get('message', '')} after {time.time() - t0:.0f}s")
+    if ok:
+        page = get(f"/jobs/{job}")
+        check("live", "results page shows the analysis", "Harmony" in page and "3/4" in page)
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -467,6 +524,7 @@ def main():
     ap.add_argument("--full", action="store_true", help="also run logic checks and a full web-app run")
     ap.add_argument("--no-ai", action="store_true", help="skip the real AI check")
     ap.add_argument("--facts", help="JSON file of facts you've confirmed about your own recordings")
+    ap.add_argument("--live", metavar="URL", help="also upload a test track through the running app at URL")
     args = ap.parse_args()
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -487,6 +545,11 @@ def main():
                 ai_checks(res)
             except Exception:
                 check("ai", "AI check ran", False, traceback.format_exc(limit=2))
+        if args.live:
+            try:
+                live_checks(args.live.rstrip("/"), tmp)
+            except Exception:
+                check("live", "live check ran", False, traceback.format_exc(limit=2))
         if args.facts:
             try:
                 facts_checks(args.facts, tmp)

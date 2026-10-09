@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Update the server in one go: pull the latest code, rebuild, wait until the app is healthy, then run
-# the self-test inside the container (music with known answers + a real request to your AI model).
+# the self-test inside the container: music with known answers, a real request to your AI model, and a
+# real upload through the running website (so a broken analysis worker shows up here, not on your upload).
 #
 #   cd ~/VMP && bash deploy.sh
 #
@@ -30,4 +31,4 @@ fi
 echo
 
 echo "==> Self-test (about 2-4 minutes)"
-docker compose exec -T music-analyzer python selftest.py
+docker compose exec -T music-analyzer python selftest.py --live http://127.0.0.1:8000

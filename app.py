@@ -103,9 +103,10 @@ class Runner:
         # server) responsive while a job runs.
         env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
                "NUMBA_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"}
+        # No preexec_fn: running Python code between fork and exec is unsafe in a multi-threaded server
+        # (gunicorn threads) and crashed the worker with SIGSEGV. The worker lowers its own priority.
         self.proc = subprocess.Popen([sys.executable, str(runner), "--serve"], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, text=True, env=env,
-                                     preexec_fn=(lambda: os.nice(10)) if hasattr(os, "nice") else None)
+                                     stdout=subprocess.PIPE, text=True, env=env)
         self.lines = queue.Queue()
         proc, lines = self.proc, self.lines
         threading.Thread(target=lambda: [lines.put(l.strip()) for l in proc.stdout] + [lines.put(None)],
