@@ -235,8 +235,53 @@ def _transcribe_bass(yb, low_sr, times, midi, hop=32):
         peak = float(rdb[seg].max()) if seg.any() else -60.0
         fade = rt[seg][rdb[seg] < peak - 18] if seg.any() else np.array([])
         fade = fade[fade > a + 0.05]
-        notes.append((float(a), float(fade[0]) if len(fade) else float(b), int(np.rint(np.median(vals))), peak))
-    return notes
+        n = int(np.rint(np.median(vals)))
+        end = float(fade[0]) if len(fade) else float(b)
+        if notes and notes[-1][2] == n and notes[-1][1] >= a - 0.01 and not _replucked(yb, low_sr, a, n):
+            # Same note still ringing and no new attack at its pitch: a drum hit leaked in, not a new note.
+            notes[-1] = (notes[-1][0], end, n, max(notes[-1][3], peak))
+            continue
+        notes.append((float(a), end, n, peak))
+    return _fix_octaves(notes)
+
+
+def _fix_octaves(notes, width=4):
+    """Pitch trackers sometimes jump an octave (locking onto a harmonic, or below a weak fundamental).
+    A note 10+ semitones away from the middle of its neighbours is moved by an octave toward them."""
+    pitches = [n for _, _, n, _ in notes]
+    out = []
+    for i, (a, e, n, db) in enumerate(notes):
+        near = pitches[max(0, i - width):i] + pitches[i + 1:i + 1 + width]
+        if len(near) >= 3:
+            med = float(np.median(near))
+            while n - med >= 10:
+                n -= 12
+            while med - n >= 10:
+                n += 12
+        out.append((a, e, n, db))
+    return out
+
+
+def _replucked(yb, low_sr, t, note):
+    """Did the bass re-attack this note at time t? Looks for a jump in energy at the note's own pitch
+    (fundamental + 2nd harmonic, which phones keep when they lose the fundamental). A drum hit adds
+    broadband noise, which barely moves these narrow bands."""
+    import librosa
+    import scipy.signal as ss
+    lo, hi = int(max(0, t - 0.2) * low_sr), int(min(len(yb) / low_sr, t + 0.2) * low_sr)
+    x, at = yb[lo:hi], int(t * low_sr) - lo
+    if len(x) < 400 or at < 0.08 * low_sr:
+        return True
+    f0 = float(librosa.midi_to_hz(note))
+    level = np.zeros(len(x))
+    for f in (f0, 2 * f0):
+        if f * 1.07 < low_sr / 2:
+            level += ss.sosfiltfilt(ss.butter(2, [f / 1.07, f * 1.07], btype="band", fs=low_sr, output="sos"), x) ** 2
+    w = int(0.03 * low_sr)
+    before = level[max(0, at - int(0.07 * low_sr)):at - int(0.01 * low_sr)].mean()
+    after = max(level[i:i + w].mean() for i in range(at, min(len(x) - w, at + int(0.08 * low_sr)), w // 3 or 1)) \
+        if len(x) - w > at else before
+    return 10 * np.log10((after + 1e-12) / (before + 1e-12)) >= 3
 
 
 # ---------------------------------------------------------------- top line (best-effort melody)

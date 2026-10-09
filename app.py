@@ -261,10 +261,11 @@ def job(job_id):
     if s.get("state") == "done":
         report_md = (d / "output" / "music_report.md").read_text(encoding="utf-8")
         report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
-        report_html = re.sub(  # turn `midi/x.mid` mentions into download links
-            r"<code>midi/([\w.\-]+\.mid)</code>",
-            lambda m: f'<a class="midi" href="{url_for("job_file", job_id=job_id, name="midi/" + m.group(1))}">'
-                      f'⬇ {m.group(1)}</a>', report_html)
+        report_html = re.sub(  # turn `midi/x.mid` and `sheets/x.html` mentions into links
+            r"<code>((?:midi|sheets)/[\w.\-]+\.(?:mid|musicxml|html))</code>",
+            lambda m: f'<a class="midi" href="{url_for("job_file", job_id=job_id, name=m.group(1))}"'
+                      + (' target="_blank">🎼 ' if m.group(1).endswith(".html") else '>⬇ ')
+                      + f'{m.group(1).split("/", 1)[1]}</a>', report_html)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
@@ -279,7 +280,8 @@ def job_status(job_id):
 
 @app.get("/jobs/<job_id>/files/<path:name>")
 def job_file(job_id, name):
-    return send_from_directory(get_job_dir(job_id) / "output", name, as_attachment=name.endswith(".mid"))
+    return send_from_directory(get_job_dir(job_id) / "output", name,
+                               as_attachment=name.endswith((".mid", ".musicxml")))
 
 
 @app.get("/jobs/<job_id>/download.zip")

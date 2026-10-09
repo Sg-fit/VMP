@@ -6,13 +6,15 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 |---|---|
 | **Harmony** | Key and [Camelot](https://mixedinkey.com/camelot-wheel/) code, key timeline, time spent in each key, **mode** (Dorian, harmonic minor, Mixolydian…) with its signature "colour note", the notes used most, the chords used most, harmonic rhythm, **repeating chord loops** with Roman numerals (for example `Bm – Em – F#` = i – iv – V), and the full chord timeline |
 | **Structure** | Sections (A, B, A…) with times, energy level, key and main chords |
-| **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline |
+| **⚡ Energy & mood** | Measured on the audio, per section: energy 1–10 (loudness, notes per second, brightness, tempo) and mood/positivity (mode, minor-chord share, brightness, tempo), with words like *calm*, *driving* or *melancholic*, plus the track's energy shape (builds, peaks, winds down) |
+| **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline. The bass is transcribed note by note and written out as **sheet music** (bars of the detected meter, chord symbols above); its rhythm analysis (note lengths, off-beat and syncopated share, the most common bar rhythm) is read from that sheet |
 | **Groove & sound** | Pulse steadiness, how busy the rhythm is, syncopation, percussive vs. tonal balance, tone and texture, loudness, energy arc, biggest build, quietest moment, frequency balance from sub to air |
 | **🎶 Melody** | Type the melody or riff you hear (e.g. `A E F E A E D E`) to get its scale degrees, which modes it fits, its shape, melodic devices, chords that harmonize each note, and generated variations (inversion, retrograde, sequence, answer phrase) as MIDI files. Each note is also **checked against the recording**: it flags notes that barely sound, and says whether the audio supports the order. There's also an automatic "top line" that says honestly when it's only following the chords |
 | **🎧 Shared DNA** | Building blocks the track shares with well-known recordings: chord loops matched against famous progressions (for example i–IV = Santana's “Oye Como Va”), the mode, the drum groove, and melodic devices. The AI adds more reference tracks, labeled as suggestions to double-check |
 | **💡 Ideas to try** | Rule-based suggestions that need no AI: how to use the mode's colour note, chords to borrow from the parallel key, smooth and dramatic key-change targets, half-time or double-time variants, breakdowns and builds, groove contrasts, gaps in the mix |
 | **🤖 AI brainstorm** (optional) | A description of the feel, 6–8 specific ideas tied to times and chords, 2–3 alternative chord progressions, and title ideas |
-| **🎹 MIDI sketches** | `.mid` files of each detected chord loop, a variation of each loop, and the AI's progressions. Drag them into any DAW. |
+| **🎼 Sheet music** | The bass part as MusicXML (opens in MuseScore, Sibelius, Dorico and most DAWs) and as an engraved page to view or print to PDF |
+| **🎹 MIDI sketches** | `.mid` files of the bass (as played, and as written on the sheet), each detected chord loop, a variation of each loop, and the AI's progressions. Drag them into any DAW. |
 | **🔗 Tracks that blend well** | With several files: which tracks are key-compatible (on the Camelot wheel) and close in tempo, for medleys, mashups or set lists |
 
 It comes as a **web app** (upload tracks in the browser) and a **command-line tool**. Only the analysis numbers are sent to the AI, never the audio.
@@ -131,7 +133,7 @@ python musicanalyze.py ./music_folder --melody "copy 4: A E F E A E D E"   # one
 ```
 
 - Accepts `.mp3 .m4a .wav .ogg .flac .aac`, as single files or whole folders.
-- Writes `music_report.md`, `music_results.json` and `midi/*.mid` to `--out`.
+- Writes `music_report.md`, `music_results.json`, `midi/*.mid` and `sheets/*` (MusicXML + engraved HTML) to `--out`.
 - The AI brainstorm runs when an API key is set. On Windows PowerShell, set it with `$env:NVIDIA_API_KEY="nvapi-..."`, not `export`. Use `--no-llm` to skip it.
 - Speed: about 20 s per minute of audio on CPU. Re-running the same recording (to add a melody or retry the AI) takes about 1 s, because the analysis is cached by file content. Use `--no-cache` to force a fresh analysis.
 - **Pick the fastest AI model** for your API key (it times each configured model on a real prompt):

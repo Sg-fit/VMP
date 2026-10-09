@@ -25,6 +25,7 @@ import numpy as np
 
 import inspiration
 import instruments
+import notation
 
 AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
 SR = 22050
@@ -353,14 +354,16 @@ def detect_meter(rms_db, chroma, bounds, clear_beat):
     change = np.r_[0, 1 - np.sum(C[:, 1:] * C[:, :-1], axis=0)]  # harmonic change at each beat
     z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
     feat = z(accent) + z(change)
-    score = {m: max(feat[p::m].mean() - np.delete(feat, np.arange(p, len(feat), m)).mean() for p in range(m))
-             for m in (3, 4)}
-    if score[3] > score[4] + 0.3 and score[3] > 0.6:
-        return {"beats_per_bar": 3, "label": "3/4", "confidence": "detected",
-                "scores": {k: round(float(v), 2) for k, v in score.items()}}
-    conf = "detected" if score[4] > score[3] + 0.3 else "assumed"
-    return {"beats_per_bar": 4, "label": "4/4", "confidence": conf,
-            "scores": {k: round(float(v), 2) for k, v in score.items()}}
+    by_phase = {m: [feat[p::m].mean() - np.delete(feat, np.arange(p, len(feat), m)).mean() for p in range(m)]
+                for m in (3, 4)}
+    score = {m: max(v) for m, v in by_phase.items()}
+    m = 3 if score[3] > score[4] + 0.3 and score[3] > 0.6 else 4
+    conf = "detected" if m == 3 or score[4] > score[3] + 0.3 else "assumed"
+    # Beat segment i starts at bounds[i]; the strongest phase marks the first beat of each bar.
+    phase = int(np.argmax(by_phase[m]))
+    return {"beats_per_bar": m, "label": f"{m}/4", "confidence": conf,
+            "scores": {k: round(float(v), 2) for k, v in score.items()},
+            "downbeat_frame": int(bounds[phase + m]) if phase + m < len(bounds) else None}
 
 
 def find_loop(names, key):
@@ -537,6 +540,94 @@ def load_audio(path):
         if not chunks:
             raise ValueError("no audio found in file")
         return np.concatenate(chunks).astype(np.float32), SR
+
+
+def key_fifths(k):
+    """Key signature as MusicXML 'fifths' (+sharps / -flats), spelled the same way as the notes."""
+    steps = [0, 2, 3, 5, 7, 8, 10] if key_is_minor(k) else [0, 2, 4, 5, 7, 9, 11]
+    names = [spell((key_tonic(k) + s) % 12, k) for s in steps]
+    return sum(n.count("#") for n in names) - sum(n.count("b") for n in names)
+
+
+def bass_sheet(r, chords):
+    """The bass transcription written out on the beat grid (bars of the detected meter), with the
+    chord symbols above it. None without a clear beat or a bass line."""
+    if not r.get("beat_times") or not r.get("bass_transcription"):
+        return None
+    notes = [(n["start"], n["end"], n["midi"], n["velocity"]) for n in r["bass_transcription"]]
+    return notation.quantize(notes, chords, r["beat_times"], r["meter"]["beats_per_bar"], r["downbeat_sec"],
+                             r["duration_sec"])
+
+
+# How positive each mode tends to sound (0 = dark, 1 = bright), for the feel estimate.
+MODE_BRIGHTNESS = {"Lydian": 0.8, "Ionian (major)": 0.75, "Mixolydian": 0.65, "Dorian": 0.45,
+                   "Phrygian dominant": 0.3, "Aeolian (natural minor)": 0.3, "Harmonic minor": 0.25, "Phrygian": 0.2}
+
+
+def mood_words(arousal, valence):
+    if arousal >= 60:
+        return "uplifting, energetic" if valence >= 55 else "driving, intense" if valence >= 40 else "dark, dramatic"
+    if arousal >= 40:
+        return "warm, upbeat" if valence >= 55 else "steady, bittersweet" if valence >= 40 else "brooding, tense"
+    return "calm, peaceful" if valence >= 55 else "reflective, wistful" if valence >= 40 else "sad, melancholic"
+
+
+def feel_analysis(y, sr, rms_db, sections, chords, r):
+    """Energy (arousal) and mood (valence) per section, measured on the audio itself.
+    Energy: loudness, how many notes/hits per second, brightness and tempo.
+    Mood: the mode, the share of minor chords, brightness and tempo.
+    A rule-of-thumb model from music-emotion research, not a trained classifier."""
+    import librosa
+    clip = lambda x, lo, hi: float(np.clip((x - lo) / (hi - lo), 0, 1))
+    onsets = librosa.onset.onset_detect(y=y, sr=sr, hop_length=HOP, units="time")
+    centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=HOP)[0]
+    tempo = r["tempo_bpm"] or 70  # no clear beat reads as slow
+    tempo_n = clip(tempo, 60, 160)
+    loudest = max((s["energy_db"] for s in sections), default=0.0)
+    fps = sr / HOP
+    out = []
+    for s in sections:
+        a, b = int(s["start"] * fps), max(int(s["end"] * fps), int(s["start"] * fps) + 1)
+        length = max(0.1, s["end"] - s["start"])
+        rate = float(np.sum((onsets >= s["start"]) & (onsets < s["end"]))) / length
+        bright = float(np.mean(centroid[a:b])) if a < len(centroid) else float(np.mean(centroid))
+        loud_rel = s["energy_db"] - loudest
+        chord_t = [(c["end"] - c["start"], c["q"].startswith("m") and not c["q"].startswith("maj"))
+                   for c in chords if s["start"] <= (c["start"] + c["end"]) / 2 < s["end"]]
+        total = sum(t for t, _ in chord_t)
+        minor = sum(t for t, m in chord_t if m) / total if total else 0.5
+        if s["key"] == r["key"]:
+            base = MODE_BRIGHTNESS.get(r["mode"], 0.5)
+        else:
+            base = 0.3 if "minor" in s["key"] else 0.7
+        arousal = 100 * (0.25 * clip(loud_rel, -15, 0) + 0.1 * clip(s["energy_db"], -35, -12) +
+                         0.25 * clip(rate, 0.5, 5) + 0.2 * clip(bright, 800, 3500) + 0.2 * tempo_n)
+        valence = 100 * (0.4 * base + 0.3 * (1 - minor) + 0.15 * clip(bright, 800, 3500) + 0.15 * tempo_n)
+        out.append({"label": s["label"], "start": s["start"], "end": s["end"],
+                    "energy": int(np.clip(round(arousal / 10), 1, 10)), "arousal": round(arousal),
+                    "valence": round(valence), "mood": mood_words(arousal, valence),
+                    "loudness_vs_peak_db": round(loud_rel, 1), "notes_per_sec": round(rate, 1),
+                    "brightness_hz": round(bright), "minor_chords_pct": round(100 * minor)})
+    if not out:
+        return {}
+    w = np.array([s["end"] - s["start"] for s in out])
+    A = float(np.average([s["arousal"] for s in out], weights=w))
+    V = float(np.average([s["valence"] for s in out], weights=w))
+    e = [s["arousal"] for s in out]
+    peak = out[int(np.argmax(e))]
+    if len(e) < 2 or max(e) - min(e) < 10:
+        arc = "stays at about the same energy throughout"
+    elif e[-1] - e[0] >= 10 and peak is out[-1]:
+        arc = "builds up to the end"
+    elif e[0] - e[-1] >= 10 and peak is out[0]:
+        arc = "starts strongest and winds down"
+    elif peak is not out[0] and peak is not out[-1]:
+        arc = "rises to a peak in the middle, then comes down"
+    else:
+        arc = "goes up and down between sections"
+    return {"arousal": round(A), "valence": round(V), "energy": int(np.clip(round(A / 10), 1, 10)),
+            "mood": mood_words(A, V), "arc": arc, "contrast": round(max(e) - min(e)),
+            "peak": {"label": peak["label"], "start": peak["start"], "end": peak["end"]}, "sections": out}
 
 
 def _analyze_audio(path):
@@ -716,7 +807,8 @@ def _analyze_audio(path):
         "chords_used": [{"chord": name, "seconds": round(t, 1)} for name, t in chord_time.most_common(8)],
         "harmonic_rhythm_beats": round(float(np.mean([c["beats"] for c in chords])), 1) if chords and clear_beat else None,
         "harmonic_rhythm_sec": round(float(np.mean([c["end"] - c["start"] for c in chords])), 1) if chords else None,
-        "chord_timeline": [{"time": fmt_time(c["start"]), "chord": c["name"], "roman": c["roman"],
+        "chord_timeline": [{"time": fmt_time(c["start"]), "start": round(float(c["start"]), 2),
+                            "chord": c["name"], "roman": c["roman"],
                             "with_bass": c.get("slash", c["name"]), "beats": c["beats"]} for c in chords],
         "loops": loops,
         "sections": sections,
@@ -735,6 +827,12 @@ def _analyze_audio(path):
     result["bass_transcription"] = [  # note-by-note, for the bass MIDI file
         {"start": round(a, 3), "end": round(e, 3), "midi": n, "velocity": int(np.clip(110 + 2.5 * (db - loudest), 35, 120))}
         for a, e, n, db in bass_line]
+    if clear_beat:
+        result["beat_times"] = [round(float(t), 3) for t in beat_times]
+        down = meter.get("downbeat_frame")
+        result["downbeat_sec"] = round(float(librosa.frames_to_time(down, sr=sr, hop_length=HOP)), 3) \
+            if down is not None else result["beat_times"][0]
+    result["feel"] = feel_analysis(y, sr, rms_db, sections, chords, result)
 
     # --- best-effort top line (the musician's typed melody is added later, in analyze())
     top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
@@ -743,7 +841,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-10a"
+ANALYSIS_VERSION = "2026-10-11b"
 
 
 def _cache_key(path):
@@ -782,6 +880,10 @@ def analyze(path, melody_text=None, cache_dir=None):
                 pass  # caching is an optimisation only
 
     main_key = result["key_index"]
+    # Sheet music and its rhythm are cheap, so they're made after the cache: improving them needs no
+    # re-analysis of the audio.
+    result["bass_sheet"] = bass_sheet(result, [(c["start"], c["chord"]) for c in result["chord_timeline"]])
+    result["bass_rhythm"] = notation.rhythm_from_score(result["bass_sheet"]) if result.get("bass_sheet") else {}
     if melody_text:
         result["melody"] = inspiration.analyse_melody(melody_text, key_tonic(main_key), result["mode"], MODES,
                                                       lambda pc: spell(pc, main_key))
@@ -1247,6 +1349,31 @@ def write_melody_midi(path, notes, bpm=90, cents=0, beats_per_note=1, repeats=2)
                            b"MTrk" + struct.pack(">I", len(data)) + data)
 
 
+def export_sheets(r, out_dir):
+    """Bass sheet music: MusicXML (opens in MuseScore, Sibelius, Dorico, most DAWs) and, when Verovio is
+    installed, an engraved page to view or print to PDF."""
+    sheet = r.get("bass_sheet")
+    if not sheet or not sheet["notes"]:
+        return []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
+    k = r["key_index"]
+    xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — bass", "Bass", key_fifths(k), r["tempo_bpm"],
+                               lambda pc: spell(pc, k), parse_chord)
+    files = [{"file": f"{stem}_bass.musicxml", "label": "bass sheet music (MusicXML: open in MuseScore, Sibelius, "
+                                                         "Dorico or a DAW to edit and play)"}]
+    (out_dir / files[0]["file"]).write_text(xml, encoding="utf-8")
+    pages = notation.render_svg(xml)
+    if pages:
+        note = (f" · {r['key']} · {r['meter']['label']} · {r['tempo_bpm']:.0f} BPM · bar 1 starts at "
+                f"{fmt_time(max(0, sheet['bar1_time']))} in the recording · automatic transcription: check it by ear")
+        (out_dir / f"{stem}_bass.html").write_text(
+            notation.sheet_html(f"{Path(r['file']).stem} — bass", pages, html.escape(note)), encoding="utf-8")
+        files.append({"file": f"{stem}_bass.html", "label": f"bass sheet music, engraved ({len(pages)} page(s); "
+                                                            "open in a browser, print to PDF)"})
+    return files
+
+
 def export_midis(r, out_dir):
     """Write MIDI for each detected loop, a relative-substitution variation, and AI progressions."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1261,6 +1388,16 @@ def export_midis(r, out_dir):
         write_notes_midi(out_dir / fname, [(n["start"], n["end"], n["midi"], n["velocity"]) for n in line],
                          bpm, cents=cents, beats_per_bar=bar)
         files.append({"file": fname, "label": f"bass, note by note ({len(line)} notes at their real times)",
+                      "chords": []})
+    sheet = r.get("bass_sheet")
+    if sheet and sheet["notes"]:
+        # The same notes as written on the sheet: on the grid, steady tempo, bar 1 at the start.
+        sec = lambda slot: slot / notation.SLOTS_PER_BEAT * 60 / bpm
+        fname = f"{stem}_bass_from_sheet.mid"
+        write_notes_midi(out_dir / fname, [(sec(s), sec(s + n), m, v) for s, n, m, v in sheet["notes"]],
+                         bpm, cents=cents, beats_per_bar=bar)
+        files.append({"file": fname, "label": f"bass, from the sheet music (on the beat grid, {sheet['bars']} bars, "
+                                              f"bar 1 = {fmt_time(max(0, sheet['bar1_time']))} in the recording)",
                       "chords": []})
 
     def save(label, names):
@@ -1349,8 +1486,14 @@ def ai_summary(r):
                      + (f"; fills at {', '.join(fmt_time(t) for t in d['fills'])}" if d.get("fills") else "; no fills")
                      + ".")
     if b.get("present"):
+        brh = r.get("bass_rhythm") or {}
         lines.append(f"Bass: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
-                     + ".")
+                     + (f"; usual note positions in the bar {brh.get('usual_positions')} (16ths; X = most bars, "
+                        f"x = some), {brh['syncopated_pct']}% syncopated" if brh else "") + ".")
+    f = r.get("feel") or {}
+    if f:
+        lines.append(f"Feel: energy {f['energy']}/10, {f['mood']}; the track {f['arc']}; per section "
+                     + ", ".join(f"{x['label']} {x['energy']}/10 {x['mood']}" for x in f["sections"]) + ".")
     moments = _key_moments(r)
     if moments:
         lines.append("Key moments: " + "; ".join(f"{t} {what}" for t, what in moments) + ".")
@@ -1748,6 +1891,14 @@ GLOSSARY = {
     "Variations": "Classic ways to develop a motif: inversion flips its intervals upside down, retrograde plays "
                   "it backwards, a sequence repeats it a step higher, an answer phrase resolves to the home note.",
     "dBFS": "Loudness relative to the digital maximum (0 dBFS); more negative = quieter.",
+    "Energy level": "How intense a section feels, 1-10, from its loudness (compared with the loudest section), "
+                    "how many notes/hits per second, how bright the sound is, and the tempo.",
+    "Mood": "Where the music sits between dark/sad and bright/happy (positivity 0-100), from the mode, how much "
+            "of the time minor chords play, brightness and tempo. Combined with energy it gives words like "
+            "'calm', 'driving' or 'melancholic'. A rule of thumb, not a verdict: your playing shapes the feel too.",
+    "Sheet music": "The bass notes found in the recording, placed on the beat grid (16th-note resolution) in bars "
+                   "of the detected meter, with the chords above. Automatic, so check it by ear; swing and "
+                   "triplets get rounded to the nearest 16th.",
     "Dynamic range": "The difference between the loud and quiet parts, in dB. Bigger = more contrast.",
 }
 MODE_INFO = {
@@ -1854,6 +2005,7 @@ def track_report(r):
                  f"{', '.join(sec['main_chords']) or '—'} | {'✓' if sec.get('drums') else '—'} | "
                  f"{'✓' if sec.get('bass') else '—'} |")
     L += ["", f"{tip('Form')}: **{' '.join(sec['label'] for sec in r['sections'])}**"]
+    L += feel_report(r)
     L += instruments_report(r)
     L += melody_report(r)
     L += dna_report(r)
@@ -1902,6 +2054,10 @@ def track_report(r):
             if ai["title_ideas"]:
                 L += ["", "**Title ideas:** " + " · ".join(f"_{t}_" for t in ai["title_ideas"])]
 
+    if r.get("sheets"):
+        L += ["", "### 🎼 Sheet music", ""]
+        for m in r["sheets"]:
+            L.append(f"- `sheets/{m['file']}` — {m['label']}")
     if r.get("midi"):
         L += ["", "### 🎹 MIDI sketches (drag into your DAW)", ""]
         for m in r["midi"]:
@@ -2009,8 +2165,57 @@ def instruments_report(r):
         if b.get("riff"):
             parts.append(f"repeating riff: `{' '.join(b['riff'])}`")
         L += [f"**🎸 Bass** — " + " · ".join(parts), ""]
+        L += bass_rhythm_report(r)
     else:
         L += ["**🎸 Bass** — no clear bass line detected.", ""]
+    return L
+
+
+def bass_rhythm_report(r):
+    """Rhythm of the bass, read from its sheet music."""
+    rh, sheet = r.get("bass_rhythm") or {}, r.get("bass_sheet") or {}
+    if not rh:
+        return []
+    bpb = sheet["beats_per_bar"]
+    counts = " ".join(f"{b + 1} e & a" for b in range(bpb))
+    values = ", ".join(f"{name} {pct}%" for name, pct in rh["note_values"])
+    L = [f"**Bass rhythm** (read from the {tip('sheet music', 'Sheet music')}, {sheet['bars']} bars) — "
+         f"{len(sheet['notes'])} notes, ~{rh['notes_per_bar']} per bar · note lengths: {values} · "
+         f"{rh['offbeat_pct']}% start between beats ({rh['sixteenth_offbeat_pct']}% on a 16th) · "
+         f"{rh['syncopated_pct']}% {tip('syncopated', 'Syncopation')} (held across the beat) · "
+         f"{rh['distinct_bar_rhythms']} different bar rhythms", ""]
+    if rh["main_bar_rhythm_pct"] >= 25:  # a real repeating figure
+        L += [f"Most common bar rhythm (in {rh['main_bar_rhythm_pct']}% of the bars with bass; x = a note starts):", "",
+              "```", "         " + counts, "Bass     " + " ".join(rh["main_bar_rhythm"]), "```", ""]
+    else:  # played freely: show where notes usually land instead
+        L += ["The rhythm changes from bar to bar, so here is where the bass usually plays "
+              "(X = a note starts there in at least half the bars, x = in a quarter to half of them):", "",
+              "```", "         " + counts, "Bass     " + " ".join(rh.get("usual_positions", "")), "```", ""]
+    return L
+
+
+def feel_report(r):
+    f = r.get("feel") or {}
+    if not f:
+        return []
+    L = ["", f"### ⚡ Energy & mood", "",
+         f"_Measured on the audio: {tip('energy', 'Energy level')} from loudness, notes per second, brightness and "
+         f"tempo; {tip('mood', 'Mood')} from the mode, minor-chord share, brightness and tempo._", "",
+         f"- **Overall:** energy **{f['energy']}/10**, mood **{f['mood']}** "
+         f"(positivity {f['valence']}/100) · the track {f['arc']}"
+         + (f" · peak: section **{f['peak']['label']}** ({fmt_time(f['peak']['start'])}–{fmt_time(f['peak']['end'])})"
+            if f["contrast"] >= 10 else "")]
+    if f["contrast"] < 10 and len(f["sections"]) > 1:
+        L.append("- **Contrast:** little difference between sections — a breakdown (drop the drums/bass) or a "
+                 "fuller final section would give the track more shape.")
+    L += ["", "| Section | Time | Energy | Mood | Positivity | Loudness vs peak | Notes/sec | Brightness | Minor chords |",
+          "|---------|------|--------|------|------------|------------------|-----------|------------|--------------|"]
+    for s in f["sections"]:
+        L.append(f"| **{s['label']}** | {fmt_time(s['start'])}–{fmt_time(s['end'])} | "
+                 f"`{'█' * s['energy']}{'░' * (10 - s['energy'])}` {s['energy']} | {s['mood']} | {s['valence']} | "
+                 f"{s['loudness_vs_peak_db']} dB | {s['notes_per_sec']} | {s['brightness_hz']} Hz | "
+                 f"{s['minor_chords_pct']}% |")
+    L.append("")
     return L
 
 
@@ -2080,7 +2285,7 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache
 def _code_version():
     import hashlib
     h = hashlib.sha256()
-    for name in ("musicanalyze.py", "instruments.py", "inspiration.py"):
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py"):
         try:
             h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
@@ -2122,6 +2327,11 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
                 r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir)
                 r["analyzer_version"] = CODE_VERSION
                 r["midi"] = export_midis(r, out / "midi")
+                try:
+                    r["sheets"] = export_sheets(r, out / "sheets")
+                except Exception as e:  # the sheet is a bonus; never lose the analysis over it
+                    progress(f"  ! {f.name}: sheet music skipped ({e})")
+                    r["sheets"] = []
                 if ai_pool:
                     pending.append((r, ai_pool.submit(_timed_brainstorm, r, llm)))  # overlaps the next track
             except Exception as e:  # unreadable / corrupt file — keep going

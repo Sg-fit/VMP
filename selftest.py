@@ -11,6 +11,7 @@ Nothing personal is used: all test audio is synthesised on the fly. Exit code 0 
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -257,6 +258,21 @@ def analysis_checks(tmp):
         check("analysis", "bass transcription: few made-up notes (>= 85% real)", prec >= 0.85, f"{prec:.0%} of {len(found)}")
         check("analysis", "bass transcription: right pitches (>= 90%)", hits and pitch_ok / hits >= 0.9,
               f"{pitch_ok}/{hits}")
+        sheet, rh = r.get("bass_sheet") or {}, r.get("bass_rhythm") or {}
+        check("analysis", "bass sheet: bar 1 starts on the first downbeat", abs(sheet.get("bar1_time", 9)) < 0.15,
+              f"bar 1 at {sheet.get('bar1_time')}s")
+        check("analysis", "bass sheet: main bar rhythm is the one played (x.x...x.x...x.x.)",
+              rh.get("main_bar_rhythm") == "x.x...x.x...x.x.", rh.get("main_bar_rhythm", "none"))
+        check("analysis", "bass sheet: drum hits on a ringing note aren't written as new notes",
+              len(sheet.get("notes", [])) <= len(truth) + 4, f"{len(sheet.get('notes', []))} notes, {len(truth)} played")
+    if "error" not in res["pop4"] and "error" not in r:
+        happy, dark = res["pop4"]["feel"], r["feel"]
+        check("analysis", "mood: major pop song reads more positive than the E minor groove",
+              happy["valence"] >= dark["valence"] + 15, f"{happy['valence']} vs {dark['valence']}")
+    if "error" not in res["waltz3"] and "error" not in res["pop4"]:
+        check("analysis", "energy: soft strings without drums read calmer than the drum-driven pop song",
+              res["waltz3"]["feel"]["arousal"] < res["pop4"]["feel"]["arousal"],
+              f"{res['waltz3']['feel']['arousal']} vs {res['pop4']['feel']['arousal']}")
 
     r = res["short_m4a"]
     check("analysis", "short phone-style .m4a clip decodes and analyses", "error" not in r, r.get("error", ""))
@@ -338,6 +354,36 @@ def unit_checks():
     fake2 = {"chord_timeline": [{"time": "0:12", "chord": "D"}], "sections": [], "drums": {}, "sound": {}}
     check("unit", "AI fact-check ignores chords the AI suggests adding",
           "⚠" not in ma._check_times("Insert an A7 before the D chord at 0:12 (play A7 at 0:11)", fake2))
+    notation_checks(ma)
+
+
+def notation_checks(ma):
+    """Sheet music from known notes: 2 bars of 3/4 at 120 BPM (beats every 0.5 s), slightly off the grid
+    like a real player, the first bar starting on the 2nd detected beat."""
+    import xml.etree.ElementTree as ET
+    import notation as nt
+    beats = [i * 0.5 for i in range(12)]
+    played = [(0.52, 0.98, 45, 100), (1.01, 1.24, 52, 90), (1.26, 1.49, 52, 90),   # bar 1: A | E E (8ths)
+              (1.98, 2.73, 47, 100), (2.76, 2.99, 49, 90)]                         # bar 2: B (dotted quarter) C#
+    sheet = nt.quantize(played, [(0.5, "A"), (2.0, "E7")], beats, 3, 0.5)
+    want = [(0, 4, 45), (4, 2, 52), (6, 2, 52), (12, 6, 47), (18, 2, 49)]
+    check("unit", "notation: notes land on the right 16ths and bars (3/4)",
+          [(s, l, n) for s, l, n, _ in sheet["notes"]] == want, str(sheet["notes"]))
+    check("unit", "notation: chord symbols on their beats", sheet["chords"] == [(0, "A"), (12, "E7")], str(sheet["chords"]))
+    xml = nt.to_musicxml(sheet, "t", "Bass", ma.key_fifths(9), 120, lambda pc: ma.spell(pc, 9), ma.parse_chord)
+    root = ET.fromstring(xml.split("?>", 1)[1].split(">", 1)[1])  # drop the XML declaration and DOCTYPE
+    bars = root.findall(".//measure")
+    durs = [sum(int(n.find("duration").text) for n in m.findall("note")) for m in bars]
+    check("unit", "notation: every bar adds up to 3 beats", durs == [12] * len(bars), str(durs))
+    check("unit", "notation: A major has 3 sharps; C# spelled as C#", ma.key_fifths(9) == 3 and "<step>C</step><alter>1</alter>" in xml)
+    check("unit", "notation: 8ths in the same beat are beamed", xml.count('<beam number="1">begin</beam>') >= 1)
+    rh = nt.rhythm_from_score(sheet)
+    check("unit", "notation: rhythm stats read from the sheet", rh["notes"] == 5 and rh["offbeat_pct"] == 40, str(rh))
+    try:
+        import verovio  # noqa: F401
+        check("unit", "notation: engraves to SVG with Verovio", nt.render_svg(xml)[0].lstrip().startswith("<"))
+    except ImportError:
+        check("unit", "notation: Verovio installed (needed for the engraved sheet)", False, "pip install verovio")
 
 
 # ---------------------------------------------------------------- full web-app run (simulated AI)
@@ -426,6 +472,13 @@ def web_checks(tmp, files):
         check("web", "zip has report, data and MIDI (incl. AI progression)",
               {"music_report.md", "music_results.json"} <= set(names) and any("_ai_" in n for n in names),
               f"{len(names)} files")
+        check("web", "zip has the bass sheet music (MusicXML + engraved page) and the MIDI made from it",
+              any(n.startswith("sheets/") and n.endswith(".musicxml") for n in names) and
+              any(n.startswith("sheets/") and n.endswith(".html") for n in names) and
+              any(n.endswith("_bass_from_sheet.mid") for n in names), ", ".join(n for n in names if "sheet" in n))
+        sheet_link = re.search(r'href="([^"]+/files/sheets/[^"]+\.html)"', page)
+        check("web", "the engraved sheet opens from the report",
+              bool(sheet_link) and "<svg" in requests.get(base + sheet_link.group(1), auth=auth, timeout=10).text)
         res = json.loads(zipfile.ZipFile(__import__("io").BytesIO(z.content)).read("music_results.json"))
         check("web", "results carry the analyzer version", all("analyzer_version" in r for r in res if "error" not in r))
 
