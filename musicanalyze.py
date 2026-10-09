@@ -636,7 +636,7 @@ def _analyze_audio(path):
 
     meter = detect_meter(rms_db, chroma,
                          librosa.util.fix_frames(tracked_frames[tracked_frames < n], x_min=0, x_max=n), clear_beat)
-    bass = instruments.bass_notes(y_harm, sr, btimes, tuning)  # one note (or None) per beat span
+    bass, bass_line = instruments.bass_notes(y_harm, sr, btimes, tuning)  # per beat + note-by-note
     for c in chords:
         k = key_at(ksec, (c["start"] + c["end"]) / 2)
         c["name"], c["roman"] = chord_name(c["root"], c["q"], k), roman(c["root"], c["q"], k)
@@ -730,6 +730,11 @@ def _analyze_audio(path):
     }
     if not any(sec["bass"] for sec in sections):  # no low end anywhere: the "bass notes" were chord tones
         result["bass"] = {"present": False}
+        bass_line = []
+    loudest = max((n[3] for n in bass_line), default=0.0)
+    result["bass_transcription"] = [  # note-by-note, for the bass MIDI file
+        {"start": round(a, 3), "end": round(e, 3), "midi": n, "velocity": int(np.clip(110 + 2.5 * (db - loudest), 35, 120))}
+        for a, e, n, db in bass_line]
 
     # --- best-effort top line (the musician's typed melody is added later, in analyze())
     top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
@@ -738,7 +743,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-09a"
+ANALYSIS_VERSION = "2026-10-10a"
 
 
 def _cache_key(path):
@@ -1166,6 +1171,37 @@ def _vlq(n):
     return bytes(out)
 
 
+def _midi_header(bpm, cents, beats_per_bar=4, program=None):
+    """Tempo, time signature, optional instrument (GM program) and tuning pitch bend."""
+    us = int(60_000_000 / max(30, min(300, bpm or 90)))
+    data = b"\x00\xff\x51\x03" + us.to_bytes(3, "big")
+    data += b"\x00\xff\x58\x04" + bytes([beats_per_bar, 2, 24, 8])  # time signature, e.g. 3/4 or 4/4
+    if program is not None:
+        data += b"\x00" + bytes([0xC0, program])
+    if cents:
+        bend = int(np.clip(8192 + cents / 200 * 8192, 0, 16383))
+        data += b"\x00" + bytes([0xE0, bend & 0x7F, bend >> 7])
+    return data
+
+
+def write_notes_midi(path, notes, bpm, cents=0, beats_per_bar=4, program=33):
+    """Note-by-note MIDI at the real times: notes = [(start s, end s, midi, velocity)]. The tempo is the
+    track's, so the notes line up with the recording when both start at 0:00. Program 33 = bass (finger)."""
+    tpq = 480
+    to_tick = lambda sec: int(round(sec * (bpm or 90) / 60 * tpq))
+    events = []
+    for a, e, n, v in notes:
+        events += [(to_tick(a), 1, n, v), (max(to_tick(a) + 1, to_tick(e)), 0, n, 0)]
+    events.sort(key=lambda x: (x[0], x[1]))
+    data, last = _midi_header(bpm, cents, beats_per_bar, program), 0
+    for t, on, n, v in events:
+        data += _vlq(t - last) + bytes([0x90 if on else 0x80, n, v])
+        last = t
+    data += b"\x00\xff\x2f\x00"
+    Path(path).write_bytes(b"MThd" + struct.pack(">IHHH", 6, 0, 1, tpq) +
+                           b"MTrk" + struct.pack(">I", len(data)) + data)
+
+
 def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2, cents=0):
     """Write a simple 1-track MIDI file: bass root + mid-range chord, one chord per bar.
     `cents` adds a pitch bend so it plays in tune with a recording that isn't at A440
@@ -1181,12 +1217,7 @@ def write_midi(path, chords, bpm=90, beats_per_chord=4, repeats=2, cents=0):
             events += [(tick, 1, n) for n in notes] + [(tick + length - 10, 0, n) for n in notes]
             tick += length
     events.sort(key=lambda e: (e[0], e[1]))
-    us = int(60_000_000 / max(30, min(300, bpm or 90)))
-    data = b"\x00\xff\x51\x03" + us.to_bytes(3, "big")
-    if cents:
-        bend = int(np.clip(8192 + cents / 200 * 8192, 0, 16383))
-        data += b"\x00" + bytes([0xE0, bend & 0x7F, bend >> 7])
-    last = 0
+    data, last = _midi_header(bpm, cents, beats_per_chord), 0
     for t, on, n in events:
         data += _vlq(t - last) + bytes([0x90 if on else 0x80, n, 90 if on else 0])
         last = t
@@ -1222,14 +1253,22 @@ def export_midis(r, out_dir):
     stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
     bpm = r["tempo_bpm"] or 90
     cents = r.get("tuning_cents", 0) if abs(r.get("tuning_cents", 0)) >= 10 else 0
+    bar = (r.get("meter") or {}).get("beats_per_bar", 4)  # one chord = one full bar (3 beats in 3/4)
     files = []
+    line = r.get("bass_transcription") or []
+    if line:
+        fname = f"{stem}_bass_transcription.mid"
+        write_notes_midi(out_dir / fname, [(n["start"], n["end"], n["midi"], n["velocity"]) for n in line],
+                         bpm, cents=cents, beats_per_bar=bar)
+        files.append({"file": fname, "label": f"bass, note by note ({len(line)} notes at their real times)",
+                      "chords": []})
 
     def save(label, names):
         parsed = [(p[0], p[2]) for p in map(parse_chord, names) if p]
         if len(parsed) < 2:
             return
         fname = f"{stem}_{re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')}.mid"
-        write_midi(out_dir / fname, parsed, bpm, cents=cents)
+        write_midi(out_dir / fname, parsed, bpm, beats_per_chord=bar, cents=cents)
         files.append({"file": fname, "label": label, "chords": names})
 
     for i, loop in enumerate(r["loops"], 1):
@@ -1866,7 +1905,7 @@ def track_report(r):
     if r.get("midi"):
         L += ["", "### 🎹 MIDI sketches (drag into your DAW)", ""]
         for m in r["midi"]:
-            L.append(f"- `midi/{m['file']}` — {m['label']}: {' – '.join(m['chords'])}")
+            L.append(f"- `midi/{m['file']}` — {m['label']}" + (f": {' – '.join(m['chords'])}" if m["chords"] else ""))
     L.append("")
     return L
 

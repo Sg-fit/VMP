@@ -143,6 +143,23 @@ def _write_bytes(path, data):
     return path
 
 
+def bassline_song(bpm=96, bars=8):
+    """Drums + chords + a syncopated plucked bass line with repeated notes. Returns audio, true notes."""
+    beat, e = 60 / bpm, 30 / bpm
+    pattern = [(0, 1, 40), (1, 1, 40), (3, 1, 40), (4, 2, 43), (6, 1, 45), (7, 1, 45)]  # E E . E | G . A A
+    y = song([("E", "m"), ("E", "m"), ("C", ""), ("D", "")], bpm, 4, loops=bars // 4, drums=True)
+    bass, truth = np.zeros_like(y), []
+    for b in range(bars):
+        for s8, l8, n in pattern:
+            start, dur = b * 4 * beat + s8 * e, l8 * e * 0.9
+            t = np.arange(int(SR * dur)) / SR
+            place(bass, 0.5 * np.minimum(1, t / 0.005) * np.exp(-t * 4) *
+                  sum(h * np.sin(2 * np.pi * hz(n) * (k + 1) * t) for k, h in enumerate((1, 0.6, 0.3, 0.15))), start)
+            truth.append((start, n))
+    y = y + bass
+    return (y / np.abs(y).max() * 0.8).astype(np.float32), truth
+
+
 def make_test_set(folder):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -162,6 +179,7 @@ def make_test_set(folder):
         "short_m4a": write_m4a(folder / "short_phone_clip.m4a",
                                song([("A", ""), ("E", "7")], 120, 3, loops=2, drums=False, soft=True)),
         "corrupt": _write_bytes(folder / "corrupt.mp3", b"this is not audio"),
+        "bassline": write(folder / "syncopated_bass_96bpm.wav", bassline_song()[0]),
     }
 
 
@@ -221,6 +239,24 @@ def analysis_checks(tmp):
         keys = [k["key"] for k in r["key_sections"]]
         check("analysis", "key change B minor → E major found", keys[:1] == ["B minor"] and "E major" in keys[1:],
               " → ".join(keys))
+
+    r = res["bassline"]
+    if check("analysis", "syncopated bass song analyses", "error" not in r, r.get("error", "")):
+        truth = bassline_song()[1]
+        found = [(n["start"], n["midi"]) for n in r.get("bass_transcription", [])]
+        used, hits, pitch_ok = set(), 0, 0
+        for t, n in truth:
+            j = next((j for j, (ft, fn) in enumerate(found) if j not in used and abs(ft - t) <= 0.05), None)
+            if j is not None:
+                used.add(j)
+                hits += 1
+                pitch_ok += found[j][1] % 12 == n % 12
+        rec, prec = hits / len(truth), hits / max(1, len(found))
+        check("analysis", "bass transcription: finds the notes at their real times (>= 85%)", rec >= 0.85,
+              f"{rec:.0%} of {len(truth)} notes within 50 ms")
+        check("analysis", "bass transcription: few made-up notes (>= 85% real)", prec >= 0.85, f"{prec:.0%} of {len(found)}")
+        check("analysis", "bass transcription: right pitches (>= 90%)", hits and pitch_ok / hits >= 0.9,
+              f"{pitch_ok}/{hits}")
 
     r = res["short_m4a"]
     check("analysis", "short phone-style .m4a clip decodes and analyses", "error" not in r, r.get("error", ""))
