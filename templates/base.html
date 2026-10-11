@@ -4,50 +4,92 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Music Inspiration Analyzer{% endblock %}</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎵</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><rect width='20' height='20' fill='%23111'/><g fill='%23ff5a1f'><rect x='3' y='9' width='2' height='8'/><rect x='6.5' y='4' width='2' height='13'/><rect x='10' y='7' width='2' height='10'/><rect x='13.5' y='11' width='2' height='6'/></g></svg>">
   <style>
+    /* Style notes: docs/STYLE.md. One typeface, monochrome + one accent, square and flat. */
     :root {
-      --bg: #f7f6f3; --card: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e4e1db;
-      --accent: #5b4bd6; --accent-text: #ffffff; --soft: #efedff; --code: #f1efea; --err: #b3261e;
+      --bg: #f3f3f1; --surface: #ffffff; --ink: #111111;
+      --muted: rgba(17, 17, 17, .62); --line: rgba(17, 17, 17, .14); --faint: rgba(17, 17, 17, .05);
+      --accent: #ff5a1f; --on-accent: #111111; --err: #c4210b;
+      --sans: Futura, "Futura PT", "Avenir Next", Avenir, "Century Gothic", "Helvetica Neue", system-ui, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      color-scheme: light;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #161615; --card: #1f1f1d; --text: #ecebe8; --muted: #a29f98; --line: #34332f;
-        --accent: #9d92ff; --accent-text: #15142a; --soft: #26244a; --code: #2a2926; --err: #ff8a80;
+        --bg: #191919; --surface: #222222; --ink: #ecf0f1;
+        --muted: rgba(236, 240, 241, .68); --line: rgba(236, 240, 241, .14); --faint: rgba(236, 240, 241, .06);
+        --err: #ff8a73; color-scheme: dark;
       }
     }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text);
-           font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    main { max-width: 920px; margin: 0 auto; padding: 32px 16px 64px; }
-    header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
-    header.top a { color: inherit; text-decoration: none; font-weight: 650; font-size: 1.1rem; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
-    h1 { font-size: 1.8rem; line-height: 1.2; margin: 0 0 8px; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--sans);
+           -webkit-font-smoothing: antialiased; }
+    ::selection { background: var(--accent); color: var(--on-accent); }
+
+    /* top bar */
+    .bar { border-bottom: 1px solid var(--line); }
+    .bar-in { max-width: 1040px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center;
+              justify-content: space-between; gap: 16px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none;
+             font-weight: 700; letter-spacing: -.01em; }
+    .meter { display: inline-flex; align-items: flex-end; gap: 2px; height: 18px; }
+    .meter i { display: block; width: 3px; background: var(--ink); }
+    .meter i:nth-child(1) { height: 45%; } .meter i:nth-child(2) { height: 100%; background: var(--accent); }
+    .meter i:nth-child(3) { height: 70%; } .meter i:nth-child(4) { height: 35%; } .meter i:nth-child(5) { height: 55%; }
+    .bar nav a { color: var(--muted); text-decoration: none; font-size: .92rem; }
+    .bar nav a:hover { color: var(--ink); }
+
+    main { max-width: 1040px; margin: 0 auto; padding: 48px 16px 80px; }
+    footer { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
+             color: var(--muted); font-size: .8rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+    /* type */
+    .eyebrow { font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+               margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+    .eyebrow::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+    h1 { font-size: clamp(2.3rem, 6vw, 4rem); line-height: 1.02; letter-spacing: -.025em; font-weight: 700; margin: 0 0 16px; }
+    .lede { font-size: 1.15rem; max-width: 40em; color: var(--muted); margin: 0 0 32px; }
     .muted { color: var(--muted); }
-    .btn { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 10px; cursor: pointer;
-           background: var(--accent); color: var(--accent-text); padding: 11px 18px; font: inherit; font-weight: 600;
-           text-decoration: none; }
-    .btn.secondary { background: var(--soft); color: var(--text); }
-    .btn:disabled { opacity: .6; cursor: progress; }
-    .error { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent);
-             border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
-    a { color: var(--accent); }
-    code, pre { background: var(--code); border-radius: 6px; }
-    code { padding: 1px 5px; font-size: .9em; }
-    pre { padding: 12px; overflow-x: auto; font-size: .85rem; line-height: 1.35; }
+    .small { font-size: .85rem; }
+    a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
+    /* controls: square, flat */
+    .btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--ink); border-radius: 0; cursor: pointer;
+           background: var(--ink); color: var(--bg); padding: 12px 20px; font: 600 .95rem/1 var(--sans);
+           text-decoration: none; letter-spacing: .01em; }
+    .btn:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    .btn.primary:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+    .btn.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+    .btn.secondary:hover { border-color: var(--ink); background: transparent; color: var(--ink); }
+    .btn:disabled { opacity: .55; cursor: progress; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .error { color: var(--err); border-left: 3px solid var(--err); background: var(--faint); padding: 10px 14px; margin-bottom: 16px; }
+
+    .panel { background: var(--surface); border: 1px solid var(--line); padding: 28px; }
+    code, pre { font-family: var(--mono); background: var(--faint); border-radius: 2px; }
+    code { padding: 1px 5px; font-size: .86em; }
+    pre { padding: 14px 16px; overflow-x: auto; font-size: .82rem; line-height: 1.45; border: 1px solid var(--line); }
     pre code { padding: 0; background: none; }
-    table { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: .93rem; display: block; overflow-x: auto; }
-    th, td { border-bottom: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
+    table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; font-size: .92rem; display: block; overflow-x: auto; }
+    th, td { border-bottom: 1px solid var(--line); padding: 9px 12px 9px 0; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+         border-bottom-color: var(--ink); }
+    @media (max-width: 600px) { main { padding-top: 32px; } .panel { padding: 20px; } }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
+<header class="bar"><div class="bar-in">
+  <a class="brand" href="{{ url_for('index') }}"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    Music Inspiration Analyzer</a>
+  <nav><a href="{{ url_for('index') }}">New analysis</a></nav>
+</div></header>
 <main>
-  <header class="top"><a href="{{ url_for('index') }}">🎵 Music Inspiration Analyzer</a></header>
   {% block content %}{% endblock %}
-  <p style="color:var(--muted);font-size:.78rem;margin-top:40px">Music Inspiration Analyzer{% if version %} · version {{ version }}{% endif %}</p>
 </main>
+<footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks</span>
+  {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
 </body>
 </html>

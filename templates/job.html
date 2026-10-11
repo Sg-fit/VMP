@@ -2,53 +2,70 @@
 {% block title %}{% if s.state == 'done' %}Results{% else %}Analysing…{% endif %} · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
-  .spinner { width: 40px; height: 40px; border: 4px solid var(--line); border-top-color: var(--accent);
-             border-radius: 50%; animation: spin 1s linear infinite; margin: 8px auto 16px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .center { text-align: center; }
-  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
-  .midis { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .midis a, a.midi { display: inline-block; background: var(--soft); color: var(--text); text-decoration: none;
-                     border-radius: 8px; padding: 3px 9px; font-size: .88rem;
-                     max-width: 100%; overflow-wrap: anywhere; }
+  .working { display: inline-flex; align-items: flex-end; gap: 4px; height: 48px; margin: 0 0 24px; }
+  .working i { width: 7px; height: 100%; background: var(--ink); transform-origin: bottom; animation: level 1s ease-in-out infinite; }
+  .working i:nth-child(2) { background: var(--accent); animation-delay: -.2s; } .working i:nth-child(3) { animation-delay: -.5s; }
+  .working i:nth-child(4) { animation-delay: -.7s; } .working i:nth-child(5) { animation-delay: -.35s; }
+  @keyframes level { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { .working i { animation: none; transform: scaleY(.6); } }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; align-items: center; }
+  .midis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+           align-items: center; }
+  .midis .label { font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+                  margin-right: 6px; }
+  .midis a, a.midi { display: inline-block; border: 1px solid var(--line); color: var(--ink); text-decoration: none;
+                     padding: 3px 9px; font-size: .84rem; max-width: 100%; overflow-wrap: anywhere; }
+  .midis a:hover, a.midi:hover { border-color: var(--accent); background: var(--faint); }
+
+  .report { margin-top: 24px; }
   .report h1 { display: none; }  /* the page already has a title */
-  .report h2 { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 1.4rem; }
-  .report h3 { margin-top: 24px; font-size: 1.1rem; }
-  .report blockquote { margin: 0; padding: 10px 16px; border-left: 4px solid var(--accent); background: var(--soft);
-                       border-radius: 0 10px 10px 0; }
-  .report details { margin: 8px 0; } .report summary { cursor: pointer; color: var(--accent); }
-  .report hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0 12px; }
-  .report hr + p { color: var(--muted); font-size: .85rem; }
+  .report h2 { margin: 64px 0 8px; padding-top: 18px; border-top: 2px solid var(--ink); font-size: clamp(1.6rem, 3.6vw, 2.3rem);
+               line-height: 1.1; letter-spacing: -.02em; overflow-wrap: anywhere; }
+  .report h2 + p { font-size: 1.05rem; }
+  .report h3 { margin: 40px 0 12px; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+               display: flex; align-items: center; gap: 8px; }
+  .report h3::before { content: ""; width: 8px; height: 8px; background: var(--accent); flex: none; }
+  .report ul { padding-left: 18px; } .report li { margin: 5px 0; } .report li::marker { color: var(--muted); }
+  .report blockquote { margin: 0 0 16px; padding: 10px 16px; border-left: 3px solid var(--accent); background: var(--faint); }
+  .report details { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
+  .report summary { cursor: pointer; font-weight: 600; }
+  .report summary::marker { color: var(--accent); }
+  .report hr { border: 0; border-top: 2px solid var(--ink); margin: 64px 0 12px; }
+  .report hr + p, .report hr + p + p { color: var(--muted); font-size: .82rem; }
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
-  .report abbr[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
-  .report details > summary { font-weight: 600; }
-  .report details ul { padding-left: 20px; } .report details li { margin: 4px 0; }
-  .aibar { position: sticky; top: 8px; z-index: 5; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-           margin-top: 16px; padding: 10px 14px; border-radius: 12px; background: var(--soft); border: 1px solid var(--line); }
+  .report abbr[title] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+  .report details ul { padding-left: 20px; }
+  .aibar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           margin-top: 16px; padding: 12px 16px; background: var(--ink); color: var(--bg); font-size: .92rem; }
+  .aibar .dot { width: 8px; height: 8px; background: var(--accent); flex: none; animation: blink 1.2s steps(2) infinite; }
+  .aibar.done .dot { animation: none; }
+  @keyframes blink { 50% { opacity: .2; } }
+  @media (prefers-reduced-motion: reduce) { .aibar .dot { animation: none; } }
+  .aibar .btn { padding: 7px 12px; }
   #tip { position: absolute; z-index: 10; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
-         background: var(--text); color: var(--bg); border-radius: 10px; font-size: .85rem; line-height: 1.4;
-         box-shadow: 0 6px 24px rgba(0,0,0,.25); display: none; }
+         background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none; }
 </style>
 {% endblock %}
 {% block content %}
 {% if s.state == 'done' %}
-  <div class="card">
-    <h1>Your results</h1>
+  <div>
+    <p class="eyebrow">Results</p>
+    <h1>Your analysis</h1>
     <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }} · results kept for a limited time — download anything you want to keep</div>
     <div class="toolbar">
-      <a class="btn" href="{{ url_for('job_zip', job_id=job_id) }}">⬇ Download everything (.zip)</a>
-      {% if s.ai_pending %}<span class="muted" style="align-self:center;font-size:.88rem">The AI ideas aren't in the download yet — wait for “✅ ready” for the complete package.</span>{% endif %}
+      <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}">Download everything (.zip) ↓</a>
+      {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet — wait for “ready” for the complete package.</span>{% endif %}
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}">Report (.md)</a>
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}">Data (.json)</a>
       <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>
     </div>
     {% if midi_files %}
-      <div class="midis">🎹 {% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
+      <div class="midis"><span class="label">MIDI</span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
   </div>
   {% if s.ai_pending %}
-    <div id="aibar" class="aibar">⏳ <span id="aitext">Your analysis is ready. The AI is still writing ideas — keep reading, we'll let you know.</span>
-      <button id="aibtn" class="btn" style="display:none;padding:6px 12px">Show them</button></div>
+    <div id="aibar" class="aibar"><span class="dot" aria-hidden="true"></span><span id="aitext">Your analysis is ready. The AI is still writing ideas — keep reading, we'll let you know.</span>
+      <button id="aibtn" class="btn primary" style="display:none">Show them</button></div>
     <script>
       (function () {
         async function poll() {
@@ -56,7 +73,8 @@
             const s = await (await fetch("{{ url_for('job_status', job_id=job_id) }}")).json();
             if (!s.ai_pending) {
               document.getElementById('aitext').textContent = s.state === 'error'
-                ? 'The AI ideas could not be added this time.' : '✅ The AI ideas are ready.';
+                ? 'The AI ideas could not be added this time.' : 'The AI ideas are ready.';
+              document.getElementById('aibar').classList.add('done');
               if (s.state !== 'error') document.getElementById('aibtn').style.display = 'inline-flex';
               return;
             }
@@ -77,8 +95,8 @@
       if (y) { sessionStorage.removeItem('scroll-{{ job_id }}'); window.addEventListener('load', () => window.scrollTo(0, +y)); }
     } catch (e) {}
   </script>
-  <p class="muted" style="font-size:.88rem;margin:20px 0 0">Tip: underlined terms explain themselves — hover (or tap on a phone).
-    The full guide is under “📖 How to read this report”.</p>
+  <p class="muted small" style="margin:32px 0 0">Underlined terms explain themselves — hover, or tap on a phone.
+    The full guide is under “How to read this report”.</p>
   <div class="report">{{ report_html|safe }}</div>
   <div id="tip" role="tooltip"></div>
   <script>
@@ -97,18 +115,20 @@
   </script>
 
 {% elif s.state == 'error' %}
-  <div class="card">
+  <div>
+    <p class="eyebrow">Error</p>
     <h1>Something went wrong</h1>
     <div class="error">{{ s.message }}</div>
-    <a class="btn" href="{{ url_for('index') }}">Try again</a>
+    <a class="btn primary" href="{{ url_for('index') }}">Try again →</a>
   </div>
 
 {% else %}
-  <div class="card center">
-    <div class="spinner"></div>
+  <div>
+    <div class="working" role="img" aria-label="Working"><i></i><i></i><i></i><i></i><i></i></div>
+    <p class="eyebrow">Working</p>
     <h1>Analysing your music…</h1>
-    <p id="msg" class="muted">{{ s.message }}</p>
-    <p class="muted" style="font-size:.85rem">This takes about 30–60 seconds per track (seconds if a track was analysed before). Results appear as soon as the analysis is done — AI ideas follow. This page updates by itself.</p>
+    <p id="msg" class="lede" style="margin-bottom:12px">{{ s.message }}</p>
+    <p class="muted small" style="max-width:40em">This takes about 30–60 seconds per track (seconds if a track was analysed before). Results appear as soon as the analysis is done — AI ideas follow. This page updates by itself.</p>
   </div>
   <script>
     async function poll() {

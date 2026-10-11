@@ -272,8 +272,9 @@ def sheet_html(title, pages, notes_html=""):
     body = "\n".join(f'<div class="page">{svg}</div>' for svg in pages)
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            "<style>body{margin:0;background:#fff;color:#111;font-family:system-ui,sans-serif}"
-            ".top{padding:12px 16px}.page svg{width:100%;height:auto;display:block}"
+            "<style>body{margin:0;background:#fff;color:#111;font-family:Futura,'Avenir Next',Avenir,"
+            "'Century Gothic','Helvetica Neue',system-ui,sans-serif}"
+            ".top{padding:14px 16px;border-bottom:2px solid #111}.page svg{width:100%;height:auto;display:block}"
             "@media print{.top{display:none}.page{page-break-after:always}}</style></head><body>"
             f"<div class='top'><b>{html.escape(title)}</b>{notes_html}</div>{body}</body></html>")
 

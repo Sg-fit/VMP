@@ -264,8 +264,12 @@ def job(job_id):
         report_html = re.sub(  # turn `midi/x.mid` and `sheets/x.html` mentions into links
             r"<code>((?:midi|sheets)/[\w.\-]+\.(?:mid|musicxml|html))</code>",
             lambda m: f'<a class="midi" href="{url_for("job_file", job_id=job_id, name=m.group(1))}"'
-                      + (' target="_blank">🎼 ' if m.group(1).endswith(".html") else '>⬇ ')
-                      + f'{m.group(1).split("/", 1)[1]}</a>', report_html)
+                      + (' target="_blank">' if m.group(1).endswith(".html") else '>')
+                      + m.group(1).split("/", 1)[1]
+                      + (" ↗" if m.group(1).endswith(".html") else " ↓") + "</a>", report_html)
+        # The page's typography carries the headings (docs/STYLE.md); drop the emoji the .md report uses.
+        report_html = re.sub("(<(?:h[23]|summary|strong)>)\\s*[\U0001F300-\U0001FAFF☀-➿⬀-⯿️]+\\s*",
+                             r"\1", report_html)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,

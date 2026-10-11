@@ -1,61 +1,96 @@
 {% extends "base.html" %}
 {% block head %}
 <style>
-  .drop { display: block; border: 2px dashed var(--line); border-radius: 14px; padding: 36px 20px; text-align: center;
-          cursor: pointer; transition: border-color .15s, background .15s; margin: 20px 0; }
-  .drop:hover, .drop.over { border-color: var(--accent); background: var(--soft); }
-  .drop input { display: none; }
-  .drop .big { font-size: 2.2rem; }
-  #chosen { list-style: none; padding: 0; margin: 0 0 16px; font-size: .95rem; }
-  #chosen li { padding: 4px 0; border-bottom: 1px solid var(--line); }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between; }
-  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 24px; }
-  .features div { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; font-size: .92rem; }
-  .features b { display: block; margin-bottom: 2px; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-items: start; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 28px; } }
+  .readout { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 2px solid var(--ink); margin-top: 8px; }
+  .readout div { padding: 14px 12px 0 0; }
+  .readout b { display: block; font-size: clamp(1.6rem, 3.4vw, 2.3rem); line-height: 1; letter-spacing: -.02em; }
+  .readout span { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+  .drop { display: block; border: 1px dashed var(--muted); padding: 40px 20px; text-align: center; cursor: pointer;
+          transition: border-color .15s, background .15s; margin: 0 0 16px; background: var(--bg); }
+  .drop:hover, .drop.over { border: 1px solid var(--accent); background: var(--faint); }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .drop .plus { display: inline-grid; place-items: center; width: 44px; height: 44px; margin-bottom: 12px;
+                background: var(--accent); color: var(--on-accent); font-size: 1.6rem; font-weight: 400; line-height: 1; }
+  .drop .title { font-weight: 700; font-size: 1.1rem; }
+  #chosen { list-style: none; padding: 0; margin: 0 0 20px; font-size: .92rem; }
+  #chosen li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  #chosen li span { color: var(--muted); white-space: nowrap; }
+  label.field { display: block; font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+                margin-bottom: 6px; }
+  textarea { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
+             background: var(--bg); color: var(--ink); margin-bottom: 6px; resize: vertical; }
+  textarea:focus { border-color: var(--ink); outline: none; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
+         padding-top: 18px; border-top: 1px solid var(--line); }
+  .row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
+
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 72px; border-top: 2px solid var(--ink); }
+  .features div { padding: 18px 20px 0 0; font-size: .92rem; color: var(--muted); }
+  .features div + div { padding-left: 20px; border-left: 1px solid var(--line); }
+  .features .n { display: block; font-size: .72rem; letter-spacing: .12em; color: var(--muted); margin-bottom: 18px; }
+  .features b { display: block; color: var(--ink); font-size: 1.15rem; letter-spacing: -.01em; margin-bottom: 6px; }
+  @media (max-width: 860px) {
+    .features { grid-template-columns: 1fr 1fr; }
+    .features div, .features div + div { padding: 18px 16px 18px 0; border-left: 0; border-bottom: 1px solid var(--line); }
+  }
+  @media (max-width: 480px) { .features { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 {% block content %}
-<div class="card">
-  <h1>Turn your tracks into ideas</h1>
-  <p class="muted">Upload instrumental recordings to get their key, mode, chord loops, structure, groove, ideas to try,
-    and MIDI sketches you can drag into your DAW.</p>
-
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
-
-  <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data">
-    <label class="drop" id="drop">
-      <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
-      <div class="big">🎧</div>
-      <div><b>Choose audio files</b> or drop them here</div>
-      <div class="muted">{{ exts }} · up to {{ max_files }} files, {{ max_mb }} MB total</div>
-    </label>
-    <ul id="chosen"></ul>
-    <label for="melody" style="display:block;font-weight:600;margin-bottom:4px">Melody or riff <span class="muted" style="font-weight:400">(optional)</span></label>
-    <textarea id="melody" name="melody" rows="2" maxlength="2000"
-      placeholder="e.g. A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"
-      style="width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);margin-bottom:6px"></textarea>
-    <p class="muted" style="font-size:.85rem;margin:0 0 16px">Type the notes you hear and get a melody analysis, variations as MIDI,
-      and a check of each note against the recording. Automatic melody detection is unreliable on full-band phone recordings.</p>
-    <div class="row">
-      {% if ai_label %}
-        <label><input type="checkbox" name="ai" value="1" checked> Include AI brainstorm
-          <span class="muted">({{ ai_label }})</span></label>
-      {% else %}
-        <span class="muted">AI brainstorm is off (no API key set on the server).</span>
-      {% endif %}
-      <button class="btn" id="go" type="submit">Analyse</button>
+<section class="hero">
+  <div>
+    <p class="eyebrow">For musicians · instrumental tracks</p>
+    <h1>Turn your tracks into ideas.</h1>
+    <p class="lede">Upload a recording and get its key, mode, chord loops, structure, groove, bass line as sheet music,
+      energy and mood — plus ideas to try and MIDI you can drag into your DAW.</p>
+    <div class="readout" aria-hidden="true">
+      <div><b>Key</b><span>& mode</span></div>
+      <div><b>BPM</b><span>& meter</span></div>
+      <div><b>MIDI</b><span>& sheet music</span></div>
     </div>
-  </form>
-</div>
+  </div>
 
-<div class="features">
-  <div><b>🎼 Harmony</b>Key timeline, mode and colour note, chord loops with Roman numerals</div>
-  <div><b>🧱 Structure</b>Sections, energy arc, biggest build, quietest moment</div>
-  <div><b>🥁 Groove &amp; sound</b>Tempo, syncopation, tone, frequency balance</div>
-  <div><b>💡 Ideas &amp; MIDI</b>Concrete suggestions, plus chord loops and variations as .mid files</div>
-</div>
-<p class="muted" style="font-size:.85rem;margin-top:20px">Uploaded audio is deleted as soon as it's analysed. Results are
-  kept for {{ ttl|round|int }} hours, and anyone with a results link can open it. Only the analysis numbers go to the AI, never the audio.</p>
+  <div class="panel">
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data">
+      <label class="drop" id="drop">
+        <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
+        <span class="plus" aria-hidden="true">+</span>
+        <div class="title">Choose audio files</div>
+        <div class="muted small">or drop them here · {{ exts }} · up to {{ max_files }} files, {{ max_mb }} MB total</div>
+      </label>
+      <ul id="chosen"></ul>
+      <label class="field" for="melody">Melody or riff <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+      <textarea id="melody" name="melody" rows="2" maxlength="2000"
+        placeholder="A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"></textarea>
+      <p class="muted small" style="margin:0 0 20px">Type the notes you hear for a melody analysis, variations as MIDI,
+        and a check of each note against the recording.</p>
+      <div class="row">
+        {% if ai_label %}
+          <label class="small"><input type="checkbox" name="ai" value="1" checked> AI brainstorm
+            <span class="muted">({{ ai_label }})</span></label>
+        {% else %}
+          <span class="muted small">AI brainstorm is off (no API key on the server).</span>
+        {% endif %}
+        <button class="btn primary" id="go" type="submit">Analyse →</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="features">
+  <div><span class="n">01</span><b>Harmony</b>Key timeline, mode and its colour note, chord loops in Roman numerals.</div>
+  <div><span class="n">02</span><b>Structure &amp; feel</b>Sections, energy and mood per section, builds and breakdowns.</div>
+  <div><span class="n">03</span><b>Drums &amp; bass</b>The drum groove as a grid, the bass written out as sheet music.</div>
+  <div><span class="n">04</span><b>Ideas &amp; MIDI</b>Concrete suggestions, loops, variations and the bass as .mid files.</div>
+</section>
+<p class="muted small" style="margin-top:40px;max-width:46em">Uploaded audio is deleted as soon as it's analysed. Results are
+  kept for {{ ttl|round|int }} hours, and anyone with a results link can open it. Only the analysis numbers go to the AI,
+  never the audio.</p>
 
 <script>
   const input = document.getElementById('tracks'), drop = document.getElementById('drop'),
@@ -63,8 +98,10 @@
   function show() {
     list.innerHTML = '';
     for (const f of input.files) {
-      const li = document.createElement('li');
-      li.textContent = `${f.name} — ${(f.size / 1048576).toFixed(1)} MB`;
+      const li = document.createElement('li'), size = document.createElement('span');
+      li.textContent = f.name;
+      size.textContent = `${(f.size / 1048576).toFixed(1)} MB`;
+      li.appendChild(size);
       list.appendChild(li);
     }
   }
