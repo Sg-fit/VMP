@@ -664,4 +664,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import faulthandler
+    faulthandler.enable()  # a crash inside a native library prints where it happened instead of dying silently
     main()

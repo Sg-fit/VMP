@@ -31,4 +31,18 @@ fi
 echo
 
 echo "==> Self-test (about 2-4 minutes)"
-docker compose exec -T music-analyzer python selftest.py --live http://127.0.0.1:8000
+rc=0
+docker compose exec -T music-analyzer python selftest.py --live http://127.0.0.1:8000 || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo
+  case "$rc" in
+    137) echo "The self-test was KILLED (exit 137): the container ran out of memory (MEM_LIMIT in .env)."
+         echo "Raise MEM_LIMIT (e.g. MEM_LIMIT=2500m), then run: bash deploy.sh" ;;
+    139) echo "The self-test CRASHED inside a native library (exit 139, segmentation fault)." ;;
+    1)   echo "Some self-test checks failed (see FAIL lines above)." ;;
+    *)   echo "The self-test stopped with exit code $rc." ;;
+  esac
+  echo "Memory right now:"; docker stats --no-stream --format '  {{.Name}}: {{.MemUsage}}' 2>/dev/null || true
+  echo "Last app log lines:"; docker compose logs --tail 15 music-analyzer
+  exit "$rc"
+fi

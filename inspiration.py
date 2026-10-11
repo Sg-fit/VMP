@@ -92,9 +92,13 @@ def match_progression(chords, cyclic=True):
     return found
 
 
-def groove_reference(traits):
+def groove_reference(traits, bpm=None):
     for key, text in GROOVE_REFERENCES.items():
         if any(key in t for t in traits):
+            if key == "four-on-the-floor" and bpm and not 105 <= bpm <= 140:
+                # Disco/house live at 110-130 BPM; a kick on every beat in a slow song is a heartbeat pulse.
+                return ("a kick on every beat; at this tempo it's a steady heartbeat pulse rather than a dance "
+                        "groove (disco/house sit at 110-130 BPM)")
             return text
     return None
 

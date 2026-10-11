@@ -396,7 +396,9 @@ def detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, key_changes
     feat = np.vstack([_zscore(librosa.util.sync(chroma, bounds, pad=False), axis=1),
                       _zscore(librosa.util.sync(mfcc, bounds, pad=False), axis=1)])
     n = feat.shape[1]
-    k = int(np.clip(round(duration / 30) + 1, 2, 8))
+    # About one candidate boundary per 20 s: a 4-5 minute song needs ~14 to find a solo or an outro (with 8, a
+    # chorus + solo + final chorus came out as one section). Neighbours that turn out alike are merged below.
+    k = int(np.clip(round(duration / 20) + 1, 2, 14))
     if n < 4 * k:
         starts = [0]
     else:
@@ -432,7 +434,19 @@ def detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, key_changes
             prev = [j for j in range(i) if d[i, j] < thr]
             if prev:
                 lab = letters[min(prev, key=lambda j: d[i, j])]
-        letters.append(lab or "ABCDEFGHIJ"[len(set(letters))])
+        letters.append(lab or "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[min(25, len(set(letters)))])
+
+    # Neighbouring sections with the same letter are one section (the clustering over-split it).
+    merged = []
+    for (s, e), lab, en in zip(spans, letters, energies):
+        if merged and merged[-1][2] == lab:
+            ps, pe, _, pen = merged[-1]
+            merged[-1] = (ps, e, lab, (pen * (pe - ps) + en * (e - s)) / (e - ps))
+        else:
+            merged.append((s, e, lab, en))
+    spans, energies = [(s, e) for s, e, _, _ in merged], [m[3] for m in merged]
+    order = list(dict.fromkeys(m[2] for m in merged))  # re-letter A, B, C... in order of appearance
+    letters = ["ABCDEFGHIJKLMNOPQRSTUVWXYZ"[order.index(m[2])] for m in merged]
 
     avg = float(np.mean(energies))
     out = []
@@ -841,7 +855,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-11b"
+ANALYSIS_VERSION = "2026-10-12a"
 
 
 def _cache_key(path):
@@ -998,7 +1012,7 @@ def shared_dna(r):
                 out["progressions"].append({**m, "your_chords": names})
     if r["mode_confidence"] != "low" and r["mode"] in inspiration.MODE_REFERENCES:
         out["mode"] = {"mode": r["mode"], "examples": inspiration.MODE_REFERENCES[r["mode"]]}
-    out["groove"] = inspiration.groove_reference((r.get("drums") or {}).get("traits", []))
+    out["groove"] = inspiration.groove_reference((r.get("drums") or {}).get("traits", []), r.get("tempo_bpm"))
     out["melody"] = [d for d in (r.get("melody") or {}).get("devices", []) if "“" in d["reference"]]
     return out
 
