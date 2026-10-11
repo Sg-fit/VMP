@@ -23,6 +23,23 @@ from pathlib import Path
 
 import numpy as np
 
+
+def _private_numba_cache():
+    """Give this process its own numba cache folder. Processes sharing one folder (the app's worker warming
+    up while the deploy self-test runs) can load code another process is still writing and crash inside
+    librosa's beat tracker with a segmentation fault. Must run before numba is imported."""
+    import atexit
+    import shutil
+    base = os.environ.get("NUMBA_CACHE_DIR")
+    if not base or "numba" in sys.modules:
+        return
+    mine = os.path.join(base, f"pid{os.getpid()}")
+    os.environ["NUMBA_CACHE_DIR"] = mine
+    atexit.register(shutil.rmtree, mine, True)
+
+
+_private_numba_cache()
+
 import inspiration
 import instruments
 import notation

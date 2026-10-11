@@ -386,6 +386,41 @@ def notation_checks(ma):
         check("unit", "notation: Verovio installed (needed for the engraved sheet)", False, "pip install verovio")
 
 
+# ---------------------------------------------------------------- several analyses at once
+
+PARALLEL_CHILD = r"""
+import sys
+sys.path.insert(0, sys.argv[2])
+import musicanalyze  # noqa: F401  (gives this process its own numba cache folder)
+import numpy as np, librosa
+y = np.random.default_rng(int(sys.argv[1])).standard_normal(22050 * 15).astype("float32")
+librosa.beat.beat_track(y=y, sr=22050)
+librosa.onset.onset_detect(y=y, sr=22050)
+"""
+
+
+def parallel_checks(tmp):
+    """On the server the app's worker warms up while this self-test runs. When processes shared one numba
+    cache folder, that overlap crashed the self-test (segfault in librosa's beat tracker); reproduced
+    locally with 13 of 24 processes crashing. Start 3 analyses at once on one fresh folder."""
+    print("\n== Several analyses at once (shared compiled-code cache) ==")
+    cache = Path(tmp) / "numba-shared"
+    env = {**os.environ, "NUMBA_CACHE_DIR": str(cache)}
+    procs = [subprocess.Popen([sys.executable, "-c", PARALLEL_CHILD, str(i), str(Path(__file__).parent)],
+                              env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True) for i in range(3)]
+    codes, errs = [], []
+    for p in procs:
+        try:
+            _, err = p.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            _, err = p.communicate()
+        codes.append(p.returncode)
+        errs.append(err.strip().splitlines()[-1] if p.returncode and err.strip() else "")
+    check("parallel", "3 analyses starting together don't crash each other", all(c == 0 for c in codes),
+          f"exit codes {codes} {' | '.join(e for e in errs if e)}")
+
+
 # ---------------------------------------------------------------- full web-app run (simulated AI)
 
 def free_port():
@@ -634,6 +669,11 @@ def main():
                 ai_checks(res)
             except Exception:
                 check("ai", "AI check ran", False, traceback.format_exc(limit=2))
+        if args.live or args.full:
+            try:
+                parallel_checks(tmp)
+            except Exception:
+                check("parallel", "parallel check ran", False, traceback.format_exc(limit=2))
         if args.live:
             try:
                 live_checks(args.live.rstrip("/"), tmp)
