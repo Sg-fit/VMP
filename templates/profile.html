@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ user.username }} · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  h1 { overflow-wrap: anywhere; }
+  .readout { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 2px solid var(--ink); margin: 28px 0 8px; }
+  .readout div { padding: 14px 12px 0 0; }
+  .readout b { display: block; font-size: clamp(1.7rem, 4vw, 2.6rem); line-height: 1; letter-spacing: -.02em; }
+  .readout span { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  @media (max-width: 600px) { .readout { grid-template-columns: 1fr 1fr; row-gap: 16px; } }
+  .sentence { font-size: clamp(1.2rem, 2.6vw, 1.6rem); line-height: 1.3; letter-spacing: -.01em; max-width: 32em; margin: 32px 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 40px; }
+  .stat h3 { font-size: .74rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; margin: 28px 0 10px;
+             display: flex; align-items: center; gap: 8px; }
+  .stat h3::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+  .bars { list-style: none; padding: 0; margin: 0; }
+  .bars li { display: grid; grid-template-columns: minmax(0, 1fr) 2.5em; gap: 10px; align-items: center; padding: 5px 0;
+             border-bottom: 1px solid var(--line); font-size: .92rem; }
+  .bars .lvl { height: 6px; background: var(--faint); margin-top: 4px; }
+  .bars .lvl i { display: block; height: 100%; background: var(--ink); }
+  .bars .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chips span { border: 1px solid var(--line); padding: 4px 10px; font-size: .9rem; }
+  .recent { list-style: none; padding: 0; margin: 0; }
+  .recent li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  .recent a { overflow-wrap: anywhere; }
+  .recent span { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+  .signout { margin-top: 48px; }
+  .signout button { font: inherit; background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline;
+                    cursor: pointer; }
+</style>
+{% endblock %}
+{% macro bars(pairs) -%}
+  {% set top = pairs[0][1] if pairs else 1 %}
+  <ul class="bars">
+    {% for name, n in pairs %}
+    <li><div>{{ name }}<div class="lvl"><i style="width: {{ (100 * n / top)|round|int }}%"></i></div></div>
+        <span class="n">{{ n }}</span></li>
+    {% endfor %}
+  </ul>
+{%- endmacro %}
+{% block content %}
+<p class="eyebrow">Profile · member since {{ user.created|datetime(date_only=True) }}</p>
+<h1>{{ user.username }}</h1>
+
+<div class="readout">
+  <div><b>{{ p.analyses }}</b><span>saved analyses</span></div>
+  <div><b>{{ p.tracks }}</b><span>tracks</span></div>
+  <div><b>{{ p.minutes or 0 }}</b><span>minutes of music</span></div>
+  <div><b>{{ p.tempo.median if p.tempo else '—' }}</b><span>typical BPM</span></div>
+</div>
+
+{% if p.tracks %}
+  <p class="sentence">{{ p.sentence }}</p>
+  <div class="grid2">
+    <div class="stat"><h3>Keys you use</h3>{{ bars(p['keys']) }}</div>
+    <div class="stat"><h3>Modes</h3>{{ bars(p.modes) }}</div>
+    <div class="stat"><h3>Feel</h3>{{ bars(p.moods) }}
+      {% if p.energy_avg %}<p class="muted small">Average energy {{ p.energy_avg }}/10</p>{% endif %}</div>
+    <div class="stat"><h3>Tempo & meter</h3>
+      {% if p.tempo %}<p>{{ p.tempo.min }}–{{ p.tempo.max }} BPM, typically {{ p.tempo.median }}</p>{% endif %}
+      {{ bars(p.meters) }}</div>
+    <div class="stat"><h3>Chords you lean on</h3><div class="chips">{% for c in p.chords %}<span>{{ c }}</span>{% endfor %}</div></div>
+    <div class="stat"><h3>Instruments</h3>
+      <p>Drums in {{ p.drums_pct }}% of your tracks, a bass line in {{ p.bass_pct }}%.</p></div>
+  </div>
+  <div class="stat"><h3>Recent</h3>
+    <ul class="recent">
+      {% for it in recent %}
+        <li><a href="{{ url_for('job', job_id=it.job_id) }}">{{ it.title }}</a><span>{{ it.created|datetime }}</span></li>
+      {% endfor %}
+    </ul>
+    <p><a href="{{ url_for('history') }}">All of your history →</a></p>
+  </div>
+{% else %}
+  <p class="sentence muted">Your summary appears here once you've saved an analysis.</p>
+  <a class="btn primary" href="{{ url_for('index') }}">Analyse a track →</a>
+{% endif %}
+
+<form class="signout" method="post" action="{{ url_for('logout') }}"><button type="submit">Sign out</button></form>
+{% endblock %}

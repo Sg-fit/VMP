@@ -10,7 +10,8 @@ Use ONE gunicorn worker: analysis jobs run in a background thread inside the pro
 
 Environment variables (all optional):
   NVIDIA_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY   enable the AI brainstorm
-  APP_PASSWORD     require this password (HTTP basic auth, any username)
+  SECRET_KEY       signs the sign-in cookie (default: a random key kept in DATA_DIR/.secret_key)
+  UPLOADS_PER_HOUR max uploads per visitor per hour (default 30)
   DATA_DIR         where jobs are stored (default ./jobs)
   MAX_UPLOAD_MB    max total upload size per request (default 95; Cloudflare free plan caps at 100)
   MAX_FILES        max tracks per job (default 10)
@@ -18,11 +19,10 @@ Environment variables (all optional):
   JOB_TIMEOUT_MIN  stop a job that runs longer than this (default 30)
 """
 
-import hashlib
-import hmac
 import io
 import json
 import os
+import secrets
 import queue
 import re
 import shutil
@@ -39,6 +39,7 @@ from flask import (Flask, Response, abort, jsonify, redirect, render_template, r
                    send_file, send_from_directory, session, url_for)
 from werkzeug.utils import secure_filename
 
+import accounts
 import musicanalyze as ma
 from job_runner import read_status, write_status
 
@@ -47,16 +48,29 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", 95))
 MAX_FILES = int(os.environ.get("MAX_FILES", 10))
 JOB_TTL_HOURS = float(os.environ.get("JOB_TTL_HOURS", 24))
 JOB_TIMEOUT_MIN = float(os.environ.get("JOB_TIMEOUT_MIN", 30))
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+UPLOADS_PER_HOUR = int(os.environ.get("UPLOADS_PER_HOUR", 30))
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
-# The login cookie is signed with a key derived from the password: it survives restarts, and changing
-# APP_PASSWORD logs everyone out.
-app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(b"music-analyzer-login:" + APP_PASSWORD.encode()).digest()
-app.config.update(SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=30 * 24 * 3600)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _secret_key():
+    """The key that signs the sign-in cookie. Kept in the data volume, so people stay signed in across
+    restarts and redeploys."""
+    if os.environ.get("SECRET_KEY"):
+        return os.environ["SECRET_KEY"]
+    f = DATA_DIR / ".secret_key"
+    if not f.exists():
+        f.write_text(secrets.token_hex(32))
+    return f.read_text().strip()
+
+
+app.secret_key = _secret_key()
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True,
+                  PERMANENT_SESSION_LIFETIME=30 * 24 * 3600)
+accounts.init(DATA_DIR / "users.db")
 
 LLM, LLM_LABEL = ma.make_llm()
 job_queue = queue.Queue()
@@ -65,18 +79,25 @@ job_queue = queue.Queue()
 # ---------------------------------------------------------------- job storage (one folder per job)
 
 def get_job_dir(job_id):
+    """The job's folder. Temporary results open for anyone with the link; an analysis saved to someone's
+    history opens only for them (404 for everyone else, so its existence isn't revealed)."""
     if not JOB_ID.match(job_id):
         abort(404)
     d = DATA_DIR / job_id
     if not d.is_dir():
         abort(404)
+    owner = accounts.owner_of(job_id)
+    if owner is not None and owner != session.get("uid"):
+        abort(404)
     return d
 
 
 def cleanup_old_jobs():
+    """Delete temporary results after JOB_TTL_HOURS. Analyses saved to someone's history are kept."""
     cutoff = time.time() - JOB_TTL_HOURS * 3600
+    keep = accounts.saved_job_ids()
     for d in DATA_DIR.iterdir():
-        if d.is_dir() and JOB_ID.match(d.name):
+        if d.is_dir() and JOB_ID.match(d.name) and d.name not in keep:
             s = read_status(d)
             if s.get("state") not in ("queued", "running") and s.get("updated", 0) < cutoff:
                 shutil.rmtree(d, ignore_errors=True)
@@ -191,51 +212,159 @@ fail_interrupted_jobs()
 threading.Thread(target=worker, daemon=True).start()
 
 
-# ---------------------------------------------------------------- auth
+# ---------------------------------------------------------------- accounts
 
 @app.get("/health")
 def health():
-    """For deploy checks and monitoring: no password needed, reveals nothing private."""
+    """For deploy checks and monitoring: reveals nothing private."""
     alive = bool(runner.proc and runner.proc.poll() is None)
     return jsonify(status="ok", version=ma.CODE_VERSION, worker_running=alive, ai_configured=bool(LLM),
                    jobs_waiting=job_queue.qsize())
 
 
-def _password_ok(pw):
-    return hmac.compare_digest((pw or "").encode(), APP_PASSWORD.encode())
+def current_user():
+    uid = session.get("uid")
+    return accounts.get_user(uid) if uid else None
 
 
-@app.before_request
-def require_password():
-    """A login page for browsers (phones' in-app browsers, e.g. WeChat, never show the pop-up login box of
-    HTTP basic auth), and basic auth still accepted for scripts and the self-test."""
-    if not APP_PASSWORD or request.path in ("/health", "/login"):
-        return None
-    if session.get("ok"):
-        return None
-    auth = request.authorization
-    if auth and _password_ok(auth.password):
-        return None
-    if request.method in ("GET", "HEAD") and "text/html" in request.headers.get("Accept", ""):
-        return redirect(url_for("login", next=request.full_path.rstrip("?")))
-    return Response("Password required.", 401, {"WWW-Authenticate": 'Basic realm="Music Analyzer"'})
+@app.context_processor
+def inject_user():
+    return {"user": current_user()}
+
+
+@app.template_filter("datetime")
+def _datetime(ts, date_only=False):
+    return time.strftime("%d %b %Y" if date_only else "%d %b %Y, %H:%M", time.localtime(ts or 0))
+
+
+def _safe_next(default="/"):
+    nxt = request.values.get("next") or default
+    return nxt if nxt.startswith("/") and not nxt.startswith("//") else default  # only ever back into this site
+
+
+def _sign_in(user_id):
+    session.clear()  # a fresh session on sign-in
+    session["uid"] = user_id
+    session.permanent = True  # remembered for 30 days on this device
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    nxt, error = _safe_next(), None
+    if request.method == "POST":
+        if request.form.get("password") != request.form.get("password2"):
+            error = "The two passwords don't match."
+        else:
+            uid, error = accounts.create_user(request.form.get("username"), request.form.get("password"))
+            if uid:
+                _sign_in(uid)
+                return redirect(nxt)
+    return render_template("account.html", mode="signup", error=error, next=nxt,
+                           username=request.form.get("username", "")), (400 if error else 200)
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    nxt = request.values.get("next") or "/"
-    if not nxt.startswith("/") or nxt.startswith("//"):  # only ever go back into this site
-        nxt = "/"
-    error = None
+    nxt, error = _safe_next(), None
     if request.method == "POST":
-        if _password_ok(request.form.get("password")):
-            session.clear()
-            session["ok"] = True
-            session.permanent = True  # remembered for 30 days on this device
+        uid = accounts.check_login(request.form.get("username"), request.form.get("password"))
+        if uid:
+            _sign_in(uid)
             return redirect(nxt)
-        time.sleep(1)  # slow down guessing
-        error = "That password isn't right."
-    return render_template("login.html", error=error, next=nxt, version=ma.CODE_VERSION), (401 if error else 200)
+        time.sleep(1)  # slow down password guessing
+        error = "That username and password don't match."
+    return render_template("account.html", mode="login", error=error, next=nxt,
+                           username=request.form.get("username", "")), (401 if error else 200)
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
+def _job_title(d):
+    files = read_status(d).get("files") or []
+    return ", ".join(Path(f).stem for f in files[:3]) + (f" +{len(files) - 3} more" if len(files) > 3 else "") or "Analysis"
+
+
+def _summaries(items):
+    """Fill in the summary of saved analyses that finished since they were saved."""
+    for it in items:
+        if it["summary"] is None:
+            res = DATA_DIR / it["job_id"] / "output" / "music_results.json"
+            if res.exists() and read_status(DATA_DIR / it["job_id"]).get("state") == "done":
+                it["summary"] = accounts.job_summary(json.loads(res.read_text(encoding="utf-8")))
+                accounts.store_summary(it["job_id"], it["summary"])
+    return items
+
+
+def _require_user():
+    u = current_user()
+    if not u:
+        abort(redirect(url_for("login", next=request.path)))
+    return u
+
+
+@app.get("/history")
+def history():
+    u = _require_user()
+    items = _summaries(accounts.history(u["id"]))
+    for it in items:
+        it["state"] = read_status(DATA_DIR / it["job_id"]).get("state", "missing")
+    return render_template("history.html", items=items, version=ma.CODE_VERSION)
+
+
+@app.get("/profile")
+def profile():
+    u = _require_user()
+    items = _summaries(accounts.history(u["id"]))
+    return render_template("profile.html", p=accounts.profile_summary(items), recent=items[:5], version=ma.CODE_VERSION)
+
+
+@app.post("/jobs/<job_id>/save")
+def job_save(job_id):
+    u = _require_user()
+    d = get_job_dir(job_id)
+    problem = accounts.save_job(u["id"], job_id, _job_title(d))
+    if problem:
+        abort(403, problem)
+    return redirect(url_for("job", job_id=job_id))
+
+
+@app.post("/jobs/<job_id>/rename")
+def job_rename(job_id):
+    u = _require_user()
+    accounts.rename_job(u["id"], job_id, request.form.get("title") or "Analysis")
+    return redirect(url_for("history"))
+
+
+@app.post("/jobs/<job_id>/delete")
+def job_delete(job_id):
+    """Remove an analysis from your history and delete its files."""
+    u = _require_user()
+    if accounts.forget_job(u["id"], job_id) and read_status(DATA_DIR / job_id).get("state") not in ("queued", "running"):
+        shutil.rmtree(DATA_DIR / job_id, ignore_errors=True)
+    return redirect(url_for("history"))
+
+
+_recent_uploads = {}
+
+
+def _visitor():
+    return (request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote_addr or "?")
+
+
+def _too_many_uploads():
+    """Analysis is open to everyone, so cap how often one visitor can start it."""
+    now, who = time.time(), _visitor()
+    recent = [t for t in _recent_uploads.get(who, []) if t > now - 3600]
+    if len(recent) >= UPLOADS_PER_HOUR:
+        _recent_uploads[who] = recent
+        return True
+    _recent_uploads[who] = recent + [now]
+    return False
 
 
 # ---------------------------------------------------------------- pages
@@ -258,6 +387,8 @@ def analyze():
     if len(uploads) > MAX_FILES:
         return form_page(f"Too many files — the limit is {MAX_FILES} per upload.", 400)
 
+    if _too_many_uploads():
+        return form_page(f"You've started {UPLOADS_PER_HOUR} analyses in the last hour — please wait a little.", 429)
     cleanup_old_jobs()
     job_id = uuid.uuid4().hex
     d = DATA_DIR / job_id
@@ -281,6 +412,9 @@ def analyze():
                  melody=(request.form.get("melody") or "")[:2000],
                  created=time.time(),
                  message=f"Waiting in line ({ahead} job{'s' if ahead != 1 else ''} ahead)…" if ahead else "Starting…")
+    u = current_user()
+    if u:  # signed in: goes straight into their history
+        accounts.save_job(u["id"], job_id, _job_title(d))
     job_queue.put(job_id)
     return redirect(url_for("job", job_id=job_id))
 
@@ -305,7 +439,7 @@ def job(job_id):
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
-                           version=ma.CODE_VERSION)
+                           version=ma.CODE_VERSION, saved=accounts.owner_of(job_id) is not None)
 
 
 @app.get("/jobs/<job_id>/status")

@@ -37,8 +37,11 @@
     .meter i { display: block; width: 3px; background: var(--ink); }
     .meter i:nth-child(1) { height: 45%; } .meter i:nth-child(2) { height: 100%; background: var(--accent); }
     .meter i:nth-child(3) { height: 70%; } .meter i:nth-child(4) { height: 35%; } .meter i:nth-child(5) { height: 55%; }
+    .bar nav { display: flex; gap: 18px; align-items: center; }
     .bar nav a { color: var(--muted); text-decoration: none; font-size: .92rem; }
     .bar nav a:hover { color: var(--ink); }
+    .bar nav a.me { color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--accent); }
+    @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 14px; } }
 
     main { max-width: 1040px; margin: 0 auto; padding: 48px 16px 80px; }
     footer { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
@@ -82,9 +85,17 @@
 </head>
 <body>
 <header class="bar"><div class="bar-in">
-  <a class="brand" href="{{ url_for('index') }}"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-    Music Inspiration Analyzer</a>
-  <nav><a href="{{ url_for('index') }}">New analysis</a></nav>
+  <a class="brand" href="{{ url_for('index') }}" aria-label="Music Inspiration Analyzer, home"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    <span class="name">Music Inspiration Analyzer</span></a>
+  <nav>
+    <a href="{{ url_for('index') }}">Analyse</a>
+    {% if user %}
+      <a href="{{ url_for('history') }}">History</a>
+      <a href="{{ url_for('profile') }}" class="me">{{ user.username }}</a>
+    {% else %}
+      <a href="{{ url_for('login', next=request.path) }}">Sign in</a>
+    {% endif %}
+  </nav>
 </div></header>
 <main>
   {% block content %}{% endblock %}

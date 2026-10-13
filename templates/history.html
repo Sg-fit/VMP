@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}History · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .hist { list-style: none; margin: 32px 0 0; padding: 0; border-top: 2px solid var(--ink); }
+  .hist > li { padding: 18px 0; border-bottom: 1px solid var(--line); display: grid;
+               grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; align-items: start; }
+  .hist .title { font-size: 1.2rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); text-decoration: none;
+                 overflow-wrap: anywhere; }
+  .hist .title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+  .hist .when { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+  .tracks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .trk { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .88rem; color: var(--muted); }
+  .trk b { color: var(--ink); font-weight: 600; margin-right: 4px; overflow-wrap: anywhere; }
+  .tag { font-size: .7rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px;
+         border: 1px solid var(--line); color: var(--muted); }
+  .tag.live { border-color: var(--accent); color: var(--ink); }
+  .actions { display: flex; gap: 6px; align-items: center; }
+  .actions form { margin: 0; }
+  .actions button { font: inherit; font-size: .82rem; background: none; border: 1px solid var(--line); color: var(--muted);
+                    padding: 5px 10px; cursor: pointer; border-radius: 0; }
+  .actions button:hover { border-color: var(--ink); color: var(--ink); }
+  details.rename summary { list-style: none; cursor: pointer; font-size: .82rem; border: 1px solid var(--line); padding: 5px 10px;
+                           color: var(--muted); }
+  details.rename summary::-webkit-details-marker { display: none; }
+  details.rename[open] { grid-column: 1 / -1; }
+  details.rename input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+                         border-radius: 0; width: min(100%, 360px); margin: 8px 6px 0 0; }
+  .empty { margin-top: 32px; }
+  @media (max-width: 600px) { .hist > li { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+{% block content %}
+<p class="eyebrow">Saved analyses</p>
+<h1>History</h1>
+<p class="lede">Everything you analyse while signed in is kept here until you delete it. Open one to read the full
+  report, play the MIDI or download the sheet music again.</p>
+<a class="btn primary" href="{{ url_for('index') }}">New analysis →</a>
+<a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
+
+{% if items %}
+<ul class="hist">
+  {% for it in items %}
+  <li>
+    <div>
+      <a class="title" href="{{ url_for('job', job_id=it.job_id) }}">{{ it.title }}</a>
+      <div class="when">{{ it.created|datetime }}
+        {% if it.state in ('queued', 'running') %} · <span class="tag live">analysing</span>
+        {% elif it.state == 'error' %} · <span class="tag">failed</span>{% endif %}</div>
+    </div>
+    <div class="actions">
+      <details class="rename"><summary>Rename</summary>
+        <form method="post" action="{{ url_for('job_rename', job_id=it.job_id) }}">
+          <input name="title" value="{{ it.title }}" maxlength="200" aria-label="New name"><button type="submit">Save</button>
+        </form>
+      </details>
+      <form method="post" action="{{ url_for('job_delete', job_id=it.job_id) }}"
+            onsubmit="return confirm('Delete this analysis and its files? This can\'t be undone.')">
+        <button type="submit">Delete</button>
+      </form>
+    </div>
+    {% if it.summary %}
+    <div class="tracks">
+      {% for t in it.summary.tracks %}
+        <div class="trk"><b>{{ t.file }}</b>
+          {% if t.error %}<span>could not be analysed</span>{% else %}
+          <span>{{ t.duration }}</span>
+          {% if t.tempo_bpm %}<span>{{ t.tempo_bpm|round|int }} BPM {{ t.meter or '' }}</span>{% endif %}
+          <span>{{ t.key }} ({{ t.camelot }})</span>
+          <span>{{ t.mode }}</span>
+          {% if t.energy %}<span>energy {{ t.energy }}/10 · {{ t.mood }}</span>{% endif %}
+          {% if t.form %}<span>form {{ t.form }}</span>{% endif %}
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty muted">Nothing saved yet. Analyse a track while signed in, or open a result and press “Save to history”.</p>
+{% endif %}
+{% endblock %}

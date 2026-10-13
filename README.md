@@ -35,7 +35,7 @@ Open http://localhost:8000, drop in your tracks, and you'll get the report on th
 ```bash
 git clone https://github.com/<you>/<repo>.git
 cd <repo>
-cp .env.example .env        # then edit .env: API key, APP_PASSWORD
+cp .env.example .env        # then edit .env: API key
 docker compose up -d --build
 ```
 
@@ -46,7 +46,7 @@ The app listens on **127.0.0.1:8090** (only reachable from the server itself; ch
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-export NVIDIA_API_KEY=nvapi-...   APP_PASSWORD=choose-one
+export NVIDIA_API_KEY=nvapi-...
 gunicorn --workers 1 --threads 4 --timeout 120 --bind 127.0.0.1:8090 app:app
 ```
 
@@ -58,7 +58,8 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 |---|---|---|
 | `NVIDIA_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | Turns on the AI brainstorm (optional) |
 | `MUSIC_MODEL` | provider default | Use a different model |
-| `APP_PASSWORD` | — | If set, the site asks for this password (any username works). **Recommended on a public server**, so strangers can't use up your CPU and AI quota. |
+| `UPLOADS_PER_HOUR` | 30 | How many analyses one visitor can start per hour (analysis is open to everyone) |
+| `SECRET_KEY` | random, kept in the data volume | Signs the sign-in cookie |
 | `MAX_UPLOAD_MB` | 95 | Max upload size per request (Cloudflare's free plan caps uploads at 100 MB) |
 | `MAX_FILES` | 10 | Max tracks per upload |
 | `JOB_TTL_HOURS` | 24 | How long results are kept |
@@ -98,8 +99,11 @@ Keep `MAX_UPLOAD_MB` under 100, because Cloudflare's free plan rejects larger up
 ### Privacy
 
 - Uploaded audio is deleted as soon as it has been analysed.
-- Results (report, JSON, MIDI) are kept for `JOB_TTL_HOURS`, under an unguessable link.
-- Anyone who has a results link can open it, so set `APP_PASSWORD` if that matters.
+- Analysing needs no account. Without one, results (report, JSON, MIDI) are kept for `JOB_TTL_HOURS` under an
+  unguessable link that anyone who has it can open.
+- With a free account (username + password, no email), analyses are saved to a private **History** until
+  deleted, and a **Profile** page sums up the keys, tempos, modes, chords and moods across them. A saved
+  analysis opens only for its owner. Accounts live in `users.db` in the data volume; passwords are stored hashed.
 
 ## Updating the server and checking it works
 

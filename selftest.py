@@ -475,20 +475,7 @@ def web_checks(tmp, files):
                 time.sleep(1)
         h = requests.get(base + "/health", timeout=5)
         check("web", "health page answers without a password", h.ok and "version" in h.json(), h.text[:80])
-        check("web", "pages require the password", requests.get(base + "/", timeout=5).status_code == 401)
-        browser = requests.Session()
-        browser.headers["Accept"] = "text/html"
-        first = browser.get(base + "/", allow_redirects=False, timeout=5)
-        check("web", "a browser without the password is sent to the login page (works in WeChat etc.)",
-              first.status_code == 302 and "/login" in first.headers.get("Location", ""))
-        wrong = browser.post(base + "/login", data={"password": "nope", "next": "/"}, allow_redirects=False, timeout=10)
-        right = browser.post(base + "/login", data={"password": "selftest", "next": "/"}, allow_redirects=False, timeout=10)
-        check("web", "login page: wrong password refused, right one remembered",
-              wrong.status_code == 401 and right.status_code == 302 and
-              browser.get(base + "/", timeout=5).status_code == 200)
-        evil = requests.post(base + "/login", data={"password": "selftest", "next": "//evil.example"},
-                             allow_redirects=False, timeout=10)
-        check("web", "login never redirects to another site", evil.headers.get("Location") == "/")
+        check("web", "analysing needs no account or password", requests.get(base + "/", timeout=5).status_code == 200)
 
         def run_job(paths, melody=""):
             up = [("tracks", (Path(p).name, open(p, "rb"))) for p in paths]
@@ -552,6 +539,7 @@ def web_checks(tmp, files):
         check("web", "a killed worker is replaced and the job finishes", s3["state"] == "done", s3.get("message", ""))
         job4, s4, _, _ = run_job([files["short_m4a"]])
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
+        account_checks(base, job4)
     finally:
         import psutil
         try:
@@ -562,6 +550,44 @@ def web_checks(tmp, files):
         proc.kill()
         proc.wait(timeout=10)
         fake.shutdown()
+
+
+def account_checks(base, job):
+    """Accounts: history, profile, and saved analyses private to their owner. `job` is a finished
+    anonymous analysis."""
+    import requests
+    anon = requests.Session()
+    check("web", "an anonymous result opens for anyone with the link", anon.get(f"{base}/jobs/{job}", timeout=10).ok)
+    res = anon.get(f"{base}/jobs/{job}/files/music_results.json", timeout=10).json()[0]
+    key, tempo = res["key"], (f"{int(res['tempo_bpm'] + 0.5)} BPM" if res.get("tempo_bpm") else res["duration"])
+    alice, bob = requests.Session(), requests.Session()
+    a = alice.post(base + "/signup", data={"username": "alice", "password": "selftest-pw", "password2": "selftest-pw",
+                                           "next": "/"}, allow_redirects=False, timeout=10)
+    dup = bob.post(base + "/signup", data={"username": "Alice", "password": "another-pw", "password2": "another-pw"},
+                   allow_redirects=False, timeout=10)
+    check("web", "sign-up works; a taken username (any case) is refused", a.status_code == 302 and dup.status_code == 400)
+    bob.post(base + "/signup", data={"username": "bob", "password": "selftest-pw2", "password2": "selftest-pw2"}, timeout=10)
+    alice.post(f"{base}/jobs/{job}/save", timeout=10)
+    hist = alice.get(base + "/history", timeout=10).text
+    prof = alice.get(base + "/profile", timeout=10).text
+    check("web", "a saved analysis appears in History with its key and tempo",
+          "short_phone_clip" in hist and key in hist and tempo in hist, hist[-300:])
+    check("web", "the profile sums up the saved music", key in prof and "Your music is" in prof)
+    check("web", "a saved analysis is private: others get 404",
+          anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and
+          bob.get(f"{base}/jobs/{job}/download.zip", timeout=10).status_code == 404 and
+          alice.get(f"{base}/jobs/{job}", timeout=10).ok)
+    check("web", "history and profile need a sign-in",
+          anon.get(base + "/history", allow_redirects=False, timeout=10).status_code == 302)
+    wrong = requests.post(base + "/login", data={"username": "alice", "password": "nope"}, allow_redirects=False, timeout=10)
+    evil = requests.post(base + "/login", data={"username": "alice", "password": "selftest-pw", "next": "//evil.example"},
+                         allow_redirects=False, timeout=10)
+    check("web", "sign-in: wrong password refused; never redirects to another site",
+          wrong.status_code == 401 and evil.headers.get("Location") == "/")
+    alice.post(f"{base}/jobs/{job}/delete", timeout=10)
+    check("web", "deleting from History removes the analysis",
+          alice.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and "short_phone_clip" not in
+          alice.get(base + "/history", timeout=10).text)
 
 
 # ---------------------------------------------------------------- facts you've confirmed about your own recordings

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Create an account' if mode == 'signup' else 'Sign in' }} · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .acct { max-width: 440px; }
+  .acct label { display: block; font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+                margin-bottom: 6px; }
+  .acct input[type=text], .acct input[type=password] { width: 100%; font: inherit; font-size: 1.05rem; padding: 11px 12px;
+      border-radius: 0; border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 16px; }
+  .acct input:focus { border-color: var(--ink); outline: none; }
+  .acct .btn { width: 100%; justify-content: center; margin-top: 4px; }
+  .switch { margin-top: 18px; font-size: .92rem; }
+</style>
+{% endblock %}
+{% block content %}
+<p class="eyebrow">Your account</p>
+{% if mode == 'signup' %}
+  <h1>Create an account</h1>
+  <p class="lede">Analysing is free and needs no account. With one, your analyses are saved to your history
+    instead of disappearing after a day, and your profile sums up your music.</p>
+{% else %}
+  <h1>Sign in</h1>
+  <p class="lede">See your saved analyses and your profile. You'll stay signed in on this device for 30 days.</p>
+{% endif %}
+<form class="panel acct" method="post">
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <label for="username">Username</label>
+  <input type="text" id="username" name="username" value="{{ username }}" autocomplete="username"
+         autocapitalize="none" spellcheck="false" required {% if mode == 'signup' %}pattern="[A-Za-z0-9_.\-]{3,30}"{% endif %} autofocus>
+  <label for="password">Password{% if mode == 'signup' %} <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— at least 8 characters</span>{% endif %}</label>
+  <input type="password" id="password" name="password" required
+         autocomplete="{{ 'new-password' if mode == 'signup' else 'current-password' }}" {% if mode == 'signup' %}minlength="8"{% endif %}>
+  {% if mode == 'signup' %}
+    <label for="password2">Repeat password</label>
+    <input type="password" id="password2" name="password2" autocomplete="new-password" minlength="8" required>
+  {% endif %}
+  <button class="btn primary" type="submit">{{ 'Create account →' if mode == 'signup' else 'Sign in →' }}</button>
+  <p class="switch muted">
+    {% if mode == 'signup' %}Already have an account? <a href="{{ url_for('login', next=next) }}">Sign in</a>
+    {% else %}New here? <a href="{{ url_for('signup', next=next) }}">Create an account</a>{% endif %}
+  </p>
+</form>
+{% endblock %}

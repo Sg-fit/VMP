@@ -88,9 +88,12 @@
   <div><span class="n">03</span><b>Drums &amp; bass</b>The drum groove as a grid, the bass written out as sheet music.</div>
   <div><span class="n">04</span><b>Ideas &amp; MIDI</b>Concrete suggestions, loops, variations and the bass as .mid files.</div>
 </section>
-<p class="muted small" style="margin-top:40px;max-width:46em">Uploaded audio is deleted as soon as it's analysed. Results are
-  kept for {{ ttl|round|int }} hours, and anyone with a results link can open it. Only the analysis numbers go to the AI,
-  never the audio.</p>
+<p class="muted small" style="margin-top:40px;max-width:46em">No account needed. Uploaded audio is deleted as soon as it's
+  analysed. Without an account, results are kept for {{ ttl|round|int }} hours and anyone with the results link can
+  open them. {% if user %}You're signed in, so this analysis goes into your private
+  <a href="{{ url_for('history') }}">history</a>.{% else %}<a href="{{ url_for('signup') }}">Create a free account</a>
+  to keep your analyses in a private history and get a profile that sums up your music.{% endif %}
+  Only the analysis numbers go to the AI, never the audio.</p>
 
 <script>
   const input = document.getElementById('tracks'), drop = document.getElementById('drop'),

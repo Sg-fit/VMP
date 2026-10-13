@@ -9,6 +9,10 @@
   @keyframes level { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
   @media (prefers-reduced-motion: reduce) { .working i { animation: none; transform: scaleY(.6); } }
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; align-items: center; }
+  .savebar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 16px; }
+  .savebar form { margin: 0; }
+  .savebar .ok { font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+  .savebar .ok::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .midis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
            align-items: center; }
   .midis .label { font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
@@ -51,13 +55,25 @@
   <div>
     <p class="eyebrow">Results</p>
     <h1>Your analysis</h1>
-    <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }} · results kept for a limited time — download anything you want to keep</div>
+    <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · temporary results — save them or download anything you want to keep{% endif %}</div>
     <div class="toolbar">
       <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}">Download everything (.zip) ↓</a>
       {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet — wait for “ready” for the complete package.</span>{% endif %}
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}">Report (.md)</a>
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}">Data (.json)</a>
       <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>
+    </div>
+    <div class="savebar">
+      {% if saved %}
+        <span class="ok">Saved in your history</span> · <a href="{{ url_for('history') }}">History</a>
+      {% elif user %}
+        <form method="post" action="{{ url_for('job_save', job_id=job_id) }}"><button class="btn secondary" type="submit">Save to history</button></form>
+        <span class="muted small">Otherwise these results are deleted after a day.</span>
+      {% else %}
+        <span class="muted small">These results are deleted after a day.
+          <a href="{{ url_for('login', next=request.path) }}">Sign in</a> or
+          <a href="{{ url_for('signup', next=request.path) }}">create a free account</a> to keep them in your history.</span>
+      {% endif %}
     </div>
     {% if midi_files %}
       <div class="midis"><span class="label">MIDI</span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
