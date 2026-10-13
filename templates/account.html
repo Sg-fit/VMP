@@ -3,13 +3,25 @@
 {% block head %}
 <style>
   .acct { max-width: 440px; }
-  .acct label { display: block; font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
-                margin-bottom: 6px; }
+  .acct label { position: relative; display: flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 600; letter-spacing: .12em;
+                text-transform: uppercase; margin-bottom: 6px; }
   .acct input[type=text], .acct input[type=password] { width: 100%; font: inherit; font-size: 1.05rem; padding: 11px 12px;
       border-radius: 0; border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 16px; }
   .acct input:focus { border-color: var(--ink); outline: none; }
   .acct .btn { width: 100%; justify-content: center; margin-top: 4px; }
   .switch { margin-top: 18px; font-size: .92rem; }
+
+  /* "?" next to a field: the rule and why, on hover (mouse) or tap/focus (phones and keyboards) */
+  .hint { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none;
+          border: 1px solid var(--muted); color: var(--muted); font-size: .7rem; font-weight: 700; letter-spacing: 0;
+          text-transform: none; cursor: help; user-select: none; }
+  .hint:hover, .hint:focus { border-color: var(--accent); color: var(--ink); outline: none; }
+  .hint .tip { display: none; position: absolute; z-index: 10; left: 0; right: 0; top: calc(100% + 6px);
+               padding: 12px 14px; background: var(--ink); color: var(--bg);
+               font-size: .84rem; font-weight: 400; line-height: 1.45; text-align: left; cursor: auto; }
+  .hint:hover .tip, .hint:focus .tip, .hint:focus-within .tip { display: block; }
+  .tip ul { margin: 0; padding-left: 16px; } .tip li { margin: 0 0 6px; } .tip li:last-child { margin: 0; }
+  .tip b { color: var(--accent); font-weight: 600; }
 </style>
 {% endblock %}
 {% block content %}
@@ -25,14 +37,40 @@
 <form class="panel acct" method="post">
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   <input type="hidden" name="next" value="{{ next }}">
-  <label for="username">Username</label>
+  <label for="username">Username
+    {% if mode == 'signup' %}
+    <span class="hint" tabindex="0" role="button" aria-label="Username rules" aria-describedby="tip-user">?
+      <span class="tip" role="tooltip" id="tip-user"><ul>
+        <li><b>3–30 characters.</b> Your name shows in the top bar and as the heading of your profile; very long
+          names would break the layout on phones.</li>
+        <li><b>Letters A–Z, numbers, dots, dashes and underscores, no spaces.</b> Easy to type when you sign in, and
+          nobody can pose as someone else with a look-alike name (e.g. one with an extra space at the end).</li>
+        <li><b>Must be unique; capitals don't count.</b> It's what you sign in with, so “Alice” and “alice” are the
+          same account.</li>
+      </ul></span></span>
+    {% endif %}</label>
   <input type="text" id="username" name="username" value="{{ username }}" autocomplete="username"
-         autocapitalize="none" spellcheck="false" required {% if mode == 'signup' %}pattern="[A-Za-z0-9_.\-]{3,30}"{% endif %} autofocus>
-  <label for="password">Password{% if mode == 'signup' %} <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— at least 8 characters</span>{% endif %}</label>
+         autocapitalize="none" spellcheck="false" required autofocus
+         {% if mode == 'signup' %}pattern="[A-Za-z0-9_.\-]{3,30}" maxlength="30"
+         title="3–30 characters: letters A–Z, numbers, dots, dashes or underscores, no spaces"{% endif %}>
+  <label for="password">Password
+    {% if mode == 'signup' %}
+    <span class="hint" tabindex="0" role="button" aria-label="Password rules" aria-describedby="tip-pw">?
+      <span class="tip" role="tooltip" id="tip-pw"><ul>
+        <li><b>At least 8 characters.</b> Shorter passwords can be guessed by a computer in minutes.</li>
+        <li><b>Anything else goes</b>: spaces, symbols, any language.</li>
+        <li>It's stored scrambled (hashed), so nobody — not even the site's owner — can read it. That also means it
+          can't be recovered if you forget it, so keep it somewhere safe.</li>
+      </ul></span></span>
+    {% endif %}</label>
   <input type="password" id="password" name="password" required
-         autocomplete="{{ 'new-password' if mode == 'signup' else 'current-password' }}" {% if mode == 'signup' %}minlength="8"{% endif %}>
+         autocomplete="{{ 'new-password' if mode == 'signup' else 'current-password' }}"
+         {% if mode == 'signup' %}minlength="8" title="At least 8 characters"{% endif %}>
   {% if mode == 'signup' %}
-    <label for="password2">Repeat password</label>
+    <label for="password2">Repeat password
+      <span class="hint" tabindex="0" role="button" aria-label="Why repeat the password" aria-describedby="tip-pw2">?
+        <span class="tip" role="tooltip" id="tip-pw2">Typing it twice catches a typo you can't see behind the dots —
+          otherwise you could lock yourself out of the new account straight away.</span></span></label>
     <input type="password" id="password2" name="password2" autocomplete="new-password" minlength="8" required>
   {% endif %}
   <button class="btn primary" type="submit">{{ 'Create account →' if mode == 'signup' else 'Sign in →' }}</button>
@@ -41,4 +79,8 @@
     {% else %}New here? <a href="{{ url_for('signup', next=next) }}">Create an account</a>{% endif %}
   </p>
 </form>
+<script>
+  // Tapping a "?" inside a label would otherwise jump to the input and close the explanation.
+  document.querySelectorAll('.hint').forEach(h => h.addEventListener('click', e => { e.preventDefault(); h.focus(); }));
+</script>
 {% endblock %}
