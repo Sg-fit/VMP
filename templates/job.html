@@ -46,11 +46,101 @@
   @keyframes blink { 50% { opacity: .2; } }
   @media (prefers-reduced-motion: reduce) { .aibar .dot { animation: none; } }
   .aibar .btn { padding: 7px 12px; }
+  .notify { font: inherit; font-size: .85rem; cursor: pointer; border-radius: 0; padding: 7px 12px;
+            background: transparent; color: inherit; border: 1px solid currentColor; display: inline-flex; gap: 8px;
+            align-items: center; }
+  .notify::before { content: ""; width: 8px; height: 8px; border: 1px solid currentColor; }
+  .notify[aria-pressed="true"]::before { background: var(--accent); border-color: var(--accent); }
+  .notify-note { font-size: .8rem; opacity: .8; flex-basis: 100%; }
+  .notify-note:empty { display: none; }
   #tip { position: absolute; z-index: 10; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
          background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none; }
 </style>
 {% endblock %}
 {% block content %}
+<script>
+  // "Notify me when the AI is done": opt-in, can be cancelled, remembered for this job across the page reload
+  // that happens when the analysis finishes. System notification where allowed; a chime and a marked tab
+  // title everywhere (in-app browsers such as WeChat's, and iPhone Safari, have no web notifications).
+  window.aiNotify = (function () {
+    const key = 'notify-{{ job_id }}';
+    const supported = 'Notification' in window;
+    const get = () => { try { return localStorage.getItem(key) === '1'; } catch (e) { return false; } };
+    const set = on => { try { on ? localStorage.setItem(key, '1') : localStorage.removeItem(key); } catch (e) {} };
+    let audio = null;
+
+    function render() {
+      const on = get();
+      document.querySelectorAll('.notify').forEach(b => {
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        b.textContent = on ? 'Notifying you — cancel' : 'Notify me when the AI is done';
+      });
+      let note = '';
+      if (on && (!supported || Notification.permission === 'denied')) {
+        note = "This browser won't show notifications, so you'll hear a chime and see ● in the tab title instead.";
+      } else if (on) {
+        note = "You'll get a notification, a chime and ● in the tab title — feel free to switch tabs.";
+      }
+      document.querySelectorAll('.notify-note').forEach(n => { n.textContent = note; });
+    }
+
+    async function toggle() {
+      const on = !get();
+      set(on);
+      if (on) {
+        try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); audio.resume(); } catch (e) {}
+        if (supported && Notification.permission === 'default') {
+          try { await Notification.requestPermission(); } catch (e) {}
+        }
+      }
+      render();
+    }
+
+    function chime() {
+      try {
+        audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+        const t = audio.currentTime;
+        [659.3, 880].forEach((f, i) => {  // two soft notes, E then A
+          const o = audio.createOscillator(), g = audio.createGain();
+          o.frequency.value = f;
+          g.gain.setValueAtTime(0.0001, t + i * 0.18);
+          g.gain.exponentialRampToValueAtTime(0.15, t + i * 0.18 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.18 + 0.6);
+          o.connect(g).connect(audio.destination);
+          o.start(t + i * 0.18);
+          o.stop(t + i * 0.18 + 0.65);
+        });
+      } catch (e) {}
+    }
+
+    function finished(message) {
+      document.querySelectorAll('.notify, .notify-note').forEach(el => { el.style.display = 'none'; });  // nothing left to wait for
+      if (!get()) return;
+      set(false);  // one notification per job
+      render();
+      chime();
+      const title = document.title;
+      if (document.visibilityState !== 'visible') {
+        document.title = '● ' + title;
+        const back = () => { if (document.visibilityState === 'visible') { document.title = title;
+          document.removeEventListener('visibilitychange', back); } };
+        document.addEventListener('visibilitychange', back);
+      }
+      if (supported && Notification.permission === 'granted') {
+        try {
+          const n = new Notification('Music Inspiration Analyzer', { body: message, tag: '{{ job_id }}' });
+          n.onclick = () => { window.focus(); n.close(); };
+        } catch (e) {}
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.notify').forEach(b => b.addEventListener('click', toggle));
+      render();
+    });
+    return { finished, isOn: get };
+  })();
+</script>
 {% if s.state == 'done' %}
   <div>
     <p class="eyebrow">Results</p>
@@ -79,9 +169,14 @@
       <div class="midis"><span class="label">MIDI</span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
   </div>
+  {% if not s.ai_pending %}
+    <script>document.addEventListener('DOMContentLoaded', () => aiNotify.finished('Your music analysis is ready.'));</script>
+  {% endif %}
   {% if s.ai_pending %}
     <div id="aibar" class="aibar"><span class="dot" aria-hidden="true"></span><span id="aitext">Your analysis is ready. The AI is still writing ideas — keep reading, we'll let you know.</span>
-      <button id="aibtn" class="btn primary" style="display:none">Show them</button></div>
+      <button id="aibtn" class="btn primary" style="display:none">Show them</button>
+      <button type="button" class="notify" aria-pressed="false">Notify me when the AI is done</button>
+      <span class="notify-note" aria-live="polite"></span></div>
     <script>
       (function () {
         async function poll() {
@@ -92,6 +187,8 @@
                 ? 'The AI ideas could not be added this time.' : 'The AI ideas are ready.';
               document.getElementById('aibar').classList.add('done');
               if (s.state !== 'error') document.getElementById('aibtn').style.display = 'inline-flex';
+              aiNotify.finished(s.state === 'error' ? 'The AI ideas could not be added this time.'
+                                                     : 'The AI ideas for your music are ready.');
               return;
             }
           } catch (e) { /* keep trying */ }
@@ -145,6 +242,11 @@
     <h1>Analysing your music…</h1>
     <p id="msg" class="lede" style="margin-bottom:12px">{{ s.message }}</p>
     <p class="muted small" style="max-width:40em">This takes about 30–60 seconds per track (seconds if a track was analysed before). Results appear as soon as the analysis is done — AI ideas follow. This page updates by itself.</p>
+    {% if s.use_ai %}
+    <p style="margin-top:20px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <button type="button" class="notify" aria-pressed="false">Notify me when the AI is done</button>
+      <span class="notify-note muted" aria-live="polite"></span></p>
+    {% endif %}
   </div>
   <script>
     async function poll() {
