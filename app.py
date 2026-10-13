@@ -18,6 +18,7 @@ Environment variables (all optional):
   JOB_TIMEOUT_MIN  stop a job that runs longer than this (default 30)
 """
 
+import hashlib
 import hmac
 import io
 import json
@@ -35,7 +36,7 @@ from pathlib import Path
 
 import markdown
 from flask import (Flask, Response, abort, jsonify, redirect, render_template, request,
-                   send_file, send_from_directory, url_for)
+                   send_file, send_from_directory, session, url_for)
 from werkzeug.utils import secure_filename
 
 import musicanalyze as ma
@@ -51,6 +52,10 @@ JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+# The login cookie is signed with a key derived from the password: it survives restarts, and changing
+# APP_PASSWORD logs everyone out.
+app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(b"music-analyzer-login:" + APP_PASSWORD.encode()).digest()
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=30 * 24 * 3600)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 LLM, LLM_LABEL = ma.make_llm()
@@ -196,14 +201,41 @@ def health():
                    jobs_waiting=job_queue.qsize())
 
 
+def _password_ok(pw):
+    return hmac.compare_digest((pw or "").encode(), APP_PASSWORD.encode())
+
+
 @app.before_request
 def require_password():
-    if not APP_PASSWORD or request.path == "/health":
+    """A login page for browsers (phones' in-app browsers, e.g. WeChat, never show the pop-up login box of
+    HTTP basic auth), and basic auth still accepted for scripts and the self-test."""
+    if not APP_PASSWORD or request.path in ("/health", "/login"):
+        return None
+    if session.get("ok"):
         return None
     auth = request.authorization
-    if not auth or not hmac.compare_digest((auth.password or "").encode(), APP_PASSWORD.encode()):
-        return Response("Password required.", 401, {"WWW-Authenticate": 'Basic realm="Music Analyzer"'})
-    return None
+    if auth and _password_ok(auth.password):
+        return None
+    if request.method in ("GET", "HEAD") and "text/html" in request.headers.get("Accept", ""):
+        return redirect(url_for("login", next=request.full_path.rstrip("?")))
+    return Response("Password required.", 401, {"WWW-Authenticate": 'Basic realm="Music Analyzer"'})
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    nxt = request.values.get("next") or "/"
+    if not nxt.startswith("/") or nxt.startswith("//"):  # only ever go back into this site
+        nxt = "/"
+    error = None
+    if request.method == "POST":
+        if _password_ok(request.form.get("password")):
+            session.clear()
+            session["ok"] = True
+            session.permanent = True  # remembered for 30 days on this device
+            return redirect(nxt)
+        time.sleep(1)  # slow down guessing
+        error = "That password isn't right."
+    return render_template("login.html", error=error, next=nxt, version=ma.CODE_VERSION), (401 if error else 200)
 
 
 # ---------------------------------------------------------------- pages

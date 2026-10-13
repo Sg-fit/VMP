@@ -476,6 +476,19 @@ def web_checks(tmp, files):
         h = requests.get(base + "/health", timeout=5)
         check("web", "health page answers without a password", h.ok and "version" in h.json(), h.text[:80])
         check("web", "pages require the password", requests.get(base + "/", timeout=5).status_code == 401)
+        browser = requests.Session()
+        browser.headers["Accept"] = "text/html"
+        first = browser.get(base + "/", allow_redirects=False, timeout=5)
+        check("web", "a browser without the password is sent to the login page (works in WeChat etc.)",
+              first.status_code == 302 and "/login" in first.headers.get("Location", ""))
+        wrong = browser.post(base + "/login", data={"password": "nope", "next": "/"}, allow_redirects=False, timeout=10)
+        right = browser.post(base + "/login", data={"password": "selftest", "next": "/"}, allow_redirects=False, timeout=10)
+        check("web", "login page: wrong password refused, right one remembered",
+              wrong.status_code == 401 and right.status_code == 302 and
+              browser.get(base + "/", timeout=5).status_code == 200)
+        evil = requests.post(base + "/login", data={"password": "selftest", "next": "//evil.example"},
+                             allow_redirects=False, timeout=10)
+        check("web", "login never redirects to another site", evil.headers.get("Location") == "/")
 
         def run_job(paths, melody=""):
             up = [("tracks", (Path(p).name, open(p, "rb"))) for p in paths]
