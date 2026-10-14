@@ -69,7 +69,25 @@ def _demucs_split(y, sr):
 
 # ---------------------------------------------------------------- drums
 
-def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4):
+def hits_are_drums(drums, sr):
+    """Separating drums from the rest also catches the attacks of plucked or struck strings (a guitar's
+    pick, a piano's hammer), which can be a quarter of a guitar's energy. Real drums are noise (snare,
+    hats) or a pitchless thump; string attacks still carry the strings' harmonics. Measured as the median
+    spectral flatness (1-8 kHz) of the hits: solo guitar 0.0002, piano 0.0001; phone recordings of a
+    band with drums 0.003-0.007; synthetic drums 0.07. Returns (is_drums, flatness)."""
+    import librosa
+    P = np.abs(librosa.stft(drums, n_fft=2048, hop_length=512)) ** 2
+    f = librosa.fft_frequencies(sr=sr, n_fft=2048)
+    env = librosa.onset.onset_strength(S=librosa.power_to_db(P), sr=sr, hop_length=512)
+    hits = librosa.onset.onset_detect(onset_envelope=env, sr=sr, hop_length=512)
+    if len(hits) < 8:
+        return False, 0.0
+    flat = librosa.feature.spectral_flatness(S=P[(f >= 1000) & (f <= 8000)])[0]
+    value = float(np.median(flat[hits]))
+    return value >= 0.0008, value
+
+
+def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are_drums=True):
     """Where in the bar the drums hit, and whether each spot is kick- or snare-heavy.
 
     Rather than labelling every single hit (fragile on demos: one full-kit hit lights up every
@@ -78,7 +96,9 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4):
     """
     import librosa
     share = float(np.sum(drums ** 2) / (total_energy + 1e-12))
-    out = {"present": share > 0.03, "energy_share_pct": round(100 * share)}
+    out = {"present": share > 0.03 and are_drums, "energy_share_pct": round(100 * share)}
+    if share > 0.03 and not are_drums:
+        out["string_attacks"] = True  # percussive, but it's picking/strumming, not a drum kit
     if not out["present"] or len(beat_times) < 17:
         return out
 

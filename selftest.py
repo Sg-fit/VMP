@@ -161,6 +161,31 @@ def bassline_song(bpm=96, bars=8):
     return (y / np.abs(y).max() * 0.8).astype(np.float32), truth
 
 
+def pluck(freq, dur, amp=0.3):
+    """A plucked string: a sharp attack and harmonics that fade faster the higher they are."""
+    t = np.arange(int(SR * dur)) / SR
+    sig = sum((0.7 ** k) * np.exp(-t * (2.5 + 1.8 * k)) * np.sin(2 * np.pi * freq * (k + 1) * t) for k in range(10))
+    return amp * np.minimum(1, t / 0.002) * sig
+
+
+def guitar_blues(bpm=140, choruses=3):
+    """Solo fingerstyle guitar, 12-bar blues in A: a thumb line on the low strings (root and fifth, nothing
+    below 100 Hz, like a real guitar on a phone) and chords on 2 and 4. No drums, no bass instrument."""
+    beat = 60 / bpm
+    form = [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 7]
+    root = {0: 45, 5: 50, 7: 52}  # A2, D3, E3
+    y = np.zeros(int(SR * (choruses * 48 * beat + 2)))
+    for c in range(choruses):
+        for b, deg in enumerate(form):
+            t0, r = (c * 12 + b) * 4 * beat, root[deg]
+            for i, n in enumerate((r, r + 7, r, r + 7)):
+                place(y, pluck(hz(n), beat * 0.95, 0.35), t0 + i * beat)
+            for i in (1, 3):
+                for iv in (12, 16, 19, 22):  # a dominant 7th an octave up, strummed
+                    place(y, pluck(hz(r + iv), beat * 0.9, 0.12), t0 + i * beat + 0.001 * iv)
+    return (y / np.abs(y).max() * 0.8).astype(np.float32)
+
+
 def make_test_set(folder):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -181,6 +206,7 @@ def make_test_set(folder):
                                song([("A", ""), ("E", "7")], 120, 3, loops=2, drums=False, soft=True)),
         "corrupt": _write_bytes(folder / "corrupt.mp3", b"this is not audio"),
         "bassline": write(folder / "syncopated_bass_96bpm.wav", bassline_song()[0]),
+        "guitar_blues": write(folder / "solo_guitar_blues_A_140bpm.wav", guitar_blues()),
     }
 
 
@@ -273,6 +299,23 @@ def analysis_checks(tmp):
         check("analysis", "energy: soft strings without drums read calmer than the drum-driven pop song",
               res["waltz3"]["feel"]["arousal"] < res["pop4"]["feel"]["arousal"],
               f"{res['waltz3']['feel']['arousal']} vs {res['pop4']['feel']['arousal']}")
+
+    r = res["guitar_blues"]
+    if check("analysis", "solo-guitar 12-bar blues analyses", "error" not in r, r.get("error", "")):
+        check("analysis", "solo guitar: picking isn't reported as drums",
+              not r["drums"].get("present") and not any(s["drums"] for s in r["sections"]), str(r["drums"]))
+        check("analysis", "solo guitar: its low strings aren't reported as a separate bass",
+              r["bass"].get("low_part_only") and not any(s["bass"] for s in r["sections"]), str(r["bass"]))
+        b = r.get("blues_form") or {}
+        check("analysis", "12-bar blues recognised, with its choruses (every ~20.6 s from 0:00)",
+              b and near(b["chorus_sec"], 20.6, 5) and b["choruses"][0] < 1.5 and len(b["choruses"]) >= 2, str(b))
+    others = [k for k in ("pop4", "waltz3", "power", "modulate", "bassline") if "error" not in res[k]]
+    check("analysis", "no 12-bar blues claimed for songs that aren't one",
+          not any(res[k].get("blues_form") for k in others),
+          ", ".join(k for k in others if res[k].get("blues_form")))
+    if "error" not in res["pop4"]:
+        check("analysis", "a band with drums still has its drums and bass", res["pop4"]["drums"].get("present")
+              and res["pop4"]["bass"].get("present"))
 
     r = res["short_m4a"]
     check("analysis", "short phone-style .m4a clip decodes and analyses", "error" not in r, r.get("error", ""))
@@ -618,6 +661,13 @@ def facts_checks(facts_file, tmp):
         if e.get("bass_in_every_section"):
             check("facts", f"{n}: bass in every section", all(x["bass"] for x in r["sections"]),
                   "".join("B" if x["bass"] else "-" for x in r["sections"]))
+        if "drums" in e:
+            check("facts", f"{n}: drums {'present' if e['drums'] else 'absent'}",
+                  bool(r["drums"].get("present")) == e["drums"], str(r["drums"].get("present")))
+        if "bass_instrument" in e:
+            got = bool(r["bass"].get("present"))
+            check("facts", f"{n}: separate bass {'present' if e['bass_instrument'] else 'absent'}",
+                  got == e["bass_instrument"], str(r["bass"]))
         if "no_progression_claims" in e:
             check("facts", f"{n}: no famous-progression claim", not r["references"]["progressions"],
                   "; ".join(p["progression"] for p in r["references"]["progressions"]))

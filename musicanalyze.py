@@ -573,6 +573,81 @@ def load_audio(path):
         return np.concatenate(chunks).astype(np.float32), SR
 
 
+# 12-bar blues layouts, as bar roots relative to the home chord (0 = I, 5 = IV, 7 = V).
+TWELVE_BAR = {
+    "12-bar blues": [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
+    "12-bar blues (quick change: IV in bar 2)": [0, 5, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
+    "12-bar blues (V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 7, 7, 0, 0],
+}
+
+
+def detect_twelve_bar(r):
+    """Is this a 12-bar blues? Bar-by-bar chord roots are compared with the classic layouts, trying every
+    starting bar and half/double bar lengths (in case the beat was counted at half or double speed). Works
+    from roots only, so power chords (D5, G5: blues guitar often leaves out the third) still count.
+    Returns None, or {name, bar_sec, chorus_sec, choruses: [start s], match_pct}."""
+    tl = [c for c in r.get("chord_timeline") or [] if "start" in c and parse_chord(c["chord"])]
+    if len(tl) < 6 or not r.get("tempo_bpm"):
+        return None
+    ends = [c["start"] for c in tl[1:]] + [r["duration_sec"]]
+    spans = [(c["start"], e, parse_chord(c["chord"])[0]) for c, e in zip(tl, ends)]
+    beat_bar = (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / r["tempo_bpm"]
+    tonics = {key_tonic(r["key_index"])}
+    longest = Counter()
+    for s, e, root in spans:
+        longest[root] += e - s
+    tonics.add(longest.most_common(1)[0][0])
+    best = None
+    for bar in (beat_bar, 2 * beat_bar, beat_bar / 2):
+        if not 0.8 <= bar <= 8 or r["duration_sec"] < 24 * bar:  # need two full choruses
+            continue
+        down = r.get("downbeat_sec") or 0.0
+        for q in range(8):  # bar lines every half beat from the detected downbeat (it can be off)
+            start = (down + q * bar / 8) % bar
+            n = int((r["duration_sec"] - start) // bar)
+            roots, purity = [], []
+            for i in range(n):
+                a, b = start + i * bar, start + (i + 1) * bar
+                cover = Counter()
+                for s, e, root in spans:
+                    overlap = min(b, e) - max(a, s)
+                    if overlap > 0:
+                        cover[root] += overlap
+                roots.append(cover.most_common(1)[0][0] if cover else None)
+                purity.append(cover.most_common(1)[0][1] / bar if cover else 0)
+            clean = float(np.mean(purity)) if purity else 0  # chords change on the bar lines
+            for tonic in tonics:
+                rel = [None if x is None else (x - tonic) % 12 for x in roots]
+                for name, tpl in TWELVE_BAR.items():
+                    for phase in range(12):
+                        idx = range(phase, len(rel) - (len(rel) - phase) % 12)  # whole choruses only
+                        if len(idx) < 24:
+                            continue
+                        hit = lambda i: rel[i] == tpl[(i - phase) % 12] or ((i - phase) % 12 == 11 and rel[i] == 7)
+                        score = np.mean([hit(i) for i in idx])
+                        four = np.mean([hit(i) for i in idx if (i - phase) % 12 in (4, 5)])
+                        five = np.mean([hit(i) for i in idx if (i - phase) % 12 == 8])
+                        home = np.mean([hit(i) for i in idx if (i - phase) % 12 in (0, 1, 2, 3)])
+                        clear = sum(np.mean([hit(i) for i in range(c0, c0 + 12)]) >= 0.75 for c0 in idx[::12])
+                        # A one-chord drone, or a short loop that happens to fit on average, isn't a blues:
+                        # IV in bars 5-6, V in bar 9, home in bars 1-4, and at least two choruses that clearly
+                        # fit (an intro or ending chorus is often played freely).
+                        if four < 0.6 or five < 0.5 or home < 0.6 or clear < 2:
+                            continue
+                        # A chorus that began just before the recording (its first bar cut off) still counts
+                        # if its other 11 bars fit: chord changes are often detected a beat early.
+                        early = phase - 12 >= -1 and np.mean([hit(i) for i in range(max(0, phase - 12), phase)]) >= 0.7
+                        cand = (round(float(score), 2), round(clean, 2), -abs(bar - beat_bar), name, bar,
+                                start + (phase - 12 * early) * bar, len(idx) // 12 + early)
+                        if best is None or cand[:3] > best[:3]:
+                            best = cand
+    if not best or best[0] < 0.7:
+        return None
+    score, _, _, name, bar, first, count = best
+    return {"name": name, "bar_sec": round(bar, 2), "chorus_sec": round(12 * bar, 1), "match_pct": round(100 * score),
+            "choruses": [round(float(max(0.0, first + k * 12 * bar)), 1) for k in range(count)]}
+
+
 def key_fifths(k):
     """Key signature as MusicXML 'fifths' (+sharps / -flats), spelled the same way as the notes."""
     steps = [0, 2, 3, 5, 7, 8, 10] if key_is_minor(k) else [0, 2, 4, 5, 7, 9, 11]
@@ -810,8 +885,17 @@ def _analyze_audio(path):
         sec["bass_low_db"] = float(10 * np.log10(np.mean(low_band[a:b]) + 1e-12))
         sec["bass_ratio_db"] = float(10 * np.log10(np.mean(low_band[a:b]) / (np.mean(mid_band[a:b]) + 1e-12) + 1e-12))
     loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
-    if float(np.sum(y_perc ** 2)) < 0.03 * float(np.sum(y ** 2)):
+    # Drums = enough percussive sound AND noisy hits (a guitar's pick attacks are percussive but pitched).
+    are_drums, _ = instruments.hits_are_drums(y_perc, sr)
+    drums_anywhere = are_drums and float(np.sum(y_perc ** 2)) >= 0.03 * float(np.sum(y ** 2))
+    if not drums_anywhere:
         loudest_drums = 0.0  # no real drums anywhere (same rule as instruments.drum_analysis)
+    # A separate bass instrument? On a phone recording a bass guitar and a guitar's low strings look alike
+    # (phones cut everything below ~100 Hz). So: report one only in a band (drums) or when there's real
+    # energy below 100 Hz, where a guitar can't go. Otherwise the low notes are the main instrument's own
+    # lowest part (e.g. the thumb line of fingerstyle guitar), which is still transcribed and written out.
+    below_100 = float(spec[(spec_f >= 30) & (spec_f < 100)].sum() / (spec.sum() + 1e-12))
+    separate_bass = drums_anywhere or below_100 >= 0.03
     loudest_low = max((sec["bass_low_db"] for sec in sections), default=0.0)
     for sec in sections:
         sec["drums"] = loudest_drums > 0 and sec.pop("drums_level") >= 0.1 * loudest_drums
@@ -847,13 +931,24 @@ def _analyze_audio(path):
         "sound": sound_features(y, sr, rms_db, duration),
         "separation": separation,
         "drums": instruments.drum_analysis(y_perc, sr, 256, beat_times, float(np.sum(y ** 2)),
-                                           beats_per_bar=meter["beats_per_bar"])
+                                           beats_per_bar=meter["beats_per_bar"], are_drums=are_drums)
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
     if not any(sec["bass"] for sec in sections):  # no low end anywhere: the "bass notes" were chord tones
         result["bass"] = {"present": False}
         bass_line = []
+    elif not separate_bass:
+        # The low notes belong to the main instrument: describe them as its lowest part, not as a bass.
+        result["bass"] = {"present": False, "low_part_only": True}
+        for sec in sections:
+            sec["bass"] = False
+        if float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12)) < 0.005:
+            # Nothing sounds below 80 Hz, so a "note" below E2 is the pitch tracker an octave too low.
+            up = lambda n: n + 12 * ((40 - n + 11) // 12) if n is not None and n < 40 else n
+            bass_line = [(a, e, up(n), db) for a, e, n, db in bass_line]
+            bass = [up(n) for n in bass]
+        result["low_part"] = bass_summary(bass, btimes, chords, main_key, duration)
     loudest = max((n[3] for n in bass_line), default=0.0)
     result["bass_transcription"] = [  # note-by-note, for the bass MIDI file
         {"start": round(a, 3), "end": round(e, 3), "midi": n, "velocity": int(np.clip(110 + 2.5 * (db - loudest), 35, 120))}
@@ -872,7 +967,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-12a"
+ANALYSIS_VERSION = "2026-10-14b"
 
 
 def _cache_key(path):
@@ -915,6 +1010,7 @@ def analyze(path, melody_text=None, cache_dir=None):
     # re-analysis of the audio.
     result["bass_sheet"] = bass_sheet(result, [(c["start"], c["chord"]) for c in result["chord_timeline"]])
     result["bass_rhythm"] = notation.rhythm_from_score(result["bass_sheet"]) if result.get("bass_sheet") else {}
+    result["blues_form"] = detect_twelve_bar(result)
     if melody_text:
         result["melody"] = inspiration.analyse_melody(melody_text, key_tonic(main_key), result["mode"], MODES,
                                                       lambda pc: spell(pc, main_key))
@@ -1030,6 +1126,8 @@ def shared_dna(r):
     if r["mode_confidence"] != "low" and r["mode"] in inspiration.MODE_REFERENCES:
         out["mode"] = {"mode": r["mode"], "examples": inspiration.MODE_REFERENCES[r["mode"]]}
     out["groove"] = inspiration.groove_reference((r.get("drums") or {}).get("traits", []), r.get("tempo_bpm"))
+    if r.get("blues_form"):
+        out["form"] = {"form": r["blues_form"]["name"], "examples": inspiration.TWELVE_BAR_EXAMPLES}
     out["melody"] = [d for d in (r.get("melody") or {}).get("devices", []) if "“" in d["reference"]]
     return out
 
@@ -1380,6 +1478,12 @@ def write_melody_midi(path, notes, bpm=90, cents=0, beats_per_note=1, repeats=2)
                            b"MTrk" + struct.pack(">I", len(data)) + data)
 
 
+def low_part(r):
+    """What to call the transcribed low line: a bass instrument, or the main instrument's own lowest part
+    (no separate bass detected, e.g. solo guitar). Returns (word for text, word for file names)."""
+    return ("lowest part", "low_part") if (r.get("bass") or {}).get("low_part_only") else ("bass", "bass")
+
+
 def export_sheets(r, out_dir):
     """Bass sheet music: MusicXML (opens in MuseScore, Sibelius, Dorico, most DAWs) and, when Verovio is
     installed, an engraved page to view or print to PDF."""
@@ -1389,18 +1493,19 @@ def export_sheets(r, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
     k = r["key_index"]
-    xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — bass", "Bass", key_fifths(k), r["tempo_bpm"],
-                               lambda pc: spell(pc, k), parse_chord)
-    files = [{"file": f"{stem}_bass.musicxml", "label": "bass sheet music (MusicXML: open in MuseScore, Sibelius, "
+    word, tag = low_part(r)
+    xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — {word}", word.capitalize(), key_fifths(k),
+                               r["tempo_bpm"], lambda pc: spell(pc, k), parse_chord, octave_up=(tag == "bass"))
+    files = [{"file": f"{stem}_{tag}.musicxml", "label": f"{word} sheet music (MusicXML: open in MuseScore, Sibelius, "
                                                          "Dorico or a DAW to edit and play)"}]
     (out_dir / files[0]["file"]).write_text(xml, encoding="utf-8")
     pages = notation.render_svg(xml)
     if pages:
         note = (f" · {r['key']} · {r['meter']['label']} · {r['tempo_bpm']:.0f} BPM · bar 1 starts at "
                 f"{fmt_time(max(0, sheet['bar1_time']))} in the recording · automatic transcription: check it by ear")
-        (out_dir / f"{stem}_bass.html").write_text(
-            notation.sheet_html(f"{Path(r['file']).stem} — bass", pages, html.escape(note)), encoding="utf-8")
-        files.append({"file": f"{stem}_bass.html", "label": f"bass sheet music, engraved ({len(pages)} page(s); "
+        (out_dir / f"{stem}_{tag}.html").write_text(
+            notation.sheet_html(f"{Path(r['file']).stem} — {word}", pages, html.escape(note)), encoding="utf-8")
+        files.append({"file": f"{stem}_{tag}.html", "label": f"{word} sheet music, engraved ({len(pages)} page(s); "
                                                             "open in a browser, print to PDF)"})
     return files
 
@@ -1414,20 +1519,21 @@ def export_midis(r, out_dir):
     bar = (r.get("meter") or {}).get("beats_per_bar", 4)  # one chord = one full bar (3 beats in 3/4)
     files = []
     line = r.get("bass_transcription") or []
+    word, tag = low_part(r)
     if line:
-        fname = f"{stem}_bass_transcription.mid"
+        fname = f"{stem}_{tag}_transcription.mid"
         write_notes_midi(out_dir / fname, [(n["start"], n["end"], n["midi"], n["velocity"]) for n in line],
                          bpm, cents=cents, beats_per_bar=bar)
-        files.append({"file": fname, "label": f"bass, note by note ({len(line)} notes at their real times)",
+        files.append({"file": fname, "label": f"{word}, note by note ({len(line)} notes at their real times)",
                       "chords": []})
     sheet = r.get("bass_sheet")
     if sheet and sheet["notes"]:
         # The same notes as written on the sheet: on the grid, steady tempo, bar 1 at the start.
         sec = lambda slot: slot / notation.SLOTS_PER_BEAT * 60 / bpm
-        fname = f"{stem}_bass_from_sheet.mid"
+        fname = f"{stem}_{tag}_from_sheet.mid"
         write_notes_midi(out_dir / fname, [(sec(s), sec(s + n), m, v) for s, n, m, v in sheet["notes"]],
                          bpm, cents=cents, beats_per_bar=bar)
-        files.append({"file": fname, "label": f"bass, from the sheet music (on the beat grid, {sheet['bars']} bars, "
+        files.append({"file": fname, "label": f"{word}, from the sheet music (on the beat grid, {sheet['bars']} bars, "
                                               f"bar 1 = {fmt_time(max(0, sheet['bar1_time']))} in the recording)",
                       "chords": []})
 
@@ -1508,6 +1614,10 @@ def ai_summary(r):
         "Chord timeline: " + ", ".join(f"{c['time']} {c['chord']}" for c in r["chord_timeline"][:28])
         + (" ..." if len(r["chord_timeline"]) > 28 else "") + ".",
     ]
+    if r.get("blues_form"):
+        b = r["blues_form"]
+        lines.append(f"Form: {b['name']}, choruses of {b['chorus_sec']} s starting at "
+                     + ", ".join(fmt_time(t) for t in b["choruses"]) + ".")
     if r["loops"]:
         lines.append("Chord loops: " + "; ".join(f"{' - '.join(l['chords'])} ({' - '.join(l['roman'])})"
                                                  for l in r["loops"]) + ".")
@@ -1516,9 +1626,15 @@ def ai_summary(r):
                      f"16-step grid {d['grid']} (K kick, S snare, X both)"
                      + (f"; fills at {', '.join(fmt_time(t) for t in d['fills'])}" if d.get("fills") else "; no fills")
                      + ".")
+    if b.get("low_part_only"):
+        lines.append("No drums and no separate bass instrument: one instrument (e.g. solo guitar) playing its own "
+                     "bass notes.")
+        b = r.get("low_part") or {}
+    elif d.get("string_attacks"):
+        lines.append("No drums (the percussive sound is picking/strumming).")
     if b.get("present"):
         brh = r.get("bass_rhythm") or {}
-        lines.append(f"Bass: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
+        lines.append(f"{'Lowest part' if (r.get('bass') or {}).get('low_part_only') else 'Bass'}: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
                      + (f"; usual note positions in the bar {brh.get('usual_positions')} (16ths; X = most bars, "
                         f"x = some), {brh['syncopated_pct']}% syncopated" if brh else "") + ".")
     f = r.get("feel") or {}
@@ -1944,6 +2060,10 @@ MODE_INFO = {
 }
 
 
+BLUES_TIP = ("The 12-bar blues: 4 bars on the home chord (I), 2 on the IV chord, 2 on I, then V, IV, I, I "
+             "(often V in the last bar to lead back round). One pass is a 'chorus'; solos and verses follow it.")
+
+
 def tip(text, term=None, explanation=None):
     """Wrap text in a hover tooltip (an <abbr>). Works in the web app and most Markdown viewers."""
     title = explanation or GLOSSARY[term or text]
@@ -2015,6 +2135,18 @@ def track_report(r):
         L.append(f"| {k} | {fmt_time(v['seconds'])} | {v['percent']}% |")
     if r["key_changes"]:
         L += ["", "**Key timeline:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
+    b = r.get("blues_form")
+    if b:
+        L += ["", f"**{tip('Form', explanation=BLUES_TIP)}: {b['name']}** — choruses of ~{b['chorus_sec']} s "
+              f"(12 bars of {b['bar_sec']} s), starting at " + ", ".join(fmt_time(t) for t in b["choruses"])
+              + f" · {b['match_pct']}% of the bars follow the pattern"
+              + (" · before the first full chorus: an intro or pickup" if b["choruses"][0] > b["bar_sec"] * 2 else "")]
+        k = r["key_index"]
+        home = spell(key_tonic(k), k)
+        L.append(f"_In a blues, “{r['key']}” means {home} is home. Expect dominant-7th chords ({home}7, "
+                 f"{spell((key_tonic(k) + 5) % 12, k)}7, {spell((key_tonic(k) + 7) % 12, k)}7) and the blue notes "
+                 f"{spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) "
+                 f"against the major scale._")
     if r["loops"]:
         L += ["", "**Chord loops**", ""]
         for lp in r["loops"]:
@@ -2143,7 +2275,7 @@ def melody_report(r):
 def dna_report(r):
     d = r.get("references") or {}
     ai_refs = (r.get("ai") or {}).get("references") or []
-    if not (d.get("progressions") or d.get("mode") or d.get("groove") or d.get("melody") or ai_refs):
+    if not (d.get("progressions") or d.get("mode") or d.get("groove") or d.get("melody") or d.get("form") or ai_refs):
         return []
     L = ["", "### 🎧 Shared DNA with well-known music", "",
          "_Not “sounds like” — specific building blocks this track shares with recordings worth studying._", ""]
@@ -2153,6 +2285,9 @@ def dna_report(r):
                  + ", ".join(p["examples"]))
     if d.get("mode"):
         L.append(f"- **Scale:** {mode_tip(d['mode']['mode'])} is the sound of " + ", ".join(d["mode"]["examples"]))
+    if d.get("form"):
+        L.append(f"- **Form:** {d['form']['form']}, the backbone of blues, rock'n'roll and jazz — "
+                 + ", ".join(d["form"]["examples"]))
     if d.get("groove"):
         L.append(f"- **Groove:** {d['groove']}")
     for m in d.get("melody", []):
@@ -2166,7 +2301,8 @@ def dna_report(r):
 
 def instruments_report(r):
     d, b = r.get("drums") or {}, r.get("bass") or {}
-    if not d.get("present") and not b.get("present"):
+    solo = b.get("low_part_only")
+    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks"):
         return []
     how = ("separated with Demucs (AI source separation)" if r.get("separation") == "demucs" else
            "separated with a lighter harmonic/percussive split (Demucs AI separation not in use)")
@@ -2187,15 +2323,22 @@ def instruments_report(r):
               "```", *rows, "```", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — present, but no clear repeating pattern was found.", ""]
+    elif d.get("string_attacks"):
+        L += ["**🥁 Drums** — none. The percussive sound is the attack of plucked or strummed strings, not a drum kit.", ""]
+    if solo:
+        L += ["**🎸 Bass** — no separate bass instrument: no drums, and nothing below 100 Hz (where a bass sits and a "
+              "guitar can't reach). The low notes are the main instrument's own lowest part — for example a "
+              "guitarist's thumb — analysed below.", ""]
+        b = dict(r.get("low_part") or {}, present=True)
     if b.get("present"):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
         where = [sec["label"] for sec in r["sections"] if sec.get("bass")]
-        parts = [f"plays in sections {' '.join(where)}" if where else "barely audible",
+        parts = [f"plays in sections {' '.join(where)}" if where else "plays throughout" if solo else "barely audible",
                  f"clear notes on {b['tracked_pct']}% of beats", f"range {b['range']}", f"style: {b['style']}",
                  f"main notes: {notes}", f"on the chord root {b['follows_roots_pct']}% of the time"]
         if b.get("riff"):
             parts.append(f"repeating riff: `{' '.join(b['riff'])}`")
-        L += [f"**🎸 Bass** — " + " · ".join(parts), ""]
+        L += [f"**{'Lowest part' if solo else '🎸 Bass'}** — " + " · ".join(parts), ""]
         L += bass_rhythm_report(r)
     else:
         L += ["**🎸 Bass** — no clear bass line detected.", ""]
@@ -2210,18 +2353,19 @@ def bass_rhythm_report(r):
     bpb = sheet["beats_per_bar"]
     counts = " ".join(f"{b + 1} e & a" for b in range(bpb))
     values = ", ".join(f"{name} {pct}%" for name, pct in rh["note_values"])
-    L = [f"**Bass rhythm** (read from the {tip('sheet music', 'Sheet music')}, {sheet['bars']} bars) — "
+    word = low_part(r)[0]
+    L = [f"**{word.capitalize()} rhythm** (read from the {tip('sheet music', 'Sheet music')}, {sheet['bars']} bars) — "
          f"{len(sheet['notes'])} notes, ~{rh['notes_per_bar']} per bar · note lengths: {values} · "
          f"{rh['offbeat_pct']}% start between beats ({rh['sixteenth_offbeat_pct']}% on a 16th) · "
          f"{rh['syncopated_pct']}% {tip('syncopated', 'Syncopation')} (held across the beat) · "
          f"{rh['distinct_bar_rhythms']} different bar rhythms", ""]
     if rh["main_bar_rhythm_pct"] >= 25:  # a real repeating figure
-        L += [f"Most common bar rhythm (in {rh['main_bar_rhythm_pct']}% of the bars with bass; x = a note starts):", "",
-              "```", "         " + counts, "Bass     " + " ".join(rh["main_bar_rhythm"]), "```", ""]
+        L += [f"Most common bar rhythm (in {rh['main_bar_rhythm_pct']}% of the bars with {word}; x = a note starts):", "",
+              "```", "         " + counts, ("Low part " if word != "bass" else "Bass     ") + " ".join(rh["main_bar_rhythm"]), "```", ""]
     else:  # played freely: show where notes usually land instead
-        L += ["The rhythm changes from bar to bar, so here is where the bass usually plays "
+        L += [f"The rhythm changes from bar to bar, so here is where the {word} usually plays "
               "(X = a note starts there in at least half the bars, x = in a quarter to half of them):", "",
-              "```", "         " + counts, "Bass     " + " ".join(rh.get("usual_positions", "")), "```", ""]
+              "```", "         " + counts, ("Low part " if word != "bass" else "Bass     ") + " ".join(rh.get("usual_positions", "")), "```", ""]
     return L
 
 

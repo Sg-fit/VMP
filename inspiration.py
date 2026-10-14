@@ -49,6 +49,10 @@ MODE_REFERENCES = {
                                 "“Losing My Religion” — R.E.M."],
 }
 
+TWELVE_BAR_EXAMPLES = ["“Sweet Home Chicago” — Robert Johnson", "“Pride and Joy” — Stevie Ray Vaughan",
+                       "“Johnny B. Goode” — Chuck Berry", "“Hound Dog” — Big Mama Thornton / Elvis Presley",
+                       "“Billie's Bounce” — Charlie Parker"]
+
 GROOVE_REFERENCES = {
     "backbeat": "the standard rock/pop backbeat — the same skeleton as “Billie Jean” (Michael Jackson)",
     "four-on-the-floor": "four-on-the-floor, the disco/house pulse — “Stayin' Alive” (Bee Gees), "
