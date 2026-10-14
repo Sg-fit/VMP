@@ -309,6 +309,21 @@ def analysis_checks(tmp):
         b = r.get("blues_form") or {}
         check("analysis", "12-bar blues recognised, with its choruses (every ~20.6 s from 0:00)",
               b and near(b["chorus_sec"], 20.6, 5) and b["choruses"][0] < 1.5 and len(b["choruses"]) >= 2, str(b))
+        # What the musician says decides what the audio can't (same recording, analysis from the cache)
+        told = ma.analyze(files["guitar_blues"], cache_dir=cache, context=ma.clean_context(["guitar"], "blues"))
+        check("analysis", "musician says 'guitar, blues': guitar notation, no drums/bass, a blues idea",
+              told.get("low_part_instrument") == "guitar" and told["drums"].get("user_said_none")
+              and told["bass"].get("user_said_none") and any(i["area"] == "blues" for i in told["ideas"]),
+              str(told.get("context")))
+        with_bass = ma.analyze(files["guitar_blues"], cache_dir=cache, context=ma.clean_context(["guitar", "bass"]))
+        check("analysis", "musician says there's a bass: the low line is reported as a bass",
+              with_bass["bass"].get("present") and with_bass["bass"].get("from_user"), str(with_bass["bass"])[:120])
+    fake = {"tempo_bpm": 87.0, "drums": {}, "bass": {}, "sections": []}
+    ma.apply_context(fake, ma.clean_context([], "dnb"))
+    check("analysis", "genre fixes a half-speed tempo reading (drum & bass at 87 -> felt ~174 BPM)",
+          (fake.get("context") or {}).get("felt_tempo") == 174, str(fake.get("context")))
+    check("analysis", "unknown instrument/genre values from the form are ignored",
+          ma.clean_context(["drums", "kazoo<script>"], "polka") == {"instruments": ["drums"], "genre": None})
     others = [k for k in ("pop4", "waltz3", "power", "modulate", "bassline") if "error" not in res[k]]
     check("analysis", "no 12-bar blues claimed for songs that aren't one",
           not any(res[k].get("blues_form") for k in others),
@@ -520,10 +535,10 @@ def web_checks(tmp, files):
         check("web", "health page answers without a password", h.ok and "version" in h.json(), h.text[:80])
         check("web", "analysing needs no account or password", requests.get(base + "/", timeout=5).status_code == 200)
 
-        def run_job(paths, melody=""):
+        def run_job(paths, melody="", extra=None):
             up = [("tracks", (Path(p).name, open(p, "rb"))) for p in paths]
-            r = requests.post(base + "/analyze", files=up, data={"ai": "1", "melody": melody}, auth=auth,
-                              allow_redirects=False, timeout=60)
+            r = requests.post(base + "/analyze", files=up, data={"ai": "1", "melody": melody, **(extra or {})},
+                              auth=auth, allow_redirects=False, timeout=60)
             job = r.headers["Location"].rsplit("/", 1)[-1]
             t0, first = time.time(), None
             while time.time() - t0 < 600:
@@ -583,6 +598,12 @@ def web_checks(tmp, files):
         job4, s4, _, _ = run_job([files["short_m4a"]])
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
         account_checks(base, job4)
+        job5, s5, _, _ = run_job([files["guitar_blues"]], extra={"instruments": ["guitar", "voice"], "genre": "blues"})
+        r5 = requests.get(f"{base}/jobs/{job5}/files/music_results.json", timeout=10).json()[0] if s5["state"] == "done" else {}
+        sheet = requests.get(f"{base}/jobs/{job5}/files/sheets/solo_guitar_blues_A_140bpm_low_part.musicxml", timeout=10)
+        check("web", "the upload form's instruments and genre reach the analysis",
+              (r5.get("context") or {}).get("genre") == "Blues" and "voice" in r5["context"]["instruments"]
+              and "<sign>G</sign>" in sheet.text, str(r5.get("context")))
     finally:
         import psutil
         try:

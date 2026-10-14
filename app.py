@@ -371,6 +371,7 @@ def _too_many_uploads():
 
 def form_page(error=None, code=200):
     return render_template("index.html", error=error, ai_label=LLM_LABEL, max_files=MAX_FILES, version=ma.CODE_VERSION,
+                           instruments=ma.INSTRUMENTS, genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS), code
 
 
@@ -410,6 +411,7 @@ def analyze():
     ahead = job_queue.qsize()
     write_status(d, state="queued", files=saved, use_ai=bool(LLM and request.form.get("ai")),
                  melody=(request.form.get("melody") or "")[:2000],
+                 context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
                  created=time.time(),
                  message=f"Waiting in line ({ahead} job{'s' if ahead != 1 else ''} ahead)…" if ahead else "Starting…")
     u = current_user()

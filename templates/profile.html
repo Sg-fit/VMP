@@ -58,6 +58,7 @@
   <div class="grid2">
     <div class="stat"><h3><abbr title="{{ glossary['Key'] }}">Keys you use</abbr></h3>{{ bars(p['keys']) }}</div>
     <div class="stat"><h3><abbr title="{{ glossary['Mode'] }}">Modes</abbr></h3>{{ bars(p.modes) }}</div>
+    {% if p.genres %}<div class="stat"><h3><abbr title="The genres you chose when uploading.">Genres</abbr></h3>{{ bars(p.genres) }}</div>{% endif %}
     <div class="stat"><h3><abbr title="{{ glossary['Mood'] }}">Feel</abbr></h3>{{ bars(p.moods) }}
       {% if p.energy_avg %}<p class="muted small"><abbr title="{{ glossary['Energy level'] }}">Average energy</abbr> {{ p.energy_avg }}/10</p>{% endif %}</div>
     <div class="stat"><h3><abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">Tempo & meter</abbr></h3>

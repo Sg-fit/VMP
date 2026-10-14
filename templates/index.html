@@ -24,6 +24,16 @@
   textarea { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
              background: var(--bg); color: var(--ink); margin-bottom: 6px; resize: vertical; }
   textarea:focus { border-color: var(--ink); outline: none; }
+  .about { border: 0; padding: 0; margin: 0 0 20px; min-width: 0; }
+  .about legend { padding: 0; margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip { position: relative; cursor: pointer; }
+  .chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .chip span { display: inline-block; padding: 6px 11px; border: 1px solid var(--line); font-size: .86rem; user-select: none; }
+  .chip input:checked + span { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .about select { width: 100%; font: inherit; font-size: .92rem; padding: 9px 10px; border: 1px solid var(--line);
+                  border-radius: 0; background: var(--bg); color: var(--ink); }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
          padding-top: 18px; border-top: 1px solid var(--line); }
   .row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
@@ -66,6 +76,24 @@
           melody analysis follows the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
       </label>
       <ul id="chosen"></ul>
+      <fieldset class="about">
+        <legend class="field"><abbr title="Optional, but it makes the analysis more reliable. On a phone recording the
+          program can't tell a bass guitar from a guitar's low strings by sound alone, and it sometimes counts the beat
+          at half or double speed — your answers settle both. They also set the sound of the MIDI files, write a guitar
+          part in guitar notation, label a sung melody, and give the AI and the ideas some context.">About the music</abbr>
+          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, applies to all tracks</span></legend>
+        <div class="chips" role="group" aria-label="Instruments that play">
+          {% for key, label in instruments.items() %}
+            <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}"><span>{{ label }}</span></label>
+          {% endfor %}
+        </div>
+        <select name="genre" aria-label="Genre">
+          <option value="">Genre — not sure / mixed</option>
+          {% for key, label in genres.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+        </select>
+        <p class="muted small" style="margin:6px 0 0">Tick only the instruments you hear. Leave everything empty to let the
+          program guess.</p>
+      </fieldset>
       <label class="field" for="melody"><abbr title="Automatic melody detection is unreliable on full-band
         recordings, so you can type the tune instead: note names separated by spaces (C D E, F# Bb ...), optionally
         with octaves (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>

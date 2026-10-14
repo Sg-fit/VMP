@@ -146,6 +146,7 @@ def job_summary(results):
             "form": " ".join(s["label"] for s in r.get("sections", [])),
             "chords": {c["chord"]: c["seconds"] for c in r.get("chords_used", [])},
             "drums": bool((r.get("drums") or {}).get("present")), "bass": bool((r.get("bass") or {}).get("present")),
+            "genre": (r.get("context") or {}).get("genre"),
         })
     return {"tracks": tracks}
 
@@ -161,6 +162,7 @@ def profile_summary(items):
     out["modes"] = Counter(t["mode"] for t in tracks if t.get("mode")).most_common(4)
     out["meters"] = Counter(t["meter"] for t in tracks if t.get("meter")).most_common(3)
     out["moods"] = Counter(t["mood"] for t in tracks if t.get("mood")).most_common(4)
+    out["genres"] = Counter(t["genre"] for t in tracks if t.get("genre")).most_common(5)
     tempos = sorted(t["tempo_bpm"] for t in tracks if t.get("tempo_bpm"))
     if tempos:
         out["tempo"] = {"min": round(tempos[0]), "max": round(tempos[-1]),

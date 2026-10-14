@@ -57,7 +57,7 @@ def run_job(job_dir):
             write_status(d, state="done", ai_pending=True, message="AI ideas on the way…")
         cache = os.environ.get("MUSIC_CACHE_DIR") or str(d.parent / "cache")  # shared by all jobs
         ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg),
-                        melody_text=read_status(d).get("melody"),
+                        melody_text=read_status(d).get("melody"), context=read_status(d).get("context"),
                         on_analysis_done=analysis_ready if llm else None, cache_dir=cache)
         write_status(d, state="done", ai_pending=False, message="Done")
     except Exception as e:

@@ -942,7 +942,7 @@ def _analyze_audio(path):
         # The low notes belong to the main instrument: describe them as its lowest part, not as a bass.
         result["bass"] = {"present": False, "low_part_only": True}
         for sec in sections:
-            sec["bass"] = False
+            sec["low_end"], sec["bass"] = sec["bass"], False
         if float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12)) < 0.005:
             # Nothing sounds below 80 Hz, so a "note" below E2 is the pitch tracker an octave too low.
             up = lambda n: n + 12 * ((40 - n + 11) // 12) if n is not None and n < 40 else n
@@ -967,7 +967,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-14b"
+ANALYSIS_VERSION = "2026-10-15a"
 
 
 def _cache_key(path):
@@ -979,7 +979,96 @@ def _cache_key(path):
     return f"{h.hexdigest()[:32]}-{ANALYSIS_VERSION}-{instruments.separation_method()}"
 
 
-def analyze(path, melody_text=None, cache_dir=None):
+# What the musician can tell us when uploading (all optional): which instruments play, and the genre.
+INSTRUMENTS = {"drums": "drums / percussion", "bass": "bass", "guitar": "guitar", "keys": "piano / keys",
+               "voice": "voice", "strings": "strings", "winds": "wind / brass", "synth": "synth / electronic"}
+# label, usual tempo range (BPM) or None when the genre spans everything, one genre-specific idea
+GENRES = {
+    "pop": ("Pop", (90, 130), "Pop listeners expect the hook early and a lift into the chorus: check that the chorus "
+                              "is the energy peak (see Energy & mood) and that the hook arrives within ~30 s."),
+    "rock": ("Rock", None, "Rock gets its impact from contrast: try dropping to one guitar (and voice) before the last "
+                           "chorus, then bring everything back in."),
+    "blues": ("Blues", None, "Blues is built on 12-bar choruses and call-and-response: leave space after each phrase "
+                             "for an answering lick, and try a turnaround (I–IV–I–V) in the last two bars."),
+    "jazz": ("Jazz", None, "Try reharmonising: approach each chord with its own ii–V (e.g. Em7–A7 into D), or swap a V7 "
+                           "for the chord a tritone away."),
+    "folk": ("Folk / acoustic", None, "Let playing technique make the dynamics: fingerpick the verses, strum the choruses, "
+                                      "and keep the arrangement sparse."),
+    "rnb": ("R&B / soul", (60, 110), "R&B leans on extended chords (maj7, m9, 11) and a laid-back groove that sits "
+                                     "slightly behind the beat."),
+    "hiphop": ("Hip-hop", (70, 100), "Beats usually loop 2–4 bars: find the strongest 4-bar stretch (see the chord loops) "
+                                     "and build the beat around it."),
+    "electronic": ("Electronic / dance", (115, 135), "Dance tracks move in 8- and 16-bar phrases: plan a breakdown and "
+                                                     "a build (riser, snare roll) into the drop."),
+    "dnb": ("Drum & bass", (160, 180), "Drum & bass sits around 170–175 BPM; a half-time section is a classic way to "
+                                       "create contrast."),
+    "metal": ("Metal", None, "Power chords and the Aeolian/Phrygian modes are the language: try palm-muted root notes "
+                             "locked to the kick, and a flat-2nd note for menace."),
+    "classical": ("Classical / film", None, "Develop the main motif instead of repeating it: sequence it, invert it, "
+                                            "or hand it to another instrument (see Melody variations)."),
+    "latin": ("Latin", None, "Try organising the rhythm around a clave (3-2 son clave) in the percussion or the comping."),
+    "country": ("Country", None, "Country often rides I–IV–V over a train beat; try sliding into chord tones the way a "
+                                 "pedal steel does."),
+    "ambient": ("Ambient", None, "Let chords sustain and change slowly; a drone on the home note can anchor long, "
+                                 "evolving textures."),
+}
+
+
+def clean_context(instruments=None, genre=None):
+    """Keep only known choices (they come from a web form)."""
+    inst = [i for i in (instruments or []) if i in INSTRUMENTS]
+    genre = genre if genre in GENRES else None
+    return {"instruments": list(dict.fromkeys(inst)), "genre": genre} if inst or genre else None
+
+
+def apply_context(result, ctx):
+    """Use what the musician told us. The audio analysis can't tell a bass guitar from a guitar's low strings on a
+    phone recording, or count a beat twice; the musician can. Their answers decide those questions."""
+    if not ctx:
+        return
+    inst, genre = set(ctx.get("instruments") or []), ctx.get("genre")
+    result["context"] = {"instruments": [INSTRUMENTS[i] for i in ctx.get("instruments") or []],
+                         "genre": GENRES[genre][0] if genre else None, "notes": []}
+    notes = result["context"]["notes"]
+    if inst:
+        drums = result.get("drums") or {}
+        if "drums" not in inst and drums.get("present"):
+            result["drums"] = {"present": False, "energy_share_pct": drums.get("energy_share_pct"), "user_said_none": True}
+            for sec in result["sections"]:
+                sec["drums"] = False
+        elif "drums" in inst and not drums.get("present"):
+            notes.append("You said there are drums, but they're too quiet or too blended to analyse in this recording.")
+        bass = result.get("bass") or {}
+        if "bass" in inst and bass.get("low_part_only") and result.get("low_part"):
+            # The low notes are a real bass after all (a phone hides the difference).
+            result["bass"] = dict(result["low_part"], present=True, from_user=True)
+            for sec in result["sections"]:
+                sec["bass"] = sec.get("low_end", True)
+        elif "bass" in inst and not bass.get("present"):
+            notes.append("You said there's a bass, but no low notes could be heard — phone microphones often lose them.")
+        elif "bass" not in inst and bass.get("present"):
+            # No bass instrument: the low notes are the main instrument's own lowest part.
+            result["low_part"] = bass
+            result["bass"] = {"present": False, "low_part_only": True, "user_said_none": True}
+            for sec in result["sections"]:
+                sec["bass"] = False
+        if "drums" not in inst and not result["drums"].get("present"):
+            result["drums"]["user_said_none"] = True
+        if "bass" not in inst and result["bass"].get("low_part_only"):
+            result["bass"]["user_said_none"] = True
+        if result["bass"].get("low_part_only"):
+            result["low_part_instrument"] = next((i for i in ("guitar", "keys", "strings", "synth", "winds") if i in inst), None)
+    if genre and GENRES[genre][1] and result.get("tempo_bpm"):
+        lo, hi = GENRES[genre][1]
+        bpm = result["tempo_bpm"]
+        alt = next((x for x in (bpm * 2, bpm / 2) if lo <= x <= hi), None)
+        if not lo <= bpm <= hi and alt:
+            result["context"]["felt_tempo"] = round(alt)
+            notes.append(f"{GENRES[genre][0]} usually sits at {lo}–{hi} BPM, so you probably feel this at "
+                         f"~{round(alt)} BPM: the detector counted {'every other beat' if alt > bpm else 'twice per beat'}.")
+
+
+def analyze(path, melody_text=None, cache_dir=None, context=None):
     """Analyse one track. The audio analysis (the slow part) is cached by file content, so
     re-running the same recording - e.g. to add a melody or retry the AI - is near-instant."""
     import pickle
@@ -1006,6 +1095,7 @@ def analyze(path, melody_text=None, cache_dir=None):
                 pass  # caching is an optimisation only
 
     main_key = result["key_index"]
+    apply_context(result, context)
     # Sheet music and its rhythm are cheap, so they're made after the cache: improving them needs no
     # re-analysis of the audio.
     result["bass_sheet"] = bass_sheet(result, [(c["start"], c["chord"]) for c in result["chord_timeline"]])
@@ -1019,6 +1109,9 @@ def analyze(path, melody_text=None, cache_dir=None):
             result["melody"]["check"] = check_melody(extras["chroma"], extras["bounds"], pcs, main_key)
     result["references"] = shared_dna(result)
     result["ideas"] = rule_based_ideas(result)
+    genre = (context or {}).get("genre")
+    if genre:
+        result["ideas"].append({"area": GENRES[genre][0].lower(), "idea": GENRES[genre][2]})
     return result
 
 
@@ -1494,8 +1587,12 @@ def export_sheets(r, out_dir):
     stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
     k = r["key_index"]
     word, tag = low_part(r)
-    xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — {word}", word.capitalize(), key_fifths(k),
-                               r["tempo_bpm"], lambda pc: spell(pc, k), parse_chord, octave_up=(tag == "bass"))
+    guitar = r.get("low_part_instrument") == "guitar"
+    # Bass and guitar are both written an octave above how they sound; a guitar in treble clef.
+    xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — {word}",
+                               "Guitar (low part)" if guitar else word.capitalize(), key_fifths(k), r["tempo_bpm"],
+                               lambda pc: spell(pc, k), parse_chord, clef=("G", 2) if guitar else ("F", 4),
+                               octave_up=tag == "bass" or guitar)
     files = [{"file": f"{stem}_{tag}.musicxml", "label": f"{word} sheet music (MusicXML: open in MuseScore, Sibelius, "
                                                          "Dorico or a DAW to edit and play)"}]
     (out_dir / files[0]["file"]).write_text(xml, encoding="utf-8")
@@ -1520,10 +1617,12 @@ def export_midis(r, out_dir):
     files = []
     line = r.get("bass_transcription") or []
     word, tag = low_part(r)
+    # General MIDI sound: bass (finger) for a bass; otherwise the instrument the musician named
+    program = {"guitar": 25, "keys": 0, "strings": 42, "synth": 81, "winds": 71}.get(r.get("low_part_instrument"), 33)
     if line:
         fname = f"{stem}_{tag}_transcription.mid"
         write_notes_midi(out_dir / fname, [(n["start"], n["end"], n["midi"], n["velocity"]) for n in line],
-                         bpm, cents=cents, beats_per_bar=bar)
+                         bpm, cents=cents, beats_per_bar=bar, program=program)
         files.append({"file": fname, "label": f"{word}, note by note ({len(line)} notes at their real times)",
                       "chords": []})
     sheet = r.get("bass_sheet")
@@ -1532,7 +1631,7 @@ def export_midis(r, out_dir):
         sec = lambda slot: slot / notation.SLOTS_PER_BEAT * 60 / bpm
         fname = f"{stem}_{tag}_from_sheet.mid"
         write_notes_midi(out_dir / fname, [(sec(s), sec(s + n), m, v) for s, n, m, v in sheet["notes"]],
-                         bpm, cents=cents, beats_per_bar=bar)
+                         bpm, cents=cents, beats_per_bar=bar, program=program)
         files.append({"file": fname, "label": f"{word}, from the sheet music (on the beat grid, {sheet['bars']} bars, "
                                               f"bar 1 = {fmt_time(max(0, sheet['bar1_time']))} in the recording)",
                       "chords": []})
@@ -1603,7 +1702,11 @@ def ai_summary(r):
     """A compact plain-text digest of the analysis (~1.5k characters instead of ~10k of JSON):
     smaller prompts are answered much faster and cut the chance of time-outs."""
     rh, s, d, b = r["rhythm"], r["sound"], r.get("drums") or {}, r.get("bass") or {}
-    lines = [
+    ctx = r.get("context") or {}
+    lines = [f"The musician says: instruments {', '.join(ctx['instruments']) or 'not given'}; genre "
+             f"{ctx.get('genre') or 'not given'}." + (f" Felt tempo ~{ctx['felt_tempo']} BPM." if ctx.get("felt_tempo") else "")
+             ] if ctx else []
+    lines += [
         f"Length {r['duration']}, {r['tempo_bpm'] or 'free'} BPM ({rh['tempo_feel']}), {s['tone']} tone.",
         f"Key {r['key']} (confidence {r['key_confidence']}{', uncertain' if r['key_confidence'] < 0.6 else ''}); "
         f"mode {r['mode']} ({r['mode_confidence']} confidence); scale {' '.join(r['scale_notes'])}."
@@ -2187,6 +2290,10 @@ def track_report(r):
     if r["tempo_bpm"] and meter.get("label"):
         tempo += f" in {meter['label']}" + (" (waltz feel)" if meter["beats_per_bar"] == 3 else "") + \
             (" (assumed)" if meter.get("confidence") == "assumed" else "")
+    ctx = r.get("context")
+    if ctx:
+        told = [x for x in (", ".join(ctx["instruments"]), ctx.get("genre")) if x]
+        L += [f"_You told us: {' · '.join(told)}._"] + [f"- _{n}_" for n in ctx.get("notes", [])] + [""]
     L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
           f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
@@ -2356,6 +2463,8 @@ def melody_report(r):
         verdict = ("it's {0}% chord notes, so it's most likely following the chords rather than a separate "
                    "melody".format(t["chord_tone_pct"]) if t["follows_chords"] else
                    f"{t['chord_tone_pct']}% chord notes — likely a real melodic line")
+        if "voice" in ((r.get("context") or {}).get("instruments") or []):
+            verdict += "; with a singer in the track, this is most likely the vocal melody"
         L += [f"**{tip('Top line', 'Top line')} (automatic):** range {t['range']} · main notes {main} · "
               f"repeating 4-note figures: {motif} · {verdict}."]
         if not m:
@@ -2417,12 +2526,18 @@ def instruments_report(r):
               "```", *rows, "```", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — present, but no clear repeating pattern was found.", ""]
+    elif d.get("user_said_none"):
+        L += ["**🥁 Drums** — none, as you said. Any percussive sound is the attack of the instruments' notes.", ""]
     elif d.get("string_attacks"):
         L += ["**🥁 Drums** — none. The percussive sound is the attack of plucked or strummed strings, not a drum kit.", ""]
-    if solo:
+    if solo and b.get("user_said_none"):
+        L += ["**🎸 Bass** — no bass instrument, as you said. The low notes are the main instrument's own lowest "
+              "part, analysed below.", ""]
+    elif solo:
         L += ["**🎸 Bass** — no separate bass instrument: no drums, and nothing below 100 Hz (where a bass sits and a "
               "guitar can't reach). The low notes are the main instrument's own lowest part — for example a "
-              "guitarist's thumb — analysed below.", ""]
+              "guitarist's thumb — analysed below. If there is a bass, tick it when uploading.", ""]
+    if solo:
         b = dict(r.get("low_part") or {}, present=True)
     if b.get("present"):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
@@ -2433,6 +2548,8 @@ def instruments_report(r):
                  f"main notes: {notes}", f"on the {tip('chord root', 'Chord root')} {b['follows_roots_pct']}% of the time"]
         if b.get("riff"):
             parts.append(f"repeating riff: `{' '.join(b['riff'])}`")
+        if b.get("from_user"):
+            parts.append("you said there's a bass (on this recording it can't be told apart from low strings by sound)")
         L += [f"**{tip('Lowest part') if solo else '🎸 Bass'}** — " + " · ".join(parts), ""]
         L += bass_rhythm_report(r)
     else:
@@ -2577,7 +2694,7 @@ def _write_outputs(results, out):
 
 
 def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analysis_done=None,
-                 cache_dir=DEFAULT_CACHE_DIR):
+                 cache_dir=DEFAULT_CACHE_DIR, context=None):
     """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
 
     Built to keep the musician waiting as little as possible:
@@ -2596,7 +2713,7 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
             f = Path(f)
             progress(f"[{i}/{len(files)}] Analysing {f.name}...")
             try:
-                r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir)
+                r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir, context=context)
                 r["analyzer_version"] = CODE_VERSION
                 r["midi"] = export_midis(r, out / "midi")
                 try:
@@ -2638,6 +2755,8 @@ def main():
     ap.add_argument("--no-llm", action="store_true", help="skip the AI brainstorm")
     ap.add_argument("--melody", help="melody/riff notes to analyse, e.g. \"A E F E A E D E\" "
                                      "(prefix with part of a file name to target one track: \"copy 4: A E F E\")")
+    ap.add_argument("--instruments", help="which instruments play, comma-separated: " + ", ".join(INSTRUMENTS))
+    ap.add_argument("--genre", choices=list(GENRES), help="the genre")
     ap.add_argument("--no-cache", action="store_true", help="re-analyse even if this recording was analysed before")
     ap.add_argument("--bench-llm", action="store_true", help="time the AI models and recommend the fastest")
     args = ap.parse_args()
@@ -2663,7 +2782,8 @@ def main():
 
     out = Path(args.out)
     _, report = run_analysis(files, out, llm, progress=lambda msg: print(msg, file=sys.stderr),
-                             melody_text=args.melody, cache_dir=None if args.no_cache else DEFAULT_CACHE_DIR)
+                             melody_text=args.melody, cache_dir=None if args.no_cache else DEFAULT_CACHE_DIR,
+                             context=clean_context((args.instruments or "").replace(" ", "").split(","), args.genre))
     print(report)
     print(f"\nWrote {out / 'music_report.md'}, {out / 'music_results.json'} and MIDI files in {out / 'midi'}",
           file=sys.stderr)
