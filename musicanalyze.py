@@ -1321,9 +1321,15 @@ def _same_cycle(a, b):
 
 # ---------------------------------------------------------------- rule-based ideas
 
+def flat5(fifth):
+    """The blue note a half step below the 5th, spelled as a flattened 5th (Ab in D, not G#)."""
+    return fifth[:-1] if fifth.endswith("#") else fifth + "b"
+
+
 def rule_based_ideas(r):
     k = r["key_index"]
     t = key_tonic(k)
+    band = bool((r.get("drums") or {}).get("present") or (r.get("bass") or {}).get("present"))
     note = lambda off: spell((t + off) % 12, k)
     ideas = []
 
@@ -1364,7 +1370,14 @@ def rule_based_ideas(r):
         "Lydian": f"The #4 ({note(6)}) is the Lydian colour — a II major chord ({chord(2)}) over a {note(0)} "
                   f"bass gives a dreamy, floating lift.",
     }
-    if r.get("mode_confidence") == "low":
+    if r.get("blues_form"):
+        ideas.append({"area": "melody/harmony", "idea":
+                      f"It's a blues, so the melody lives on the blues scale — "
+                      f"{' '.join([note(0), note(3), note(5), flat5(note(7)), note(7), note(10)])} "
+                      f"(minor pentatonic plus the b5) — over major, dominant-7th chords. On the {chord(0)} chord, bend "
+                      f"the minor 3rd ({note(3)}) up towards the major 3rd ({note(4)}); end phrases on {note(0)} or the "
+                      f"b7 ({note(10)}). Over the {chord(5)} chord, {note(10)} and {note(3)} sound bluesiest."})
+    elif r.get("mode_confidence") == "low":
         ideas.append({"area": "melody/harmony", "idea":
                       f"The scale is ambiguous between {r['mode']} and {r['mode_runner_up']} — the notes that "
                       f"would decide it barely appear. That's an opportunity: commit with a melody note. "
@@ -1437,7 +1450,9 @@ def rule_based_ideas(r):
         bpm = r["tempo_bpm"]
         variants = []
         if bpm >= 85:
-            variants.append(f"a half-time groove (drums feel like ~{bpm / 2:.0f} BPM) for a heavier, spacious section")
+            variants.append(f"a half-time groove (drums feel like ~{bpm / 2:.0f} BPM) for a heavier, spacious section"
+                            if band else f"a half-time feel (strum or pick on every other beat, ~{bpm / 2:.0f} BPM) "
+                                         f"for a slower, spacious section")
         if bpm < 100:
             variants.append(f"a double-time feel at ~{bpm * 2:.0f} BPM for an energetic remix")
         ideas.append({"area": "remix", "idea": f"Same chords, new feel: try {' or '.join(variants)}."})
@@ -1450,14 +1465,19 @@ def rule_based_ideas(r):
     if s["energy_flat"]:
         mid = fmt_time(r["duration_sec"] / 2)
         ideas.append({"area": "arrangement", "idea": f"The energy stays almost flat. Create a breakdown around {mid} "
-                      f"(drop the drums and bass for 4–8 bars) and bring everything back for a bigger return."})
+                      + ("(drop the drums and bass for 4–8 bars) and bring everything back for a bigger return."
+                         if band else "(play softer and sparser for 4–8 bars: single notes, or just the low strings), "
+                                      "then come back at full strength.")})
     build, quiet = s["biggest_build"], s["quietest_moment"]
     to_sec = lambda ts: int(ts.split(":")[0]) * 60 + int(ts.split(":")[1])
     if build and quiet and abs(to_sec(build["time"]) - to_sec(quiet)) <= 10:
         # The quietest moment and the biggest build are one event: a dip and a comeback.
         ideas.append({"area": "arrangement", "idea": f"The biggest contrast is the dip around {quiet} that comes back "
-                      f"+{build['db']} dB by {build['time']}. Make it a real breakdown: strip it to one instrument for "
-                      f"4–8 bars, then hit the return with everything (a riser or a bar of silence just before helps)."})
+                      f"+{build['db']} dB by {build['time']}. "
+                      + ("Make it a real breakdown: strip it to one instrument for 4–8 bars, then hit the return with "
+                         "everything (a riser or a bar of silence just before helps)." if band else
+                         "Make the contrast deliberate: play that passage quieter and sparser for 4–8 bars, then hit "
+                         "the return hard (a beat of silence just before helps).")})
         quiet = None
     elif build and not s["energy_flat"]:
         ideas.append({"area": "arrangement", "idea": f"The strongest moment is the build into {build['time']} "
@@ -1492,7 +1512,8 @@ def rule_based_ideas(r):
     g = r["rhythm"].get("groove")
     if g == "mostly on the beat":
         ideas.append({"area": "rhythm", "idea": "The groove sits mostly on the beat. Try anticipating chord changes "
-                      "by an 8th note, or add a syncopated percussion layer (shaker/rim) to add swing."})
+                      "by an 8th note, or " + ("add a syncopated percussion layer (shaker/rim) to add swing."
+                      if band else "add muted percussive 'chops' on the off-beats to make it swing.")})
     elif g == "heavily syncopated":
         ideas.append({"area": "rhythm", "idea": "The groove is already very syncopated — a section with straight, "
                       "on-beat hits would create contrast and make the syncopation hit harder when it returns."})
@@ -1713,6 +1734,10 @@ Only cite times that appear in the analysis (chord timeline, section starts, key
 When explaining a chord, be musically exact (e.g. a dominant 7th leads to the chord a fifth below it).
 Titles: evocative but specific to this track; avoid stock words like "Midnight", "Echo", "Pulse".
 2 alt_progressions in {key}, 3-6 chords each (names like Bm, F#7, Gmaj7), preferring chords the track doesn't use.
+If a Form is given (e.g. 12-bar blues), the alt_progressions must keep that form: for a 12-bar blues give exactly 12
+chords, one per bar (e.g. a quick change, dominant 7ths throughout, a ii-V in bars 9-10, or a new turnaround).
+Chord names ending in 5 (D5, C#5) are power chords (root and fifth), not single notes; call single notes "the note C#".
+If the musician named the instruments, write ideas for that line-up; suggesting an added instrument is fine if you say so.
 2 references only if you are certain the recording exists and really shares that element; otherwise [].
 Use only facts given below; the analysis is approximate, so don't build on anything marked uncertain.
 
