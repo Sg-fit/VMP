@@ -1899,7 +1899,7 @@ def _check_times(text, r, tolerance=3):
               re.finditer(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text)]
     # "the 0:05 D5" names the chord that's there now, even inside a suggestion ("replace the 0:05 D5 with Bm")
     claims += [(None, m_.group(2), m_.group(1)) for m_ in
-               re.finditer(r"\bthe\s+(\d{1,2}:\d{2})\s+([A-G][b#]?(?:maj7|m7|m|7|5)?)\b", text)]
+               re.finditer(r"\bthe\s+(\d{1,2}:\d{2})\s+([A-G][b#]?(?:maj7|m7|m|7|5)?)\b(?!\s+section)", text)]
     for pos, name, t in claims:
         if pos is not None and suggest.search(text[max(0, pos - 30):pos]):
             continue  # a chord the AI suggests adding, not a claim about the recording
