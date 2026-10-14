@@ -358,8 +358,8 @@ def detect_chords(chroma, rms_db, bounds, btimes):
 
 
 def detect_meter(rms_db, chroma, bounds, clear_beat):
-    """3/4 or 4/4: do strong beats and chord changes recur every 3 beats or every 4?
-    Only says 3/4 when the evidence is clearly stronger; otherwise 4/4 (the most common)."""
+    """3/4, 4/4, 5/4 or 7/4: do strong beats and chord changes recur every 3, 4, 5 or 7 beats?
+    Only leaves 4/4 (the most common) when another meter is clearly stronger."""
     import librosa
     default = {"beats_per_bar": 4, "label": "4/4", "confidence": "assumed"}
     if not clear_beat or len(bounds) < 14:
@@ -371,11 +371,17 @@ def detect_meter(rms_db, chroma, bounds, clear_beat):
     change = np.r_[0, 1 - np.sum(C[:, 1:] * C[:, :-1], axis=0)]  # harmonic change at each beat
     z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
     feat = z(accent) + z(change)
+    # Odd meters (5/4, 7/4) are only considered with enough bars to see them repeat.
+    candidates = (3, 4, 5, 7) if len(feat) >= 8 * 7 else (3, 4)
     by_phase = {m: [feat[p::m].mean() - np.delete(feat, np.arange(p, len(feat), m)).mean() for p in range(m)]
-                for m in (3, 4)}
+                for m in candidates}
     score = {m: max(v) for m, v in by_phase.items()}
     m = 3 if score[3] > score[4] + 0.3 and score[3] > 0.6 else 4
-    conf = "detected" if m == 3 or score[4] > score[3] + 0.3 else "assumed"
+    for odd in (5, 7):  # rare, so they must beat every other meter clearly
+        if odd in score and score[odd] > 0.8 and all(score[odd] > v + 0.4 for k_, v in score.items() if k_ != odd):
+            m = odd
+    others = [v for k_, v in score.items() if k_ != m]
+    conf = "detected" if m != 4 or score[4] > max(others) + 0.3 else "assumed"
     # Beat segment i starts at bounds[i]; the strongest phase marks the first beat of each bar.
     phase = int(np.argmax(by_phase[m]))
     return {"beats_per_bar": m, "label": f"{m}/4", "confidence": conf,
@@ -578,6 +584,8 @@ TWELVE_BAR = {
     "12-bar blues": [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
     "12-bar blues (quick change: IV in bar 2)": [0, 5, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
     "12-bar blues (V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 7, 7, 0, 0],
+    "12-bar blues (bVI–V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 8, 7, 0, 0],  # the usual minor blues
+    "12-bar blues (ii–V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 2, 7, 0, 0],   # jazz blues
 }
 
 
@@ -644,6 +652,8 @@ def detect_twelve_bar(r):
     if not best or best[0] < 0.7:
         return None
     score, _, _, name, bar, first, count = best
+    if key_is_minor(r["key_index"]):
+        name = name.replace("12-bar blues", "12-bar minor blues")
     return {"name": name, "bar_sec": round(bar, 2), "chorus_sec": round(12 * bar, 1), "match_pct": round(100 * score),
             "choruses": [round(float(max(0.0, first + k * 12 * bar)), 1) for k in range(count)]}
 
@@ -659,12 +669,24 @@ BLUES_VARIATIONS = [
 ]
 
 
+MINOR_BLUES_VARIATIONS = [
+    ("minor blues",
+     [(0, "m7"), (5, "m7"), (0, "m7"), (0, "m7"), (5, "m7"), (5, "m7"), (0, "m7"), (0, "m7"), (8, "7"), (7, "7"), (0, "m7"), (7, "7")],
+     "The 'Thrill Is Gone' sound: minor 7ths on i and iv, then bVI7 to V7 in bars 9-10 for a dark pull home."),
+    ("minor blues with a ii–V",
+     [(0, "m7"), (0, "m7"), (0, "m7"), (0, "m7"), (5, "m7"), (5, "m7"), (0, "m7"), (0, "m7"), (2, "m7b5"), (7, "7"), (0, "m7"), (7, "7")],
+     "Jazz minor blues: a half-diminished ii to a dominant V in bars 9-10, the classic minor-key turnaround."),
+]
+
+
 def blues_variations(r):
-    """The 12-bar variations, spelled in the track's key."""
+    """The 12-bar variations, spelled in the track's key: dominant-7th blues in a major key, minor blues in a minor
+    one."""
     k = r["key_index"]
     t = key_tonic(k)
+    table = MINOR_BLUES_VARIATIONS if key_is_minor(k) else BLUES_VARIATIONS
     return [{"name": name, "why": why, "chords": [chord_name((t + off) % 12, q, k) for off, q in bars]}
-            for name, bars, why in BLUES_VARIATIONS]
+            for name, bars, why in table]
 
 
 def fits_twelve_bar(chords, tonic):
@@ -674,7 +696,7 @@ def fits_twelve_bar(chords, tonic):
     if len(roots) != 12 or None in roots:
         return False
     rel = [(x - tonic) % 12 for x in roots]
-    anchors = [rel[0] == 0, rel[4] == 5, rel[6] == 0, rel[8] in (7, 2), rel[10] == 0]
+    anchors = [rel[0] == 0, rel[4] == 5, rel[6] == 0, rel[8] in (7, 2, 8), rel[10] == 0]  # bar 9: V, ii or bVI
     return sum(anchors) >= 4
 
 
@@ -916,7 +938,7 @@ def _analyze_audio(path):
         sec["bass_ratio_db"] = float(10 * np.log10(np.mean(low_band[a:b]) / (np.mean(mid_band[a:b]) + 1e-12) + 1e-12))
     loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
     # Drums = enough percussive sound AND noisy hits (a guitar's pick attacks are percussive but pitched).
-    are_drums, _ = instruments.hits_are_drums(y_perc, sr)
+    are_drums, hit_noise = instruments.hits_are_drums(y_perc, sr)
     drums_anywhere = are_drums and float(np.sum(y_perc ** 2)) >= 0.03 * float(np.sum(y ** 2))
     if not drums_anywhere:
         loudest_drums = 0.0  # no real drums anywhere (same rule as instruments.drum_analysis)
@@ -965,6 +987,10 @@ def _analyze_audio(path):
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
+    if result["drums"].get("present") and hit_noise < instruments.DRUMS_SURE:
+        # Only slightly noise-like hits: light percussion (shaker, brushes) or a hard-picked instrument. Say so;
+        # the musician's tick ("drums" or not) settles it.
+        result["drums"]["unsure"] = True
     if not any(sec["bass"] for sec in sections):  # no low end anywhere: the "bass notes" were chord tones
         result["bass"] = {"present": False}
         bass_line = []
@@ -999,7 +1025,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-15b"
+ANALYSIS_VERSION = "2026-10-16a"
 
 
 def _cache_key(path):
@@ -1089,8 +1115,11 @@ def apply_context(result, ctx):
             result["drums"]["user_said_none"] = True
         if "bass" not in inst and result["bass"].get("low_part_only"):
             result["bass"]["user_said_none"] = True
+        if "drums" in inst and result["drums"].get("present"):
+            result["drums"].pop("unsure", None)
         if result["bass"].get("low_part_only"):
-            result["low_part_instrument"] = next((i for i in ("guitar", "keys", "strings", "synth", "winds") if i in inst), None)
+            result["low_part_instrument"] = next((i for i in ("guitar", "keys", "strings", "synth", "winds", "voice")
+                                                  if i in inst), None)
     if genre and GENRES[genre][1] and result.get("tempo_bpm"):
         lo, hi = GENRES[genre][1]
         bpm = result["tempo_bpm"]
@@ -1101,21 +1130,33 @@ def apply_context(result, ctx):
                          f"~{round(alt)} BPM: the detector counted {'every other beat' if alt > bpm else 'twice per beat'}.")
 
 
-GUITAR_LOWEST = 40  # E2, a guitar's low E string in standard tuning
+# Each instrument's lowest usual note (MIDI) and how to name its low part in the report. A transcribed note
+# below the instrument's range is a pitch-tracker octave error. None = not told: assume the most common case
+# for a solo phone recording, a guitar, and say so in the report.
+INSTRUMENT_LOW = {
+    "guitar": (40, "the guitar's low strings"),            # E2 (standard tuning; drop D reaches D2 = 38)
+    "keys": (21, "the left hand of the piano/keys"),        # A0
+    "strings": (36, "the lowest strings (e.g. a cello)"),   # C2
+    "winds": (34, "the low notes of the wind/brass"),       # Bb1 (tuba, bass clarinet go lower; rare solo)
+    "synth": (0, "the synth's lowest notes"),               # no limit
+    "voice": (38, "the lowest sung notes"),                 # D2, a low bass voice
+    "bass": (23, "the bass"),                               # B0, a 5-string bass
+    None: (40, "the main instrument's own low notes"),
+}
 
 
 def finish_low_part(result):
     """When the low notes are the main instrument's own (no separate bass) and nothing sounds below 80 Hz, notes
-    under a guitar's low E are octave errors - for a guitar, or when we don't know the instrument. A piano's,
-    cello's or synth's low notes are real, so for those the notes stay as heard."""
+    below that instrument's range are octave errors and are moved up. Notes it can really play stay as heard."""
     if not (result["bass"].get("low_part_only") and result.get("low_end_missing")):
         return
-    if result.get("low_part_instrument") not in (None, "guitar"):
-        return
-    up = lambda n: n + 12 * ((GUITAR_LOWEST - n + 11) // 12) if n < GUITAR_LOWEST else n
-    result["bass_transcription"] = [{**n, "midi": up(n["midi"])} for n in result.get("bass_transcription", [])]
-    if result.get("low_part_raised"):
-        result["low_part"] = result["low_part_raised"]
+    lowest = INSTRUMENT_LOW.get(result.get("low_part_instrument"), INSTRUMENT_LOW[None])[0]
+    up = lambda n: n + 12 * ((lowest - n + 11) // 12) if n < lowest else n
+    notes = result.get("bass_transcription", [])
+    result["octave_raised"] = sum(n["midi"] < lowest for n in notes)
+    result["bass_transcription"] = [{**n, "midi": up(n["midi"])} for n in notes]
+    if result["octave_raised"] and lowest == 40 and result.get("low_part_raised"):
+        result["low_part"] = result["low_part_raised"]  # summary made with the same E2 rule
 
 
 def lead_instrument(result):
@@ -1402,7 +1443,12 @@ def rule_based_ideas(r):
         "Lydian": f"The #4 ({note(6)}) is the Lydian colour — a II major chord ({chord(2)}) over a {note(0)} "
                   f"bass gives a dreamy, floating lift.",
     }
-    if r.get("blues_form"):
+    if r.get("blues_form") and key_is_minor(k):
+        ideas.append({"area": "melody/harmony", "idea":
+                      f"It's a minor blues: the blues scale ({note(0)} {note(3)} {note(5)} {flat5(note(7))} {note(7)} "
+                      f"{note(10)}) fits the chords directly, and its b5 ({flat5(note(7))}) is the colour note. On the V7 "
+                      f"chord ({chord(7, '7')}), play its major 3rd ({note(11)}) for a strong pull back to {note(0)}."})
+    elif r.get("blues_form"):
         ideas.append({"area": "melody/harmony", "idea":
                       f"It's a blues, so the melody lives on the blues scale — "
                       f"{' '.join([note(0), note(3), note(5), flat5(note(7)), note(7), note(10)])} "
@@ -2216,7 +2262,8 @@ GUIDE = {
         "Tempo": "Speed in beats per minute (BPM): 60 is one beat a second; ballads sit around 60-80, pop 90-130, "
                  "dance 120-130. Automatic detection occasionally reads half or double what you feel.",
         "Meter": "How beats are grouped into bars: 4/4 = four beats per bar (most pop, rock, blues), 3/4 = three "
-                 "(waltz feel). 'Assumed' means the evidence was weak, so the most common, 4/4, was used.",
+                 "(waltz feel), 5/4 and 7/4 = odd meters (prog, jazz, film). 'Assumed' means the evidence was weak, "
+                 "so the most common, 4/4, was used.",
         "Bar": "One cycle of the meter (e.g. four beats in 4/4). Chord changes, sections and riffs are counted in bars.",
         "Key": "The home note and scale the music settles on, e.g. E major. Major usually sounds brighter, minor darker.",
         "Camelot": "A DJ/producer code for keys: numbers 1-12 around a wheel, A = minor, B = major. Tracks with the same "
@@ -2448,10 +2495,14 @@ def track_report(r):
         home = spell(key_tonic(k), k)
         for v in r.get("blues_variations") or []:
             L.append(f"- **Try:** {v['name']} — `{' | '.join(v['chords'])}` — {v['why']}")
-        L.append(f"_In a blues, “{r['key']}” means {home} is home. Expect dominant-7th chords ({home}7, "
-                 f"{spell((key_tonic(k) + 5) % 12, k)}7, {spell((key_tonic(k) + 7) % 12, k)}7) and the blue notes "
-                 f"{spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) "
-                 f"against the major scale._")
+        four, five = spell((key_tonic(k) + 5) % 12, k), spell((key_tonic(k) + 7) % 12, k)
+        if key_is_minor(k):
+            L.append(f"_A minor blues: expect minor 7th chords on the home and IV chords ({home}m7, {four}m7), a "
+                     f"dominant {five}7, and the blues scale's b5 ({flat5(five)}) as its colour note._")
+        else:
+            L.append(f"_In a blues, “{r['key']}” means {home} is home. Expect dominant-7th chords ({home}7, {four}7, "
+                     f"{five}7) and the blue notes {spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and "
+                     f"{spell((key_tonic(k) + 10) % 12, k)} (flat 7th) against the major scale._")
     if r["loops"]:
         L += ["", f"**{tip('Chord loops', 'Chord loop')}**", ""]
         for lp in r["loops"]:
@@ -2644,6 +2695,10 @@ def instruments_report(r):
               "```", *rows, "```", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — present, but no clear repeating pattern was found.", ""]
+    if d.get("unsure"):
+        L += ["_The hits are only slightly noise-like — light percussion (shaker, brushes) or a hard-picked "
+              "instrument. If there are no drums, leave “drums” unticked and tick the instruments you hear when "
+              "uploading._", ""]
     elif d.get("user_said_none"):
         L += ["**🥁 Drums** — none, as you said. Any percussive sound is the attack of the instruments' notes.", ""]
     elif d.get("string_attacks"):
@@ -2652,14 +2707,21 @@ def instruments_report(r):
         L += ["**🎸 Bass** — no bass instrument, as you said. The low notes are the main instrument's own lowest "
               "part, analysed below.", ""]
     elif solo:
-        L += ["**🎸 Bass** — no separate bass instrument: no drums, and nothing below 100 Hz (where a bass sits and a "
-              "guitar can't reach). The low notes are the main instrument's own lowest part — for example a "
-              "guitarist's thumb — analysed below. If there is a bass, tick it when uploading.", ""]
+        L += ["**🎸 Bass** — no separate bass instrument: no drums, and nothing below 100 Hz, where a bass guitar "
+              f"sits. The low notes are {INSTRUMENT_LOW.get(r.get('low_part_instrument'), INSTRUMENT_LOW[None])[1]} "
+              "(e.g. a guitarist's thumb or a pianist's left hand), analysed below as the lowest part. If there is a "
+              "bass, tick it when uploading.", ""]
     if solo:
         b = dict(r.get("low_part") or {}, present=True)
-        if r.get("low_end_missing") and r.get("low_part_instrument") not in (None, "guitar"):
-            L += [f"_Nothing below 80 Hz reached the microphone, so the lowest notes of the "
-                  f"{INSTRUMENTS[r['low_part_instrument']]} are shown as heard; check their octave by ear._", ""]
+        if r.get("octave_raised"):
+            inst = r.get("low_part_instrument")
+            L += [f"_Nothing below 80 Hz reached the microphone, so {r['octave_raised']} note(s) below the "
+                  + (f"{INSTRUMENTS[inst]}'s range" if inst else "range of a guitar (the most likely instrument)")
+                  + " were moved up an octave as pitch-tracker errors."
+                  + ("" if inst else " If your instrument plays that low (piano, cello), tick it when uploading.") + "_", ""]
+        elif r.get("low_end_missing"):
+            L += ["_Nothing below 80 Hz reached the microphone; the lowest notes are shown as heard — check their "
+                  "octave by ear._", ""]
     if named:
         L += [f"**Other instruments you named** — {', '.join(INSTRUMENTS[i] for i in named)}. These aren't written out "
               "one by one: the app transcribes the drums (grid) and the lowest part (bass, or the main instrument's "

@@ -69,6 +69,9 @@ def _demucs_split(y, sr):
 
 # ---------------------------------------------------------------- drums
 
+DRUMS_SURE = 0.0015  # hits at least this noise-like are certainly drums; 0.0008-0.0015 is reported as unsure
+
+
 def hits_are_drums(drums, sr):
     """Separating drums from the rest also catches the attacks of plucked or struck strings (a guitar's
     pick, a piano's hammer), which can be a quarter of a guitar's energy. Real drums are noise (snare,

@@ -182,12 +182,13 @@ def pluck(freq, dur, amp=0.3):
     return amp * np.minimum(1, t / 0.002) * sig
 
 
-def guitar_blues(bpm=140, choruses=3):
+def guitar_blues(bpm=140, choruses=3, minor=False):
     """Solo fingerstyle guitar, 12-bar blues in A: a thumb line on the low strings (root and fifth, nothing
-    below 100 Hz, like a real guitar on a phone) and chords on 2 and 4. No drums, no bass instrument."""
+    below 100 Hz, like a real guitar on a phone) and chords on 2 and 4. No drums, no bass instrument.
+    minor=True: an A minor blues (i and iv minor 7ths, bVI7 - V7 in bars 9-10)."""
     beat = 60 / bpm
-    form = [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 7]
-    root = {0: 45, 5: 50, 7: 52}  # A2, D3, E3
+    form = [0, 0, 0, 0, 5, 5, 0, 0, 8 if minor else 7, 7 if minor else 5, 0, 7]
+    root = {0: 45, 5: 50, 7: 52, 8: 53}  # A2, D3, E3, F3
     y = np.zeros(int(SR * (choruses * 48 * beat + 2)))
     for c in range(choruses):
         for b, deg in enumerate(form):
@@ -195,7 +196,8 @@ def guitar_blues(bpm=140, choruses=3):
             for i, n in enumerate((r, r + 7, r, r + 7)):
                 place(y, pluck(hz(n), beat * 0.95, 0.35), t0 + i * beat)
             for i in (1, 3):
-                for iv in (12, 16, 19, 22):  # a dominant 7th an octave up, strummed
+                minor7 = minor and deg in (0, 5)
+                for iv in ((12, 15, 19, 22) if minor7 else (12, 16, 19, 22)):  # a 7th chord an octave up, strummed
                     place(y, pluck(hz(r + iv), beat * 0.9, 0.12), t0 + i * beat + 0.001 * iv)
     return (y / np.abs(y).max() * 0.8).astype(np.float32)
 
@@ -221,6 +223,11 @@ def make_test_set(folder):
         "corrupt": _write_bytes(folder / "corrupt.mp3", b"this is not audio"),
         "bassline": write(folder / "syncopated_bass_96bpm.wav", bassline_song()[0]),
         "guitar_blues": write(folder / "solo_guitar_blues_A_140bpm.wav", guitar_blues()),
+        "minor_blues": write(folder / "solo_guitar_minor_blues_Am_140bpm.wav", guitar_blues(minor=True)),
+        "five_four": write(folder / "odd_meter_5-4_120bpm.wav",
+                           song([("D", "m"), ("G", ""), ("C", ""), ("A", "m")], 120, 5, loops=4)),
+        "seven_four": write(folder / "odd_meter_7-4_140bpm.wav",
+                            song([("E", "m"), ("C", ""), ("G", ""), ("D", "")], 140, 7, loops=4)),
     }
 
 
@@ -344,8 +351,27 @@ def analysis_checks(tmp):
         lows[inst] = low["bass_transcription"][0]["midi"]
     check("analysis", "a low note below E2 is an octave error for a guitar, but real for a piano",
           lows == {"guitar": 45, "keys": 33, None: 45}, str(lows))
+    cello = {}
+    for n in (33, 38):  # A1 is below a cello's C2 (an error), D2 is playable
+        low = {"bass": {"low_part_only": True}, "low_end_missing": True, "low_part_instrument": "strings",
+               "bass_transcription": [{"start": 0, "end": 1, "midi": n, "velocity": 90}]}
+        ma.finish_low_part(low)
+        cello[n] = low["bass_transcription"][0]["midi"]
+    check("analysis", "each instrument's own range decides octave errors (cello: A1 is an error, D2 is real)",
+          cello == {33: 45, 38: 38}, str(cello))
     check("analysis", "unknown instrument/genre values from the form are ignored",
           ma.clean_context(["drums", "kazoo<script>"], "polka") == {"instruments": ["drums"], "genre": None})
+    r = res["minor_blues"]
+    if check("analysis", "minor-key blues analyses", "error" not in r, r.get("error", "")):
+        b = r.get("blues_form") or {}
+        check("analysis", "a minor blues is named as one, with minor-blues variations (i m7, iv m7, bVI7, V7)",
+              "minor" in b.get("name", "") and r.get("blues_variations")
+              and r["blues_variations"][0]["chords"][:2] == ["Am7", "Dm7"], f"{b.get('name')} {r['key']}")
+    for key, label in (("five_four", "5/4"), ("seven_four", "7/4")):
+        r = res[key]
+        if check("analysis", f"{label} song analyses", "error" not in r, r.get("error", "")):
+            check("analysis", f"odd meter {label} recognised", r["meter"]["label"] == label,
+                  f"{r['meter']['label']} {r['meter'].get('scores')}")
     others = [k for k in ("pop4", "waltz3", "power", "modulate", "bassline") if "error" not in res[k]]
     check("analysis", "no 12-bar blues claimed for songs that aren't one",
           not any(res[k].get("blues_form") for k in others),
