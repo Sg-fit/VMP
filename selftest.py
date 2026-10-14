@@ -435,6 +435,15 @@ def unit_checks():
                    lambda m: cut if m.startswith("quick") else (_ for _ in ()).throw(TimeoutError()),
                    info, lambda e: False, complete=ma._complete_answer)
     check("unit", "AI race: a cut-off answer is still used when nothing better arrives", info.get("partial") is True)
+    tl = [{"time": "0:04", "start": 4.2, "chord": "D5"}, {"time": "0:05", "start": 5.4, "chord": "F7"},
+          {"time": "0:06", "start": 6.3, "chord": "G5"}, {"time": "0:09", "start": 9.1, "chord": "D5"}]
+    fake3 = {"chord_timeline": tl, "sections": [], "drums": {}, "sound": {}, "duration_sec": 12}
+    check("unit", "AI fact-check: a chord claimed at the wrong second is flagged, even one bar off",
+          "⚠" in ma._check_times("Then resolve to D5 at 0:06 for a pivot", fake3)
+          and "⚠" not in ma._check_times("Lift into G5 at 0:06", fake3))
+    check("unit", "a 12-bar blues check accepts real blues and rejects a padded pop loop",
+          ma.fits_twelve_bar("D7 G7 D7 D7 G7 G7 D7 D7 A7 G7 D7 A7".split(), 2)
+          and not ma.fits_twelve_bar("D A Bm F#7 Gmaj7 D A Bm F#7 Gmaj7 D A".split(), 2))
     fake2 = {"chord_timeline": [{"time": "0:12", "chord": "D"}], "sections": [], "drums": {}, "sound": {}}
     check("unit", "AI fact-check ignores chords the AI suggests adding",
           "⚠" not in ma._check_times("Insert an A7 before the D chord at 0:12 (play A7 at 0:11)", fake2))

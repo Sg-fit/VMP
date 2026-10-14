@@ -648,6 +648,36 @@ def detect_twelve_bar(r):
             "choruses": [round(float(max(0.0, first + k * 12 * bar)), 1) for k in range(count)]}
 
 
+# One chord per bar, as (semitones above the home note, quality).
+BLUES_VARIATIONS = [
+    ("quick-change blues with dominant 7ths",
+     [(0, "7"), (5, "7"), (0, "7"), (0, "7"), (5, "7"), (5, "7"), (0, "7"), (0, "7"), (7, "7"), (5, "7"), (0, "7"), (7, "7")],
+     "The classic blues sound: every chord a dominant 7th, the IV chord in bar 2, and V in bar 12 to turn around."),
+    ("jazz blues",
+     [(0, "7"), (5, "7"), (0, "7"), (7, "m7"), (5, "7"), (6, "dim7"), (0, "7"), (9, "7"), (2, "m7"), (7, "7"), (0, "7"), (7, "7")],
+     "Bebop-style: a ii–V into the IV chord (bar 4), a passing diminished chord (bar 6), and a VI7–ii–V back home."),
+]
+
+
+def blues_variations(r):
+    """The 12-bar variations, spelled in the track's key."""
+    k = r["key_index"]
+    t = key_tonic(k)
+    return [{"name": name, "why": why, "chords": [chord_name((t + off) % 12, q, k) for off, q in bars]}
+            for name, bars, why in BLUES_VARIATIONS]
+
+
+def fits_twelve_bar(chords, tonic):
+    """Do 12 chords (one per bar) follow the blues form? Checks the anchor bars - 1 on I, 5 on IV, 7 on I,
+    9 on V (or ii), 11 on I - allowing one substitution."""
+    roots = [(parse_chord(c) or (None,))[0] for c in chords]
+    if len(roots) != 12 or None in roots:
+        return False
+    rel = [(x - tonic) % 12 for x in roots]
+    anchors = [rel[0] == 0, rel[4] == 5, rel[6] == 0, rel[8] in (7, 2), rel[10] == 0]
+    return sum(anchors) >= 4
+
+
 def key_fifths(k):
     """Key signature as MusicXML 'fifths' (+sharps / -flats), spelled the same way as the notes."""
     steps = [0, 2, 3, 5, 7, 8, 10] if key_is_minor(k) else [0, 2, 4, 5, 7, 9, 11]
@@ -1138,6 +1168,8 @@ def analyze(path, melody_text=None, cache_dir=None, context=None):
             result["melody"]["check"] = check_melody(extras["chroma"], extras["bounds"], pcs, main_key)
     result["references"] = shared_dna(result)
     result["ideas"] = rule_based_ideas(result)
+    if result.get("blues_form"):
+        result["blues_variations"] = blues_variations(result)
     genre = (context or {}).get("genre")
     if genre:
         result["ideas"].append({"area": GENRES[genre][0].lower(), "idea": GENRES[genre][2]})
@@ -1713,6 +1745,8 @@ def export_midis(r, out_dir):
         fname = f"{stem}_melody_{re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')}.mid"
         write_melody_midi(out_dir / fname, notes, bpm, cents=cents)
         files.append({"file": fname, "label": f"melody — {label}", "chords": mel["variations"][label]})
+    for v in r.get("blues_variations") or []:
+        save(f"blues {v['name']}", v["chords"])
     for i, alt in enumerate((r.get("ai") or {}).get("alt_progressions", []), 1):
         save(f"ai {i} {alt.get('name', '')}", alt.get("chords", []))
     return files
@@ -1854,14 +1888,25 @@ def _check_times(text, r, tolerance=3):
     # With a preposition in between ("add G#7 before C#m"), the second chord is a claim to check.
     suggest = re.compile(r"\b(?:insert|add|play|use|try|layer|introduce|swap|put|with)\s+"
                          r"(?:(?!(?:before|after|over|under|on|into|to|than|from|of|at|in|the)\b)[\w#'-]+\s+){0,3}$", re.I)
-    for m_ in re.finditer(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text):
-        name, t = m_.group(1), m_.group(2)
-        if suggest.search(text[max(0, m_.start() - 30):m_.start()]):
+    tl = sorted(r["chord_timeline"], key=lambda c: c.get("start", _to_sec(c["time"])))
+    starts = [c.get("start", _to_sec(c["time"])) for c in tl]
+    ends = starts[1:] + [r.get("duration_sec", 1e9)]
+
+    def sounding(t):  # chords heard during the second m:ss (half a second of slack before it)
+        return [c for c, a, b in zip(tl, starts, ends) if a < t + 1 and b > t - 0.5]
+
+    claims = [(m_.start(), m_.group(1), m_.group(2)) for m_ in
+              re.finditer(r"\b([A-G][b#]?(?:maj7|m7|m|7|5)?)(?:\s+chord)?\s+at\s+(\d{1,2}:\d{2})\b", text)]
+    # "the 0:05 D5" names the chord that's there now, even inside a suggestion ("replace the 0:05 D5 with Bm")
+    claims += [(None, m_.group(2), m_.group(1)) for m_ in
+               re.finditer(r"\bthe\s+(\d{1,2}:\d{2})\s+([A-G][b#]?(?:maj7|m7|m|7|5)?)\b", text)]
+    for pos, name, t in claims:
+        if pos is not None and suggest.search(text[max(0, pos - 30):pos]):
             continue  # a chord the AI suggests adding, not a claim about the recording
         want = parse_chord(name)
         if not want:
             continue
-        near = [c for c in r["chord_timeline"] if abs(_to_sec(c["time"]) - _to_sec(t)) <= tolerance]
+        near = sounding(_to_sec(t))
         if not any((parse_chord(c["chord"]) or (None,))[0] == want[0] for c in near):
             when = [c["time"] for c in r["chord_timeline"] if (parse_chord(c["chord"]) or (None,))[0] == want[0]][:3]
             problems.append(f"{name} isn't playing at {t}" + (f" (it's at {', '.join(when)})" if when else ""))
@@ -1997,7 +2042,7 @@ def ai_brainstorm(r, llm):
     obj = _parse_json_reply(raw)
     if obj is None:
         return {"error": "AI reply could not be parsed", "raw": raw.strip()[:1500]}
-    return {
+    out = {
         "model": info.get("model"),
         "partial": bool(info.get("partial")),
         "vibe": _clean(obj.get("vibe", "")),
@@ -2011,6 +2056,14 @@ def ai_brainstorm(r, llm):
         "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
                        for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
     }
+    if r.get("blues_form"):
+        # The AI is asked to keep the 12-bar form but doesn't always (it once padded a pop loop to 12 chords and
+        # called it a blues), so check each progression and drop the ones that don't follow the form.
+        kept = [p for p in out["alt_progressions"] if fits_twelve_bar(p["chords"], key_tonic(r["key_index"]))]
+        if len(kept) < len(out["alt_progressions"]):
+            out["dropped_progressions"] = len(out["alt_progressions"]) - len(kept)
+        out["alt_progressions"] = kept
+    return out
 
 
 BENCH_SUMMARY = """Length 2:43, 83 BPM (steady, played by feel), dark/warm tone.
@@ -2393,6 +2446,8 @@ def track_report(r):
               + (" · before the first full chorus: an intro or pickup" if b["choruses"][0] > b["bar_sec"] * 2 else "")]
         k = r["key_index"]
         home = spell(key_tonic(k), k)
+        for v in r.get("blues_variations") or []:
+            L.append(f"- **Try:** {v['name']} — `{' | '.join(v['chords'])}` — {v['why']}")
         L.append(f"_In a blues, “{r['key']}” means {home} is home. Expect dominant-7th chords ({home}7, "
                  f"{spell((key_tonic(k) + 5) % 12, k)}7, {spell((key_tonic(k) + 7) % 12, k)}7) and the blue notes "
                  f"{spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) "
@@ -2463,6 +2518,9 @@ def track_report(r):
                 L += [f"> {ai['vibe']}", ""]
             for i in ai["ideas"]:
                 L.append(f"- **{i.get('area', 'idea')}:** {i['idea']}")
+            if ai.get("dropped_progressions"):
+                L += ["", f"_The AI suggested {ai['dropped_progressions']} progression(s) that didn't keep the 12-bar "
+                      "form, so they were left out — the blues variations under Harmony do._"]
             if ai["alt_progressions"]:
                 L += ["", "**Alternative progressions**", ""]
                 for p in ai["alt_progressions"]:
