@@ -39,6 +39,13 @@
 <a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
 
 {% if items %}
+<p class="muted small" style="margin-top:28px">Each line is one track:
+  <abbr title="{{ glossary['Length'] }}">length</abbr> ·
+  <abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">tempo and meter</abbr> ·
+  <abbr title="{{ glossary['Key'] }} {{ glossary['Camelot'] }}">key (Camelot code)</abbr> ·
+  <abbr title="{{ glossary['Mode'] }}">mode</abbr> ·
+  <abbr title="{{ glossary['Energy level'] }} {{ glossary['Mood'] }}">energy and mood</abbr> ·
+  <abbr title="{{ glossary['Form'] }}">form</abbr>.</p>
 <ul class="hist">
   {% for it in items %}
   <li>

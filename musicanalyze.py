@@ -1999,55 +1999,140 @@ def pairings(results):
 
 BARS = "▁▂▃▄▅▆▇█"
 
-# Plain-English explanations, shown as hover tooltips and in the "How to read this report" guide.
-GLOSSARY = {
-    "Length": "Duration of the track (minutes:seconds).",
-    "Tempo": "Speed in beats per minute (BPM). Automatic detection occasionally reads half or double what you feel.",
-    "Key": "The home note and scale the music settles on, e.g. E major. Major usually sounds brighter, minor darker.",
-    "Camelot": "A DJ/producer code for keys: numbers 1-12 around a wheel, A = minor, B = major. Tracks with the same "
-               "code, one number apart (same letter), or the same number with the other letter blend smoothly.",
-    "Mode": "The flavour of the scale: which notes are used around the home note. Hover a mode name to hear what "
-            "it's like in words.",
-    "Form": "The order of the song's sections. Each letter is a section; the same letter again means it sounds like "
-            "an earlier one (e.g. A B A C = verse, chorus, verse, bridge). Detected automatically, so approximate.",
-    "Energy": "Loudness across the track from start (left) to end (right) in 24 slices; taller bars are louder. "
-              "Shows builds, drops and breakdowns at a glance.",
-    "Confidence": "How strongly the notes match the key (0-1). Above 0.75 is clear; below 0.6 the harmony is "
-                  "ambiguous (modal music, drones, power chords).",
-    "Colour note": "The note that gives this mode its character. Feature it in a melody to make the mode obvious.",
-    "Roman numerals": "Chords named by their place in the key: I = the home chord, IV and V = built on the 4th and "
-                      "5th notes. Upper case = major, lower case = minor, so 'i - iv - V' is the same progression "
-                      "in any key.",
-    "Harmonic rhythm": "How often the chord changes.",
-    "Drone / pedal": "A note that keeps sounding while the chords change above it.",
-    "Slash chord": "A/E means an A chord with E as the lowest (bass) note.",
-    "Tuning": "How far the instrument is from standard pitch (A = 440 Hz), in cents. 100 cents = one semitone.",
-    "Drum grid": "One bar split into 16 sixteenth-notes (1 e & a 2 e & a 3 e & a 4 e & a). K = kick-heavy hit, "
-                 "S = snare-heavy hit, X = strong hit (kick and snare), x = lighter hit, . = usually nothing. "
-                 "h = hi-hat/cymbal.",
-    "Groove repetition": "How closely the bars repeat the main drum groove: tight = loop-like, loose = lots of "
-                         "variation.",
-    "Syncopation": "Hits that fall between the beats instead of on them; makes a groove feel pushed or funky.",
-    "Percussive": "Share of the sound energy coming from drums/percussion rather than sustained notes.",
-    "Frequency balance": "Share of energy in each range: sub (felt more than heard), bass, low-mids (body), "
-                         "high-mids (presence), air (sparkle).",
-    "Scale degree": "A note's position in the key: 1 is the home note, 5 the fifth above it, b6 a flattened "
-                    "sixth, and so on. Degrees describe a melody independently of the key.",
-    "Top line": "The loudest pitched part, found automatically. In a full-band phone recording this is often the "
-                "chord instrument rather than the melody.",
-    "Variations": "Classic ways to develop a motif: inversion flips its intervals upside down, retrograde plays "
-                  "it backwards, a sequence repeats it a step higher, an answer phrase resolves to the home note.",
-    "dBFS": "Loudness relative to the digital maximum (0 dBFS); more negative = quieter.",
-    "Energy level": "How intense a section feels, 1-10, from its loudness (compared with the loudest section), "
-                    "how many notes/hits per second, how bright the sound is, and the tempo.",
-    "Mood": "Where the music sits between dark/sad and bright/happy (positivity 0-100), from the mode, how much "
-            "of the time minor chords play, brightness and tempo. Combined with energy it gives words like "
-            "'calm', 'driving' or 'melancholic'. A rule of thumb, not a verdict: your playing shapes the feel too.",
-    "Sheet music": "The bass notes found in the recording, placed on the beat grid (16th-note resolution) in bars "
-                   "of the detected meter, with the chords above. Automatic, so check it by ear; swing and "
-                   "triplets get rounded to the nearest 16th.",
-    "Dynamic range": "The difference between the loud and quiet parts, in dB. Bigger = more contrast.",
+# Plain-English explanations, shown as hover tooltips and, grouped, in the "How to read this report" guide.
+GUIDE = {
+    "The basics": {
+        "Length": "Duration of the track (minutes:seconds).",
+        "Tempo": "Speed in beats per minute (BPM): 60 is one beat a second; ballads sit around 60-80, pop 90-130, "
+                 "dance 120-130. Automatic detection occasionally reads half or double what you feel.",
+        "Meter": "How beats are grouped into bars: 4/4 = four beats per bar (most pop, rock, blues), 3/4 = three "
+                 "(waltz feel). 'Assumed' means the evidence was weak, so the most common, 4/4, was used.",
+        "Bar": "One cycle of the meter (e.g. four beats in 4/4). Chord changes, sections and riffs are counted in bars.",
+        "Key": "The home note and scale the music settles on, e.g. E major. Major usually sounds brighter, minor darker.",
+        "Camelot": "A DJ/producer code for keys: numbers 1-12 around a wheel, A = minor, B = major. Tracks with the same "
+                   "code, one number apart (same letter), or the same number with the other letter blend smoothly.",
+        "Mode": "The flavour of the scale: which notes are used around the home note. Hover a mode name to hear what "
+                "it's like in words.",
+        "Note names": "A letter plus an octave number: C4 is middle C, A4 = 440 Hz. A bass guitar's lowest string is "
+                      "E1, a guitar's E2. # = a semitone up (sharp), b = a semitone down (flat).",
+    },
+    "Harmony": {
+        "Confidence": "How strongly the notes match the key (0-1). Above 0.75 is clear; below 0.6 the harmony is "
+                      "ambiguous (modal music, drones, power chords).",
+        "Runner-up": "The next most likely key. Often the 'relative' key (C major / A minor share the same notes), "
+                     "so the two are easy to confuse.",
+        "Mode confidence": "How clearly one mode fits better than the others. 'Low' means another mode fits almost "
+                           "as well, usually because the deciding note is rarely played.",
+        "Colour note": "The note that gives this mode its character. Feature it in a melody to make the mode obvious.",
+        "Scale": "The seven notes of the key's mode, starting from the home note.",
+        "Chord names": "C = C major, Cm = C minor, C7 = dominant 7th (bluesy, pulls towards the chord a 4th up), "
+                       "Cm7 = minor 7th (soft, jazzy), Cmaj7 = major 7th (dreamy), C5 = power chord: just the root "
+                       "and 5th, neither major nor minor (typical of rock and blues guitar).",
+        "Slash chord": "A/E means an A chord with E as the lowest (bass) note.",
+        "Chord root": "The note a chord is named after (D in D7). Bass lines often play the root.",
+        "Roman numerals": "Chords named by their place in the key: I = the home chord, IV and V = built on the 4th and "
+                          "5th notes. Upper case = major, lower case = minor, so 'i - iv - V' is the same progression "
+                          "in any key.",
+        "Chord loop": "A short chord sequence that repeats, like the four chords of a verse. Loops are found inside "
+                      "each key section and shown starting on the home chord.",
+        "Chord timeline": "Every chord change in order, with the time it starts. A/E-style names show the bass note "
+                          "when it isn't the chord's root.",
+        "Harmonic rhythm": "How often the chord changes.",
+        "Time in each key": "How long the music stays in each key. A song can move to another key (modulate) for a "
+                            "chorus or bridge.",
+        "Key timeline": "The keys in the order they come, with their start and end times.",
+        "Drone / pedal": "A note that keeps sounding while the chords change above it.",
+        "Tuning": "How far the instrument is from standard pitch (A = 440 Hz), in cents. 100 cents = one semitone.",
+        "Major/minor blur": "Both the major and the minor 3rd are prominent - typical of blues and rock, where the "
+                            "minor 3rd is a 'blue note' over major chords.",
+    },
+    "Form": {
+        "Form": "The order of the song's sections. Each letter is a section; the same letter again means it sounds like "
+                "an earlier one (e.g. A B A C = verse, chorus, verse, bridge). Detected automatically, so approximate.",
+        "Section energy": "low / medium / high: the section's loudness compared with the track's average.",
+        "Instrument columns": "✓ = that instrument clearly plays in the section, — = it doesn't (or too quietly to tell).",
+    },
+    "Energy & mood": {
+        "Energy": "Loudness across the track from start (left) to end (right) in 24 slices; taller bars are louder. "
+                  "Shows builds, drops and breakdowns at a glance.",
+        "Energy level": "How intense a section feels, 1-10, from its loudness (compared with the loudest section), "
+                        "how many notes/hits per second, how bright the sound is, and the tempo.",
+        "Mood": "Where the music sits between dark/sad and bright/happy (positivity 0-100), from the mode, how much "
+                "of the time minor chords play, brightness and tempo. Combined with energy it gives words like "
+                "'calm', 'driving' or 'melancholic'. A rule of thumb, not a verdict: your playing shapes the feel too.",
+        "Positivity": "0 = dark/sad, 100 = bright/happy, estimated from the mode, minor chords, brightness and tempo.",
+        "Loudness vs peak": "How much quieter the section is than the loudest one, in dB. 0 = the loudest; -6 dB "
+                            "sounds about half as loud.",
+        "Notes per second": "How many notes or hits start each second - a measure of how busy the playing is.",
+        "Brightness": "The 'centre of gravity' of the sound's frequencies, in Hz. Higher = brighter or harsher "
+                      "(cymbals, distortion), lower = darker or warmer.",
+        "Minor chords": "The share of the section's time spent on minor chords - more minor usually feels darker.",
+    },
+    "Instruments": {
+        "Separation": "Drums and the rest are split apart before analysis. Demucs is an AI model that does this well; "
+                      "without it a simpler split by sound type (sharp hits vs held notes) is used.",
+        "Drum grid": "One bar split into 16 sixteenth-notes (1 e & a 2 e & a 3 e & a 4 e & a). K = kick-heavy hit, "
+                     "S = snare-heavy hit, X = strong hit (kick and snare), x = lighter hit, . = usually nothing. "
+                     "h = hi-hat/cymbal.",
+        "Groove repetition": "How closely the bars repeat the main drum groove: tight = loop-like, loose = lots of "
+                             "variation.",
+        "Groove traits": "Backbeat = snare on beats 2 and 4 (rock/pop); four-on-the-floor = kick on every beat "
+                         "(disco/house); half-time = snare only on beat 3, feels slower.",
+        "Fill": "A short break from the main groove, usually leading into a new section.",
+        "Bass style": "Roots = mostly the chords' root notes; pedal = holds one note under changing chords; riff = a "
+                      "repeating figure; walking = a note on every beat moving step by step (jazz).",
+        "Clear notes": "The share of beats where a bass pitch could be heard clearly (rests, quiet or muddy notes "
+                       "don't count).",
+        "Lowest part": "When there's no separate bass instrument, the lowest notes of the main instrument (e.g. a "
+                       "guitarist's thumb on the low strings), analysed like a bass line.",
+        "Sheet music": "The bass notes found in the recording, placed on the beat grid (16th-note resolution) in bars "
+                       "of the detected meter, with the chords above. Automatic, so check it by ear; swing and "
+                       "triplets get rounded to the nearest 16th.",
+        "Note lengths": "Whole = 4 beats, half = 2, quarter = 1, 8th = half a beat, 16th = a quarter of a beat. "
+                        "Dotted = one and a half times as long.",
+        "Rhythm grid": "One bar in 16ths (1 e & a 2 e & a ...). x or X = a note starts there; X = in most bars, "
+                       "x = in some, . = rarely.",
+    },
+    "Rhythm & sound": {
+        "Pulse": "How steady the tempo is: to a click (machine-tight), by feel (human), loose, or free (no fixed beat).",
+        "Syncopation": "Hits that fall between the beats instead of on them; makes a groove feel pushed or funky.",
+        "Percussive": "Share of the sound energy coming from sharp hits (drums, but also picked or strummed attacks) "
+                      "rather than held notes.",
+        "Tone": "Dark/warm, balanced or bright, from the brightness (Hz); clean/tonal vs noisy/textural from how "
+                "pitched or noise-like the sound is.",
+        "dBFS": "Loudness relative to the digital maximum (0 dBFS); more negative = quieter.",
+        "Dynamic range": "The difference between the loud and quiet parts, in dB. Bigger = more contrast.",
+        "Frequency balance": "Share of energy in each range: sub (felt more than heard), bass, low-mids (body), "
+                             "high-mids (presence), air (sparkle).",
+    },
+    "Melody": {
+        "Scale degree": "A note's position in the key: 1 is the home note, 5 the fifth above it, b6 a flattened "
+                        "sixth, and so on. Degrees describe a melody independently of the key.",
+        "Melody shape": "The overall contour - rising, falling, arch or wave - plus its range and how much it moves "
+                        "by step (next note) vs leap (skips).",
+        "Intervals": "The distance from each note to the next: half-step, whole-step, 3rds, 4ths, 5ths ... "
+                     "Small steps sound smooth and singable, big leaps dramatic.",
+        "Top line": "The loudest pitched part, found automatically. In a full-band phone recording this is often the "
+                    "chord instrument rather than the melody.",
+        "Variations": "Classic ways to develop a motif: inversion flips its intervals upside down, retrograde plays "
+                      "it backwards, a sequence repeats it a step higher, an answer phrase resolves to the home note.",
+    },
+    "Ideas & files": {
+        "Shared DNA": "Building blocks (chord loops, scale, groove, form, melodic devices) this track has in common "
+                      "with well-known recordings - for study and inspiration, not 'sounds like'.",
+        "AI brainstorm": "Written by an AI language model that reads the analysis numbers (never your audio). Use it "
+                         "as a sparring partner: times and chords it names are checked, but its opinions aren't.",
+        "MIDI": "A file of notes, not sound: drag it into a DAW (GarageBand, Logic, Ableton, FL Studio...) or "
+                "MuseScore, pick any instrument, and edit, transpose or loop it.",
+        "MusicXML": "The standard file format for sheet music: opens in MuseScore (free), Sibelius, Dorico, Finale "
+                    "and many DAWs, where you can read, play back and edit it.",
+        "Report file": "This whole report as a text file (Markdown, .md): opens in any text editor or notes app, "
+                       "and shows formatted on GitHub, Notion or Obsidian.",
+        "Data file": "Every number behind the report in a machine-readable file (JSON): for spreadsheets, your own "
+                     "scripts, or another tool.",
+    },
 }
+GLOSSARY = {term: text for group in GUIDE.values() for term, text in group.items()}
 MODE_INFO = {
     "Ionian (major)": "The ordinary major scale: bright, stable, resolved.",
     "Lydian": "Major with a raised 4th: dreamy, floating, film-score.",
@@ -2075,10 +2160,13 @@ def mode_tip(mode):
 
 
 def guide():
-    items = "".join(f"<li><b>{html.escape(k)}</b> — {html.escape(v)}</li>" for k, v in GLOSSARY.items())
-    modes = "".join(f"<li><b>{html.escape(k)}</b> — {html.escape(v)}</li>" for k, v in MODE_INFO.items())
+    parts = []
+    for group, terms in list(GUIDE.items()) + [("Modes", MODE_INFO)]:
+        items = "".join(f"<li><b>{html.escape(k)}</b> — {html.escape(v)}</li>" for k, v in terms.items())
+        parts.append(f"<p><b>{html.escape(group)}</b></p><ul>{items}</ul>")
     return ["<details><summary>📖 How to read this report</summary>", "",
-            f"<ul>{items}</ul><p><b>Modes</b></p><ul>{modes}</ul>", "", "</details>", ""]
+            "<p>Every underlined term in the report explains itself when you hover over it (or tap it on a phone). "
+            "Here they all are in one place.</p>" + "".join(parts), "", "</details>", ""]
 
 
 def sparkline(values):
@@ -2099,8 +2187,9 @@ def track_report(r):
     if r["tempo_bpm"] and meter.get("label"):
         tempo += f" in {meter['label']}" + (" (waltz feel)" if meter["beats_per_bar"] == 3 else "") + \
             (" (assumed)" if meter.get("confidence") == "assumed" else "")
-    L += [f"**{r['duration']}** · **{tempo}** · **{tip(r['key'], 'Key')}** "
-          f"({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · {rh['tempo_feel']} · {s['tone']}", ""]
+    L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
+          f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
+          f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
 
     # Harmony
     conf = r["key_confidence"]
@@ -2108,33 +2197,33 @@ def track_report(r):
     mode_note = ("" if r["mode_confidence"] == "high" else
                  f"; could also be {r['mode_runner_up']}" if r["mode_confidence"] == "medium" else
                  f"; uncertain — {r['mode_runner_up']} fits almost as well")
-    L += ["### Harmony", "",
+    L += ["### Harmony", "", "_The key, scale and chords: what the music is built from._", "",
           f"- **{tip('Key')}:** {r['key']} ({tip('confidence', 'Confidence')} {conf}: {conf_note}; "
-          f"runner-up {r['runner_up_key']})",
-          f"- **{tip('Mode')}:** {mode_tip(r['mode'])} ({r['mode_confidence']} confidence{mode_note}) — "
-          f"{tip('colour note', 'Colour note')} **{r['color_note']}**",
-          f"- **Scale:** {' '.join(r['scale_notes'])}",
+          f"{tip('runner-up', 'Runner-up')} {r['runner_up_key']})",
+          f"- **{tip('Mode')}:** {mode_tip(r['mode'])} ({tip(r['mode_confidence'] + ' confidence', 'Mode confidence')}"
+          f"{mode_note}) — {tip('colour note', 'Colour note')} **{r['color_note']}**",
+          f"- **{tip('Scale')}:** {' '.join(r['scale_notes'])}",
           ]
     if r.get("drone"):
         who = " (the bass holds it)" if (r.get("bass") or {}).get("pedal_note") == r["scale_notes"][0] else ""
         L.append(f"- **{tip('Drone / pedal')}:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the "
                  f"track{who}")
     if r.get("third_mix"):
-        L.append(f"- **Major/minor blur:** both thirds ({r['thirds']}) are prominent")
+        L.append(f"- **{tip('Major/minor blur')}:** both thirds ({r['thirds']}) are prominent")
     cents = r.get("tuning_cents", 0)
     if abs(cents) >= 10:
         L.append(f"- **{tip('Tuning')}:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
                  f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz); the analysis corrects for this")
-    L.append(f"- **Chords used most:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
+    L.append(f"- **{tip('Chords used most', 'Chord names')}:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
     if r["harmonic_rhythm_beats"]:
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     elif r.get("harmonic_rhythm_sec"):
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_sec']} seconds")
-    L += ["", "**Time in each key**", "", "| Key | Time | Share |", "|-----|------|-------|"]
+    L += ["", f"**{tip('Time in each key')}**", "", "| Key | Time | Share |", "|-----|------|-------|"]
     for k, v in r["time_in_key"].items():
         L.append(f"| {k} | {fmt_time(v['seconds'])} | {v['percent']}% |")
     if r["key_changes"]:
-        L += ["", "**Key timeline:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
+        L += ["", f"**{tip('Key timeline')}:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
     b = r.get("blues_form")
     if b:
         L += ["", f"**{tip('Form', explanation=BLUES_TIP)}: {b['name']}** — choruses of ~{b['chorus_sec']} s "
@@ -2148,19 +2237,21 @@ def track_report(r):
                  f"{spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) "
                  f"against the major scale._")
     if r["loops"]:
-        L += ["", "**Chord loops**", ""]
+        L += ["", f"**{tip('Chord loops', 'Chord loop')}**", ""]
         for lp in r["loops"]:
             L.append(f"- `{' – '.join(lp['chords'])}`  ({tip(' – '.join(lp['roman']), 'Roman numerals')} "
                      f"in {lp['key']}) "
                      f"· {', '.join(lp['where'])} · ×{lp['repeats']}")
     if r["chord_timeline"]:
         L += ["", "<details><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
+              f"_{GLOSSARY['Chord timeline']} {GLOSSARY['Chord names']}_", "",
               " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" for c in r["chord_timeline"]), "",
               "</details>"]
 
     # Structure
-    L += ["", "### Structure", "",
-          f"| Section | Time | Length | Energy | Key | Main chords | Drums | Bass |",
+    L += ["", "### Structure", "", "_The track's sections in order, and what changes between them._", "",
+          f"| {tip('Section', 'Form')} | Time | Length | {tip('Energy', 'Section energy')} | Key | "
+          f"{tip('Main chords', 'Chord names')} | {tip('Drums', 'Instrument columns')} | {tip('Bass', 'Instrument columns')} |",
           "|---------|------|--------|--------|-----|-------------|-------|------|"]
     for sec in r["sections"]:
         L.append(f"| **{sec['label']}** | {fmt_time(sec['start'])}–{fmt_time(sec['end'])} | "
@@ -2174,13 +2265,13 @@ def track_report(r):
     L += dna_report(r)
 
     # Rhythm & sound
-    L += ["", "### Groove & sound", "",
-          f"- **Pulse:** {rh['tempo_feel']}"
+    L += ["", "### Groove & sound", "", "_How the track moves and how it sounds._", "",
+          f"- **{tip('Pulse')}:** {rh['tempo_feel']}"
           + (f" (beat-to-beat variation {rh['tempo_variation_pct']}%)" if "tempo_variation_pct" in rh else ""),
-          f"- **Rhythm:** {rh['busyness']} ({rh['onsets_per_sec']} notes/hits per sec)"
+          f"- **Rhythm:** {rh['busyness']} ({tip(str(rh['onsets_per_sec']) + ' notes/hits per sec', 'Notes per second')})"
           + (f", {rh['groove']} ({rh['syncopation_pct']}% {tip('off-beat', 'Syncopation')})" if "groove" in rh else ""),
           f"- **{tip('Percussive', 'Percussive')} vs tonal:** {rh['percussive_pct']}% percussive energy",
-          f"- **Tone:** {s['tone']} ({s['brightness_hz']} Hz centroid), {s['texture']}",
+          f"- **{tip('Tone')}:** {s['tone']} ({tip(str(s['brightness_hz']) + ' Hz', 'Brightness')} brightness), {s['texture']}",
           f"- **Loudness:** avg {s['avg_loudness_db']} {tip('dBFS')}, {tip('dynamic range', 'Dynamic range')} "
           f"{s['dynamic_range_db']} dB",
           f"- **{tip('Energy arc', 'Energy')}:** `{sparkline(s['energy_curve'])}`"
@@ -2192,13 +2283,14 @@ def track_report(r):
     L.append("```")
 
     # Ideas
-    L += ["", "### 💡 Ideas to try", ""]
+    L += ["", "### 💡 Ideas to try", "", "_Suggestions worked out from the analysis itself (no AI): ways to develop "
+          "the track. Try them, keep what you like._", ""]
     for i in r["ideas"]:
         L.append(f"- **{i['area']}:** {i['idea']}")
 
     ai = r.get("ai")
     if ai:
-        L += ["", "### 🤖 AI brainstorm", ""] + ([f"_Suggestions by {ai['model']}"
+        L += ["", "### 🤖 AI brainstorm", "", f"_{GLOSSARY['AI brainstorm']}_", ""] + ([f"_Suggestions by {ai['model']}"
                                                 + (" (its reply was cut short, so some parts may be missing)" if ai.get("partial") else "")
                                                 + "._", ""] if ai.get("model") else [])
         if ai.get("pending"):
@@ -2218,11 +2310,11 @@ def track_report(r):
                 L += ["", "**Title ideas:** " + " · ".join(f"_{t}_" for t in ai["title_ideas"])]
 
     if r.get("sheets"):
-        L += ["", "### 🎼 Sheet music", ""]
+        L += ["", "### 🎼 Sheet music", "", f"_{GLOSSARY['Sheet music']} {GLOSSARY['MusicXML']}_", ""]
         for m in r["sheets"]:
             L.append(f"- `sheets/{m['file']}` — {m['label']}")
     if r.get("midi"):
-        L += ["", "### 🎹 MIDI sketches (drag into your DAW)", ""]
+        L += ["", "### 🎹 MIDI sketches (drag into your DAW)", "", f"_{GLOSSARY['MIDI']}_", ""]
         for m in r["midi"]:
             L.append(f"- `midi/{m['file']}` — {m['label']}" + (f": {' – '.join(m['chords'])}" if m["chords"] else ""))
     L.append("")
@@ -2230,7 +2322,8 @@ def track_report(r):
 
 
 def melody_report(r):
-    L = ["", "### 🎶 Melody", ""]
+    L = ["", "### 🎶 Melody", "", "_The tune: its notes, shape and ways to develop it. Type the melody you hear "
+         "when uploading for the full analysis._", ""]
     m = r.get("melody")
     if m and m.get("error"):
         L += [f"_{m['error']}_", ""]
@@ -2245,8 +2338,8 @@ def melody_report(r):
               f"- **{tip('Scale degrees', 'Scale degree')}:** {' '.join(m['degrees'])} (1 = {r['scale_notes'][0]}, the home note)",
               f"- **Fits:** {', '.join(mode_tip(x) for x in m['fits_modes']) or 'no single mode — it mixes notes from the major and minor scales on ' + r['scale_notes'][0]}"
               + (f" · outside the detected scale: {', '.join(m['outside_detected_scale'])}" if m["outside_detected_scale"] else ""),
-              f"- **Shape:** {m['shape']} · range {m['range']} · {m['steps_pct']}% steps, {m['leaps_pct']}% leaps",
-              f"- **Moves:** {', '.join(m['intervals'])}"]
+              f"- **{tip('Shape', 'Melody shape')}:** {m['shape']} · range {m['range']} · {m['steps_pct']}% steps, {m['leaps_pct']}% leaps",
+              f"- **{tip('Moves', 'Intervals')}:** {', '.join(m['intervals'])}"]
         if m["harmonize"]:
             L.append("- **Chords that contain each note:** " +
                      " · ".join(f"{n} → {', '.join(cs) or '—'}" for n, cs in m["harmonize"].items()))
@@ -2278,7 +2371,7 @@ def dna_report(r):
     if not (d.get("progressions") or d.get("mode") or d.get("groove") or d.get("melody") or d.get("form") or ai_refs):
         return []
     L = ["", "### 🎧 Shared DNA with well-known music", "",
-         "_Not “sounds like” — specific building blocks this track shares with recordings worth studying._", ""]
+         f"_{GLOSSARY['Shared DNA']}_", ""]
     for p in d.get("progressions", []):
         how = "uses the same loop as" if p["match"] == "same loop" else "contains"
         L.append(f"- **Chords:** your `{' – '.join(p['your_chords'])}` {how} **{p['progression']}** — "
@@ -2306,14 +2399,15 @@ def instruments_report(r):
         return []
     how = ("separated with Demucs (AI source separation)" if r.get("separation") == "demucs" else
            "separated with a lighter harmonic/percussive split (Demucs AI separation not in use)")
-    L = ["", "### Instruments", "", f"_Drums and the rest were {how}._", ""]
+    L = ["", "### Instruments", "", "_Which instruments play, and what the drums and bass do._", "",
+         f"_Drums and the rest were {tip(how, 'Separation')}._", ""]
     if d.get("present") and d.get("grid"):
         where = [sec["label"] for sec in r["sections"] if sec.get("drums")]
         parts = [f"plays in sections {' '.join(where)}" if where else "plays throughout",
                  f"{tip('groove repetition', 'Groove repetition')}: {d['repetition']}"]
-        parts += d.get("traits", [])
+        parts += [tip(t, 'Groove traits') for t in d.get("traits", [])]
         if d.get("fills"):
-            parts.append("likely fills at " + ", ".join(fmt_time(t) for t in d["fills"]))
+            parts.append(f"likely {tip('fills', 'Fill')} at " + ", ".join(fmt_time(t) for t in d["fills"]))
         g = d["grid"]
         counts = " ".join(f"{b + 1} e & a" for b in range(len(g) // 4))  # 4 beats in 4/4, 3 in 3/4
         rows = ["         " + counts, "Drums    " + " ".join(g)]
@@ -2334,11 +2428,12 @@ def instruments_report(r):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
         where = [sec["label"] for sec in r["sections"] if sec.get("bass")]
         parts = [f"plays in sections {' '.join(where)}" if where else "plays throughout" if solo else "barely audible",
-                 f"clear notes on {b['tracked_pct']}% of beats", f"range {b['range']}", f"style: {b['style']}",
-                 f"main notes: {notes}", f"on the chord root {b['follows_roots_pct']}% of the time"]
+                 f"{tip('clear notes', 'Clear notes')} on {b['tracked_pct']}% of beats",
+                 f"range {tip(b['range'], 'Note names')}", f"{tip('style', 'Bass style')}: {b['style']}",
+                 f"main notes: {notes}", f"on the {tip('chord root', 'Chord root')} {b['follows_roots_pct']}% of the time"]
         if b.get("riff"):
             parts.append(f"repeating riff: `{' '.join(b['riff'])}`")
-        L += [f"**{'Lowest part' if solo else '🎸 Bass'}** — " + " · ".join(parts), ""]
+        L += [f"**{tip('Lowest part') if solo else '🎸 Bass'}** — " + " · ".join(parts), ""]
         L += bass_rhythm_report(r)
     else:
         L += ["**🎸 Bass** — no clear bass line detected.", ""]
@@ -2355,16 +2450,17 @@ def bass_rhythm_report(r):
     values = ", ".join(f"{name} {pct}%" for name, pct in rh["note_values"])
     word = low_part(r)[0]
     L = [f"**{word.capitalize()} rhythm** (read from the {tip('sheet music', 'Sheet music')}, {sheet['bars']} bars) — "
-         f"{len(sheet['notes'])} notes, ~{rh['notes_per_bar']} per bar · note lengths: {values} · "
+         f"{len(sheet['notes'])} notes, ~{rh['notes_per_bar']} per bar · {tip('note lengths', 'Note lengths')}: {values} · "
          f"{rh['offbeat_pct']}% start between beats ({rh['sixteenth_offbeat_pct']}% on a 16th) · "
          f"{rh['syncopated_pct']}% {tip('syncopated', 'Syncopation')} (held across the beat) · "
          f"{rh['distinct_bar_rhythms']} different bar rhythms", ""]
     if rh["main_bar_rhythm_pct"] >= 25:  # a real repeating figure
-        L += [f"Most common bar rhythm (in {rh['main_bar_rhythm_pct']}% of the bars with {word}; x = a note starts):", "",
+        L += [f"Most common bar rhythm (in {rh['main_bar_rhythm_pct']}% of the bars with {word}; {tip('how to read', 'Rhythm grid')}):", "",
               "```", "         " + counts, ("Low part " if word != "bass" else "Bass     ") + " ".join(rh["main_bar_rhythm"]), "```", ""]
     else:  # played freely: show where notes usually land instead
         L += [f"The rhythm changes from bar to bar, so here is where the {word} usually plays "
-              "(X = a note starts there in at least half the bars, x = in a quarter to half of them):", "",
+              f"(X = a note starts there in at least half the bars, x = in a quarter to half of them; "
+              f"{tip('how to read', 'Rhythm grid')}):", "",
               "```", "         " + counts, ("Low part " if word != "bass" else "Bass     ") + " ".join(rh.get("usual_positions", "")), "```", ""]
     return L
 
@@ -2383,7 +2479,8 @@ def feel_report(r):
     if f["contrast"] < 10 and len(f["sections"]) > 1:
         L.append("- **Contrast:** little difference between sections — a breakdown (drop the drums/bass) or a "
                  "fuller final section would give the track more shape.")
-    L += ["", "| Section | Time | Energy | Mood | Positivity | Loudness vs peak | Notes/sec | Brightness | Minor chords |",
+    L += ["", f"| Section | Time | {tip('Energy', 'Energy level')} | {tip('Mood')} | {tip('Positivity')} | "
+          f"{tip('Loudness vs peak')} | {tip('Notes/sec', 'Notes per second')} | {tip('Brightness')} | {tip('Minor chords')} |",
           "|---------|------|--------|------|------------|------------------|-----------|------------|--------------|"]
     for s in f["sections"]:
         L.append(f"| **{s['label']}** | {fmt_time(s['start'])}–{fmt_time(s['end'])} | "

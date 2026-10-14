@@ -37,7 +37,6 @@
   .report hr { border: 0; border-top: 2px solid var(--ink); margin: 64px 0 12px; }
   .report hr + p, .report hr + p + p { color: var(--muted); font-size: .82rem; }
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
-  .report abbr[title] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
   .report details ul { padding-left: 20px; }
   .aibar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
            margin-top: 16px; padding: 12px 16px; background: var(--ink); color: var(--bg); font-size: .92rem; }
@@ -53,8 +52,6 @@
   .notify[aria-pressed="true"]::before { background: var(--accent); border-color: var(--accent); }
   .notify-note { font-size: .8rem; opacity: .8; flex-basis: 100%; }
   .notify-note:empty { display: none; }
-  #tip { position: absolute; z-index: 10; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
-         background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none; }
 </style>
 {% endblock %}
 {% block content %}
@@ -147,10 +144,13 @@
     <h1>Your analysis</h1>
     <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · temporary results — save them or download anything you want to keep{% endif %}</div>
     <div class="toolbar">
-      <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}">Download everything (.zip) ↓</a>
+      <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}"
+         title="One file with the report, the data, all MIDI files and the sheet music.">Download everything (.zip) ↓</a>
       {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet — wait for “ready” for the complete package.</span>{% endif %}
-      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}">Report (.md)</a>
-      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}">Data (.json)</a>
+      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}"
+         title="{{ glossary['Report file'] }}">Report (.md)</a>
+      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}"
+         title="{{ glossary['Data file'] }}">Data (.json)</a>
       <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>
     </div>
     <div class="savebar">
@@ -166,7 +166,7 @@
       {% endif %}
     </div>
     {% if midi_files %}
-      <div class="midis"><span class="label">MIDI</span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
+      <div class="midis"><span class="label"><abbr title="{{ glossary['MIDI'] }}">MIDI</abbr></span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
   </div>
   {% if not s.ai_pending %}
@@ -208,24 +208,11 @@
       if (y) { sessionStorage.removeItem('scroll-{{ job_id }}'); window.addEventListener('load', () => window.scrollTo(0, +y)); }
     } catch (e) {}
   </script>
-  <p class="muted small" style="margin:32px 0 0">Underlined terms explain themselves — hover, or tap on a phone.
-    The full guide is under “How to read this report”.</p>
+  <p class="muted small" style="margin:32px 0 0;max-width:46em">How to read this: the table gives each track at a
+    glance, then each track has its own sections — harmony, structure, energy & mood, instruments, melody, links to
+    well-known music, groove & sound, ideas and downloads. Underlined terms explain themselves — hover, or tap on a
+    phone — and the full guide is under “How to read this report”.</p>
   <div class="report">{{ report_html|safe }}</div>
-  <div id="tip" role="tooltip"></div>
-  <script>
-    // Tap/click an underlined term to show its explanation (hover tooltips don't exist on phones).
-    const tipEl = document.getElementById('tip');
-    document.addEventListener('click', ev => {
-      const a = ev.target.closest('.report abbr[title]');
-      if (!a) { tipEl.style.display = 'none'; return; }
-      tipEl.textContent = a.getAttribute('title');
-      tipEl.style.display = 'block';
-      const r = a.getBoundingClientRect();
-      const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - tipEl.offsetWidth - 16);
-      tipEl.style.left = Math.max(16, left) + 'px';
-      tipEl.style.top = (window.scrollY + r.bottom + 6) + 'px';
-    });
-  </script>
 
 {% elif s.state == 'error' %}
   <div>

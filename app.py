@@ -229,7 +229,7 @@ def current_user():
 
 @app.context_processor
 def inject_user():
-    return {"user": current_user()}
+    return {"user": current_user(), "glossary": ma.GLOSSARY}
 
 
 @app.template_filter("datetime")

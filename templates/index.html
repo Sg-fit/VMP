@@ -47,10 +47,10 @@
     <h1>Turn your tracks into ideas.</h1>
     <p class="lede">Upload a recording and get its key, mode, chord loops, structure, groove, bass line as sheet music,
       energy and mood — plus ideas to try and MIDI you can drag into your DAW.</p>
-    <div class="readout" aria-hidden="true">
-      <div><b>Key</b><span>& mode</span></div>
-      <div><b>BPM</b><span>& meter</span></div>
-      <div><b>MIDI</b><span>& sheet music</span></div>
+    <div class="readout">
+      <div><b><abbr title="{{ glossary['Key'] }} {{ glossary['Mode'] }}">Key</abbr></b><span>& mode</span></div>
+      <div><b><abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">BPM</abbr></b><span>& meter</span></div>
+      <div><b><abbr title="{{ glossary['MIDI'] }} {{ glossary['MusicXML'] }}">MIDI</abbr></b><span>& sheet music</span></div>
     </div>
   </div>
 
@@ -61,17 +61,23 @@
         <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
         <span class="plus" aria-hidden="true">+</span>
         <div class="title">Choose audio files</div>
-        <div class="muted small">or drop them here · {{ exts }} · up to {{ max_files }} files, {{ max_mb }} MB total</div>
+        <div class="muted small">or drop them here · <abbr title="Most audio files work: phone voice memos (.m4a),
+          mp3, wav, flac, ogg and aac. Pure instrumental recordings give the clearest results; with singing, the
+          melody analysis follows the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
       </label>
       <ul id="chosen"></ul>
-      <label class="field" for="melody">Melody or riff <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+      <label class="field" for="melody"><abbr title="Automatic melody detection is unreliable on full-band
+        recordings, so you can type the tune instead: note names separated by spaces (C D E, F# Bb ...), optionally
+        with octaves (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
       <textarea id="melody" name="melody" rows="2" maxlength="2000"
         placeholder="A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"></textarea>
       <p class="muted small" style="margin:0 0 20px">Type the notes you hear for a melody analysis, variations as MIDI,
         and a check of each note against the recording.</p>
       <div class="row">
         {% if ai_label %}
-          <label class="small"><input type="checkbox" name="ai" value="1" checked> AI brainstorm
+          <label class="small"><input type="checkbox" name="ai" value="1" checked>
+            <abbr title="{{ glossary['AI brainstorm'] }} It arrives 20 seconds to 2 minutes after the analysis; you can
+            read the results meanwhile.">AI brainstorm</abbr>
             <span class="muted">({{ ai_label }})</span></label>
         {% else %}
           <span class="muted small">AI brainstorm is off (no API key on the server).</span>

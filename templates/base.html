@@ -80,6 +80,11 @@
     th { color: var(--muted); font-weight: 600; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
          border-bottom-color: var(--ink); }
     @media (max-width: 600px) { main { padding-top: 32px; } .panel { padding: 20px; } }
+    /* Underlined terms explain themselves: hover with a mouse, tap on a phone (no hover there). */
+    abbr[title] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+    #tip { position: absolute; z-index: 20; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
+           background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none;
+           text-transform: none; letter-spacing: 0; font-weight: 400; }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -100,6 +105,24 @@
 <main>
   {% block content %}{% endblock %}
 </main>
+<div id="tip" role="tooltip"></div>
+<script>
+  // Tap or click an underlined term to read its explanation (phones have no hover).
+  (function () {
+    const tipEl = document.getElementById('tip');
+    document.addEventListener('click', ev => {
+      const a = ev.target.closest('abbr[title]');
+      if (!a) { tipEl.style.display = 'none'; return; }
+      ev.preventDefault();
+      tipEl.textContent = a.getAttribute('title');
+      tipEl.style.display = 'block';
+      const r = a.getBoundingClientRect();
+      const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - tipEl.offsetWidth - 16);
+      tipEl.style.left = Math.max(16, left) + 'px';
+      tipEl.style.top = (window.scrollY + r.bottom + 6) + 'px';
+    });
+  })();
+</script>
 <footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks</span>
   {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
 </body>

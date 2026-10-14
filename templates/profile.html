@@ -44,24 +44,27 @@
 <h1>{{ user.username }}</h1>
 
 <div class="readout">
-  <div><b>{{ p.analyses }}</b><span>saved analyses</span></div>
+  <div><b>{{ p.analyses }}</b><span><abbr title="Uploads saved in your history. One upload can hold several tracks.">saved analyses</abbr></span></div>
   <div><b>{{ p.tracks }}</b><span>tracks</span></div>
   <div><b>{{ p.minutes or 0 }}</b><span>minutes of music</span></div>
-  <div><b>{{ p.tempo.median if p.tempo else '—' }}</b><span>typical BPM</span></div>
+  <div><b>{{ p.tempo.median if p.tempo else '—' }}</b><span><abbr title="The middle tempo of all your tracks: half
+    are faster, half slower. {{ glossary['Tempo'] }}">typical BPM</abbr></span></div>
 </div>
 
 {% if p.tracks %}
   <p class="sentence">{{ p.sentence }}</p>
+  <p class="muted small" style="max-width:46em">Everything below sums up all the tracks in your history. Numbers are
+    how many tracks each item appears in; the bars compare them. Underlined terms explain themselves.</p>
   <div class="grid2">
-    <div class="stat"><h3>Keys you use</h3>{{ bars(p['keys']) }}</div>
-    <div class="stat"><h3>Modes</h3>{{ bars(p.modes) }}</div>
-    <div class="stat"><h3>Feel</h3>{{ bars(p.moods) }}
-      {% if p.energy_avg %}<p class="muted small">Average energy {{ p.energy_avg }}/10</p>{% endif %}</div>
-    <div class="stat"><h3>Tempo & meter</h3>
+    <div class="stat"><h3><abbr title="{{ glossary['Key'] }}">Keys you use</abbr></h3>{{ bars(p['keys']) }}</div>
+    <div class="stat"><h3><abbr title="{{ glossary['Mode'] }}">Modes</abbr></h3>{{ bars(p.modes) }}</div>
+    <div class="stat"><h3><abbr title="{{ glossary['Mood'] }}">Feel</abbr></h3>{{ bars(p.moods) }}
+      {% if p.energy_avg %}<p class="muted small"><abbr title="{{ glossary['Energy level'] }}">Average energy</abbr> {{ p.energy_avg }}/10</p>{% endif %}</div>
+    <div class="stat"><h3><abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">Tempo & meter</abbr></h3>
       {% if p.tempo %}<p>{{ p.tempo.min }}–{{ p.tempo.max }} BPM, typically {{ p.tempo.median }}</p>{% endif %}
       {{ bars(p.meters) }}</div>
-    <div class="stat"><h3>Chords you lean on</h3><div class="chips">{% for c in p.chords %}<span>{{ c }}</span>{% endfor %}</div></div>
-    <div class="stat"><h3>Instruments</h3>
+    <div class="stat"><h3><abbr title="The chords that sound the longest across your tracks. {{ glossary['Chord names'] }}">Chords you lean on</abbr></h3><div class="chips">{% for c in p.chords %}<span>{{ c }}</span>{% endfor %}</div></div>
+    <div class="stat"><h3><abbr title="How many of your tracks have drums, and how many a separate bass instrument (a solo instrument's own low notes don't count).">Instruments</abbr></h3>
       <p>Drums in {{ p.drums_pct }}% of your tracks, a bass line in {{ p.bass_pct }}%.</p></div>
   </div>
   <div class="stat"><h3>Recent</h3>
