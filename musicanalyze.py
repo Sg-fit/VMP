@@ -943,12 +943,14 @@ def _analyze_audio(path):
         result["bass"] = {"present": False, "low_part_only": True}
         for sec in sections:
             sec["low_end"], sec["bass"] = sec["bass"], False
-        if float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12)) < 0.005:
-            # Nothing sounds below 80 Hz, so a "note" below E2 is the pitch tracker an octave too low.
-            up = lambda n: n + 12 * ((40 - n + 11) // 12) if n is not None and n < 40 else n
-            bass_line = [(a, e, up(n), db) for a, e, n, db in bass_line]
-            bass = [up(n) for n in bass]
         result["low_part"] = bass_summary(bass, btimes, chords, main_key, duration)
+    # Nothing below 80 Hz? Then for a guitar a "note" below E2 is the pitch tracker an octave too low. Whether to
+    # correct that depends on the instrument (a piano's or cello's low notes are real), which the musician may
+    # tell us, so it's decided after the cache (finish_low_part); here we keep both readings.
+    if bass_line and float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12)) < 0.005:
+        up = lambda n: n + 12 * ((40 - n + 11) // 12) if n is not None and n < 40 else n
+        result["low_end_missing"] = True
+        result["low_part_raised"] = bass_summary([up(n) for n in bass], btimes, chords, main_key, duration)
     loudest = max((n[3] for n in bass_line), default=0.0)
     result["bass_transcription"] = [  # note-by-note, for the bass MIDI file
         {"start": round(a, 3), "end": round(e, 3), "midi": n, "velocity": int(np.clip(110 + 2.5 * (db - loudest), 35, 120))}
@@ -967,7 +969,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-15a"
+ANALYSIS_VERSION = "2026-10-15b"
 
 
 def _cache_key(path):
@@ -1028,6 +1030,7 @@ def apply_context(result, ctx):
         return
     inst, genre = set(ctx.get("instruments") or []), ctx.get("genre")
     result["context"] = {"instruments": [INSTRUMENTS[i] for i in ctx.get("instruments") or []],
+                         "keys": list(ctx.get("instruments") or []),
                          "genre": GENRES[genre][0] if genre else None, "notes": []}
     notes = result["context"]["notes"]
     if inst:
@@ -1068,6 +1071,31 @@ def apply_context(result, ctx):
                          f"~{round(alt)} BPM: the detector counted {'every other beat' if alt > bpm else 'twice per beat'}.")
 
 
+GUITAR_LOWEST = 40  # E2, a guitar's low E string in standard tuning
+
+
+def finish_low_part(result):
+    """When the low notes are the main instrument's own (no separate bass) and nothing sounds below 80 Hz, notes
+    under a guitar's low E are octave errors - for a guitar, or when we don't know the instrument. A piano's,
+    cello's or synth's low notes are real, so for those the notes stay as heard."""
+    if not (result["bass"].get("low_part_only") and result.get("low_end_missing")):
+        return
+    if result.get("low_part_instrument") not in (None, "guitar"):
+        return
+    up = lambda n: n + 12 * ((GUITAR_LOWEST - n + 11) // 12) if n < GUITAR_LOWEST else n
+    result["bass_transcription"] = [{**n, "midi": up(n["midi"])} for n in result.get("bass_transcription", [])]
+    if result.get("low_part_raised"):
+        result["low_part"] = result["low_part_raised"]
+
+
+def lead_instrument(result):
+    """The instrument the melody line most likely belongs to, when the musician named exactly one lead."""
+    inst = [i for i in ((result.get("context") or {}).get("keys") or []) if i not in ("drums", "bass")]
+    if "voice" in inst:
+        return "voice"
+    return inst[0] if len(inst) == 1 else None
+
+
 def analyze(path, melody_text=None, cache_dir=None, context=None):
     """Analyse one track. The audio analysis (the slow part) is cached by file content, so
     re-running the same recording - e.g. to add a melody or retry the AI - is near-instant."""
@@ -1096,6 +1124,7 @@ def analyze(path, melody_text=None, cache_dir=None, context=None):
 
     main_key = result["key_index"]
     apply_context(result, context)
+    finish_low_part(result)
     # Sheet music and its rhythm are cheap, so they're made after the cache: improving them needs no
     # re-analysis of the audio.
     result["bass_sheet"] = bass_sheet(result, [(c["start"], c["chord"]) for c in result["chord_timeline"]])
@@ -2463,8 +2492,11 @@ def melody_report(r):
         verdict = ("it's {0}% chord notes, so it's most likely following the chords rather than a separate "
                    "melody".format(t["chord_tone_pct"]) if t["follows_chords"] else
                    f"{t['chord_tone_pct']}% chord notes — likely a real melodic line")
-        if "voice" in ((r.get("context") or {}).get("instruments") or []):
+        lead = lead_instrument(r)
+        if lead == "voice":
             verdict += "; with a singer in the track, this is most likely the vocal melody"
+        elif lead and not t["follows_chords"]:
+            verdict += f"; most likely the {INSTRUMENTS[lead]} line, the only lead instrument you named"
         L += [f"**{tip('Top line', 'Top line')} (automatic):** range {t['range']} · main notes {main} · "
               f"repeating 4-note figures: {motif} · {verdict}."]
         if not m:
@@ -2504,7 +2536,10 @@ def dna_report(r):
 def instruments_report(r):
     d, b = r.get("drums") or {}, r.get("bass") or {}
     solo = b.get("low_part_only")
-    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks"):
+    named = [i for i in ((r.get("context") or {}).get("keys") or [])  # its low part is written out below
+             if i not in ("drums", "bass") and not (solo and i == r.get("low_part_instrument") and len(
+                 [j for j in (r.get("context") or {}).get("keys") or [] if j not in ("drums", "bass")]) == 1)]
+    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named:
         return []
     how = ("separated with Demucs (AI source separation)" if r.get("separation") == "demucs" else
            "separated with a lighter harmonic/percussive split (Demucs AI separation not in use)")
@@ -2539,6 +2574,14 @@ def instruments_report(r):
               "guitarist's thumb — analysed below. If there is a bass, tick it when uploading.", ""]
     if solo:
         b = dict(r.get("low_part") or {}, present=True)
+        if r.get("low_end_missing") and r.get("low_part_instrument") not in (None, "guitar"):
+            L += [f"_Nothing below 80 Hz reached the microphone, so the lowest notes of the "
+                  f"{INSTRUMENTS[r['low_part_instrument']]} are shown as heard; check their octave by ear._", ""]
+    if named:
+        L += [f"**Other instruments you named** — {', '.join(INSTRUMENTS[i] for i in named)}. These aren't written out "
+              "one by one: the app transcribes the drums (grid) and the lowest part (bass, or the main instrument's "
+              "own low notes); what the others play together is covered by Harmony (chords) and Melody (the top "
+              "line).", ""]
     if b.get("present"):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
         where = [sec["label"] for sec in r["sections"] if sec.get("bass")]

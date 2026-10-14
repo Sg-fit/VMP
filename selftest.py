@@ -322,6 +322,14 @@ def analysis_checks(tmp):
     ma.apply_context(fake, ma.clean_context([], "dnb"))
     check("analysis", "genre fixes a half-speed tempo reading (drum & bass at 87 -> felt ~174 BPM)",
           (fake.get("context") or {}).get("felt_tempo") == 174, str(fake.get("context")))
+    lows = {}
+    for inst in ("guitar", "keys", None):
+        low = {"bass": {"low_part_only": True}, "low_end_missing": True, "low_part_instrument": inst,
+               "bass_transcription": [{"start": 0, "end": 1, "midi": 33, "velocity": 90}]}
+        ma.finish_low_part(low)
+        lows[inst] = low["bass_transcription"][0]["midi"]
+    check("analysis", "a low note below E2 is an octave error for a guitar, but real for a piano",
+          lows == {"guitar": 45, "keys": 33, None: 45}, str(lows))
     check("analysis", "unknown instrument/genre values from the form are ignored",
           ma.clean_context(["drums", "kazoo<script>"], "polka") == {"instruments": ["drums"], "genre": None})
     others = [k for k in ("pop4", "waltz3", "power", "modulate", "bassline") if "error" not in res[k]]

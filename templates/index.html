@@ -34,6 +34,11 @@
   .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
   .about select { width: 100%; font: inherit; font-size: .92rem; padding: 9px 10px; border: 1px solid var(--line);
                   border-radius: 0; background: var(--bg); color: var(--ink); }
+  .limits { margin-top: 8px; font-size: .84rem; }
+  .limits summary { cursor: pointer; color: var(--muted); }
+  .limits summary::marker { color: var(--accent); }
+  .limits ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+  .limits li { margin: 0 0 6px; } .limits b { color: var(--ink); font-weight: 600; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
          padding-top: 18px; border-top: 1px solid var(--line); }
   .row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
@@ -93,6 +98,19 @@
         </select>
         <p class="muted small" style="margin:6px 0 0">Tick only the instruments you hear. Leave everything empty to let the
           program guess.</p>
+        <details class="limits">
+          <summary>What ticking does — and its limits</summary>
+          <ul>
+            <li><b>Drums, bass</b> — decide whether the report shows a drum grid and a bass line. On a phone recording
+              this matters most: a bass guitar and a guitar's low strings sound alike there.</li>
+            <li><b>One instrument alone</b> (e.g. solo guitar or piano) — its lowest notes are written out as its own
+              part: in guitar notation for a guitar, with the right sound in the MIDI file.</li>
+            <li><b>Voice, or a single lead instrument</b> — the melody line is labelled as theirs.</li>
+            <li><b>Limit:</b> apart from the drums and the lowest part, instruments aren't transcribed one by one —
+              a guitar or piano in a band is covered by the chords and the melody line, not its own sheet music.
+              Ticking it still helps: the app knows it's there, and the AI gets the full line-up.</li>
+          </ul>
+        </details>
       </fieldset>
       <label class="field" for="melody"><abbr title="Automatic melody detection is unreliable on full-band
         recordings, so you can type the tune instead: note names separated by spaces (C D E, F# Bb ...), optionally
