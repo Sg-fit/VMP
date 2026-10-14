@@ -37,6 +37,10 @@ def init(path):
                 summary TEXT);
             CREATE INDEX IF NOT EXISTS saved_by_user ON saved(user_id, created);
         """)
+        # Added later: has this user closed the "what the app can't do" notice? (kept per account, so it doesn't
+        # come back on a new device)
+        if "seen_intro" not in [c[1] for c in db.execute("PRAGMA table_info(users)")]:
+            db.execute("ALTER TABLE users ADD COLUMN seen_intro INTEGER NOT NULL DEFAULT 0")
 
 
 def _connect():
@@ -74,8 +78,13 @@ def check_login(username, password):
 
 def get_user(user_id):
     with _connect() as db:
-        row = db.execute("SELECT id, username, created FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = db.execute("SELECT id, username, created, seen_intro FROM users WHERE id = ?", (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def mark_intro_seen(user_id):
+    with _connect() as db:
+        db.execute("UPDATE users SET seen_intro = 1 WHERE id = ?", (user_id,))
 
 
 # ---------------------------------------------------------------- history

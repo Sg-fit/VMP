@@ -85,6 +85,23 @@
     #tip { position: absolute; z-index: 20; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
            background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none;
            text-transform: none; letter-spacing: 0; font-weight: 400; }
+    /* "What the app can't do": shown centred on the first visit, the page dimmed behind it */
+    dialog#intro { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 0;
+                   border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+    dialog#intro::backdrop { background: rgba(10, 10, 10, .62); }
+    dialog#intro .in { padding: 28px 28px 24px; }
+    dialog#intro h2 { font-size: 1.5rem; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 10px; padding-right: 36px; }
+    dialog#intro ul { padding-left: 18px; margin: 14px 0 20px; }
+    dialog#intro li { margin: 0 0 9px; font-size: .94rem; }
+    dialog#intro li b { font-weight: 600; }
+    dialog#intro .x { position: absolute; top: 12px; right: 12px; width: 40px; height: 40px; border: 1px solid var(--line);
+                      background: transparent; color: var(--ink); font: 400 1.5rem/1 var(--sans); cursor: pointer; }
+    dialog#intro .x:hover { border-color: var(--ink); }
+    /* browsers without <dialog> support: same box, with a plain dimmed layer behind it */
+    dialog#intro.fallback[open] { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 50; margin: 0; }
+    #intro-dim { position: fixed; inset: 0; background: rgba(10, 10, 10, .62); z-index: 49; }
+    footer .limits-link { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer;
+                          text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -123,7 +140,59 @@
     });
   })();
 </script>
-<footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks</span>
+<dialog id="intro" aria-labelledby="intro-title" data-auto="{{ '1' if show_intro else '0' }}">
+  <button class="x" type="button" data-close aria-label="Close">×</button>
+  <div class="in">
+    <p class="eyebrow">Before you start</p>
+    <h2 id="intro-title">What the app can and can't do</h2>
+    <p class="muted small" style="margin:0">It's a fast, automatic second pair of ears — a starting point for ideas,
+      not a transcription service. Worth knowing:</p>
+    <ul>
+      <li><b>Made for instrumental music.</b> Singing isn't recognised as such; with a singer, the melody line it finds is
+        usually the voice.</li>
+      <li><b>Only the drums and the lowest part are written out</b> (a bass, or a solo instrument's own low notes).
+        Other instruments are covered by the chords and the melody line, not their own sheet music.</li>
+      <li><b>Phone recordings lose the low end,</b> so a bass guitar and a guitar's low strings sound alike. Tick the
+        instruments you hear when uploading and the app takes your word for it.</li>
+      <li><b>Results are approximate:</b> keys can be mixed up with their relative (C major / A minor), tempo can read
+        half or double, chords are simplified, and section letters are a rough guide.</li>
+      <li><b>Type the melody</b> if it matters — automatic melody detection is unreliable on full-band recordings.</li>
+      <li><b>AI ideas are optional</b> and sometimes slow or unavailable; times and chords they name are checked, their
+        opinions aren't.</li>
+      <li><b>Your audio is deleted</b> right after analysis. Results last a day unless you save them to a free account.</li>
+    </ul>
+    <button class="btn primary" type="button" data-close>Got it →</button>
+  </div>
+</dialog>
+<script>
+  (function () {
+    const box = document.getElementById('intro');
+    let dim = null;
+    function open() {
+      if (box.showModal) { if (!box.open) box.showModal(); }
+      else {  // no <dialog> support: show it as a fixed box over a dimmed layer
+        box.classList.add('fallback'); box.setAttribute('open', '');
+        dim = document.createElement('div'); dim.id = 'intro-dim'; document.body.appendChild(dim);
+      }
+      box.querySelector('.x').focus();
+    }
+    function close() {
+      if (box.close && box.open) box.close(); else { box.removeAttribute('open'); }
+      if (dim) { dim.remove(); dim = null; }
+      if (box.dataset.auto === '1') {  // remember it (cookie on this browser, and on the account when signed in)
+        box.dataset.auto = '0';
+        fetch("{{ url_for('intro_seen') }}", { method: 'POST' }).catch(() => {});
+      }
+    }
+    box.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+    box.addEventListener('cancel', e => { e.preventDefault(); close(); });                 // Esc
+    box.addEventListener('click', e => { if (e.target === box) close(); });               // click on the dimmed area
+    document.addEventListener('click', e => { if (e.target.closest('[data-open-intro]')) open(); });  // footer link
+    if (box.dataset.auto === '1') open();
+  })();
+</script>
+<footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks ·
+  <button type="button" class="limits-link" data-open-intro>What the app can't do</button></span>
   {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
 </body>
 </html>

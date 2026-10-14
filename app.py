@@ -227,9 +227,32 @@ def current_user():
     return accounts.get_user(uid) if uid else None
 
 
+INTRO_COOKIE = "intro_seen"
+
+
+def _intro_seen(user):
+    """Has this visitor closed the "what the app can't do" notice? Remembered per account (any device) when
+    signed in, otherwise by a cookie on this browser. Closing it before signing in carries over to the account."""
+    cookie = request.cookies.get(INTRO_COOKIE) == "1"
+    if user and cookie and not user.get("seen_intro"):
+        accounts.mark_intro_seen(user["id"])
+    return cookie or bool(user and user.get("seen_intro"))
+
+
 @app.context_processor
 def inject_user():
-    return {"user": current_user(), "glossary": ma.GLOSSARY}
+    user = current_user()
+    return {"user": user, "glossary": ma.GLOSSARY, "show_intro": not _intro_seen(user)}
+
+
+@app.post("/intro/seen")
+def intro_seen():
+    user = current_user()
+    if user:
+        accounts.mark_intro_seen(user["id"])
+    resp = Response(status=204)
+    resp.set_cookie(INTRO_COOKIE, "1", max_age=365 * 24 * 3600, samesite="Lax", httponly=True)
+    return resp
 
 
 @app.template_filter("datetime")

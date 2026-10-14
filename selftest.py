@@ -656,6 +656,20 @@ def account_checks(base, job):
                          allow_redirects=False, timeout=10)
     check("web", "sign-in: wrong password refused; never redirects to another site",
           wrong.status_code == 401 and evil.headers.get("Location") == "/")
+    shows = lambda sess: 'data-auto="1"' in sess.get(base + "/", timeout=10).text
+    visitor = requests.Session()
+    first = shows(visitor)
+    visitor.post(base + "/intro/seen", timeout=10)
+    check("web", "the limits notice pops up on a first visit, and stays closed once closed",
+          first and not shows(visitor))
+    carol = requests.Session()
+    carol.post(base + "/signup", data={"username": "carol", "password": "selftest-pw3", "password2": "selftest-pw3"},
+               timeout=10)
+    carol.post(base + "/intro/seen", timeout=10)
+    other_device = requests.Session()
+    other_device.post(base + "/login", data={"username": "carol", "password": "selftest-pw3"}, timeout=10)
+    check("web", "closing the notice is remembered on the account (not shown again on another device)",
+          not shows(other_device))
     alice.post(f"{base}/jobs/{job}/delete", timeout=10)
     check("web", "deleting from History removes the analysis",
           alice.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and "short_phone_clip" not in
