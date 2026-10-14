@@ -357,7 +357,7 @@ def detect_chords(chroma, rms_db, bounds, btimes):
     return chords
 
 
-def detect_meter(rms_db, chroma, bounds, clear_beat):
+def detect_meter(rms_db, chroma, bounds, clear_beat, allow_odd=True):
     """3/4, 4/4, 5/4 or 7/4: do strong beats and chord changes recur every 3, 4, 5 or 7 beats?
     Only leaves 4/4 (the most common) when another meter is clearly stronger."""
     import librosa
@@ -372,7 +372,7 @@ def detect_meter(rms_db, chroma, bounds, clear_beat):
     z = lambda v: (v - v.mean()) / (v.std() + 1e-9)
     feat = z(accent) + z(change)
     # Odd meters (5/4, 7/4) are only considered with enough bars to see them repeat.
-    candidates = (3, 4, 5, 7) if len(feat) >= 8 * 7 else (3, 4)
+    candidates = (3, 4, 5, 7) if allow_odd and len(feat) >= 8 * 7 else (3, 4)
     by_phase = {m: [feat[p::m].mean() - np.delete(feat, np.arange(p, len(feat), m)).mean() for p in range(m)]
                 for m in candidates}
     score = {m: max(v) for m, v in by_phase.items()}
@@ -579,42 +579,41 @@ def load_audio(path):
         return np.concatenate(chunks).astype(np.float32), SR
 
 
-# 12-bar blues layouts, as bar roots relative to the home chord (0 = I, 5 = IV, 7 = V).
-TWELVE_BAR = {
+# Chord forms, one entry per bar: the bar's root relative to the home chord (0 = I, 5 = IV, 7 = V).
+BLUES_FORMS = {
     "12-bar blues": [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
     "12-bar blues (quick change: IV in bar 2)": [0, 5, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
     "12-bar blues (V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 7, 7, 0, 0],
     "12-bar blues (bVI–V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 8, 7, 0, 0],  # the usual minor blues
     "12-bar blues (ii–V in bars 9 and 10)": [0, 0, 0, 0, 5, 5, 0, 0, 2, 7, 0, 0],   # jazz blues
+    "8-bar blues": [0, 7, 5, 5, 0, 7, 0, 7],                                        # 'Key to the Highway'
+    "8-bar blues (I–IV start)": [0, 0, 5, 5, 0, 7, 0, 7],
+    "16-bar blues (8 bars on I)": [0, 0, 0, 0, 0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 0, 0],
+    "16-bar blues (extended turnaround)": [0, 0, 0, 0, 5, 5, 0, 0, 7, 5, 7, 5, 7, 5, 0, 0],
 }
+TWELVE_BAR = {k: v for k, v in BLUES_FORMS.items() if len(v) == 12}
+V_SUBS = (7, 2, 8)  # a bar on V may hold ii (jazz) or bVI (minor blues) instead
 
 
-def detect_twelve_bar(r):
-    """Is this a 12-bar blues? Bar-by-bar chord roots are compared with the classic layouts, trying every
-    starting bar and half/double bar lengths (in case the beat was counted at half or double speed). Works
-    from roots only, so power chords (D5, G5: blues guitar often leaves out the third) still count.
-    Returns None, or {name, bar_sec, chorus_sec, choruses: [start s], match_pct}."""
+def _chord_spans(r):
     tl = [c for c in r.get("chord_timeline") or [] if "start" in c and parse_chord(c["chord"])]
-    if len(tl) < 6 or not r.get("tempo_bpm"):
-        return None
     ends = [c["start"] for c in tl[1:]] + [r["duration_sec"]]
-    spans = [(c["start"], e, parse_chord(c["chord"])[0]) for c, e in zip(tl, ends)]
+    return [(c["start"], e, parse_chord(c["chord"])[0]) for c, e in zip(tl, ends)]
+
+
+def _bar_grids(r, spans):
+    """Candidate bar grids: bar length (the detected one, double and half, in case the beat was counted at the
+    wrong speed) x where bar lines fall (every half beat from the detected downbeat). Yields
+    (bar_sec, first_bar_line, [root of each bar], how cleanly chords change on the bar lines)."""
     beat_bar = (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / r["tempo_bpm"]
-    tonics = {key_tonic(r["key_index"])}
-    longest = Counter()
-    for s, e, root in spans:
-        longest[root] += e - s
-    tonics.add(longest.most_common(1)[0][0])
-    best = None
+    down = r.get("downbeat_sec") or 0.0
     for bar in (beat_bar, 2 * beat_bar, beat_bar / 2):
-        if not 0.8 <= bar <= 8 or r["duration_sec"] < 24 * bar:  # need two full choruses
+        if not 0.8 <= bar <= 8:
             continue
-        down = r.get("downbeat_sec") or 0.0
-        for q in range(8):  # bar lines every half beat from the detected downbeat (it can be off)
+        for q in range(8):
             start = (down + q * bar / 8) % bar
-            n = int((r["duration_sec"] - start) // bar)
             roots, purity = [], []
-            for i in range(n):
+            for i in range(int((r["duration_sec"] - start) // bar)):
                 a, b = start + i * bar, start + (i + 1) * bar
                 cover = Counter()
                 for s, e, root in spans:
@@ -623,39 +622,128 @@ def detect_twelve_bar(r):
                         cover[root] += overlap
                 roots.append(cover.most_common(1)[0][0] if cover else None)
                 purity.append(cover.most_common(1)[0][1] / bar if cover else 0)
-            clean = float(np.mean(purity)) if purity else 0  # chords change on the bar lines
-            for tonic in tonics:
-                rel = [None if x is None else (x - tonic) % 12 for x in roots]
-                for name, tpl in TWELVE_BAR.items():
-                    for phase in range(12):
-                        idx = range(phase, len(rel) - (len(rel) - phase) % 12)  # whole choruses only
-                        if len(idx) < 24:
-                            continue
-                        hit = lambda i: rel[i] == tpl[(i - phase) % 12] or ((i - phase) % 12 == 11 and rel[i] == 7)
-                        score = np.mean([hit(i) for i in idx])
-                        four = np.mean([hit(i) for i in idx if (i - phase) % 12 in (4, 5)])
-                        five = np.mean([hit(i) for i in idx if (i - phase) % 12 == 8])
-                        home = np.mean([hit(i) for i in idx if (i - phase) % 12 in (0, 1, 2, 3)])
-                        clear = sum(np.mean([hit(i) for i in range(c0, c0 + 12)]) >= 0.75 for c0 in idx[::12])
-                        # A one-chord drone, or a short loop that happens to fit on average, isn't a blues:
-                        # IV in bars 5-6, V in bar 9, home in bars 1-4, and at least two choruses that clearly
-                        # fit (an intro or ending chorus is often played freely).
-                        if four < 0.6 or five < 0.5 or home < 0.6 or clear < 2:
-                            continue
-                        # A chorus that began just before the recording (its first bar cut off) still counts
-                        # if its other 11 bars fit: chord changes are often detected a beat early.
-                        early = phase - 12 >= -1 and np.mean([hit(i) for i in range(max(0, phase - 12), phase)]) >= 0.7
-                        cand = (round(float(score), 2), round(clean, 2), -abs(bar - beat_bar), name, bar,
-                                start + (phase - 12 * early) * bar, len(idx) // 12 + early)
-                        if best is None or cand[:3] > best[:3]:
-                            best = cand
+            yield bar, start, roots, float(np.mean(purity)) if purity else 0.0, abs(bar - beat_bar)
+
+
+def _anchors(tpl):
+    """The bars where the harmony moves (bar 1, and every bar whose chord differs from the one before)."""
+    return [0] + [i for i in range(1, len(tpl)) if tpl[i] != tpl[i - 1]]
+
+
+def detect_blues_form(r):
+    """8-, 12- and 16-bar blues. Bar-by-bar chord roots are compared with the classic layouts, trying every
+    starting bar and half/double bar lengths. Works from roots only, so power chords (D5, G5: blues guitar often
+    leaves out the third) still count. Returns None, or {name, bars, template, bar_sec, chorus_sec,
+    choruses: [start s], match_pct}."""
+    spans = _chord_spans(r)
+    if len(spans) < 6 or not r.get("tempo_bpm"):
+        return None
+    tonics = {key_tonic(r["key_index"])}
+    longest = Counter()
+    for s, e, root in spans:
+        longest[root] += e - s
+    tonics.add(longest.most_common(1)[0][0])
+    best = None
+    for bar, start, roots, clean, off_speed in _bar_grids(r, spans):
+        # How exactly the piece repeats after each number of bars. A piece that repeats with a period shorter than a
+        # form (a drone, a 4- or 8-bar loop) is that loop, not the form, however well it lines up on average.
+        valid = lambda i, lag: roots[i] is not None and roots[i + lag] is not None
+        repeats = {lag: np.mean([roots[i] == roots[i + lag] for i in range(len(roots) - lag) if valid(i, lag)] or [0])
+                   for lag in range(1, 16)}
+        for tonic in tonics:
+            rel = [None if x is None else (x - tonic) % 12 for x in roots]
+            for name, tpl in BLUES_FORMS.items():
+                L = len(tpl)
+                if len(rel) < 2 * L or max(repeats[lag] for lag in range(1, L)) >= 0.9:
+                    continue  # need two full choruses, and no shorter cycle
+                pos = lambda i: (i - phase) % L
+                hit = lambda i: (rel[i] == tpl[pos(i)] or (pos(i) == L - 1 and rel[i] == 7)  # turnaround on V
+                                 or (tpl[pos(i)] == 7 and rel[i] in V_SUBS))
+                for phase in range(L):
+                    idx = range(phase, len(rel) - (len(rel) - phase) % L)  # whole choruses only
+                    if len(idx) < 2 * L:
+                        continue
+                    score = np.mean([hit(i) for i in idx])
+                    moves = np.mean([hit(i) for i in idx if pos(i) in _anchors(tpl)])
+                    home = np.mean([hit(i) for i in idx if tpl[pos(i)] == 0 and pos(i) < L // 2])
+                    clear = sum(np.mean([hit(i) for i in range(c0, c0 + L)]) >= 0.75 for c0 in idx[::L])
+                    # A blues lives on I, IV and V (plus ii / bVI substitutes); a loop with, say, a vi chord in a
+                    # quarter of its bars (I-V-vi-IV pop) isn't one, even if it lines up on average.
+                    foreign = np.mean([rel[i] not in (0, 5, 7, 2, 8) for i in idx if rel[i] is not None])
+                    if foreign > 0.15 or (L == 8 and score < 0.8):
+                        continue
+                    # A drone, or a short loop that fits on average, isn't a blues: the bars where the harmony
+                    # moves must match, the opening bars must sit at home, and at least two choruses must
+                    # clearly fit (an intro or ending chorus is often played freely).
+                    if moves < 0.6 or home < 0.6 or clear < 2:
+                        continue
+                    # A chorus that began just before the recording (first bar cut off) still counts if its other
+                    # bars fit: chord changes are often detected a beat early.
+                    early = phase - L >= -1 and np.mean([hit(i) for i in range(max(0, phase - L), phase)]) >= 0.7
+                    cand = (round(float(score), 2), round(clean, 2), L == 12, -off_speed, name, tpl, bar,
+                            start + (phase - L * early) * bar, len(idx) // L + early)
+                    if best is None or cand[:4] > best[:4]:
+                        best = cand
     if not best or best[0] < 0.7:
         return None
-    score, _, _, name, bar, first, count = best
+    score, _, _, _, name, tpl, bar, first, count = best
     if key_is_minor(r["key_index"]):
-        name = name.replace("12-bar blues", "12-bar minor blues")
-    return {"name": name, "bar_sec": round(bar, 2), "chorus_sec": round(12 * bar, 1), "match_pct": round(100 * score),
-            "choruses": [round(float(max(0.0, first + k * 12 * bar)), 1) for k in range(count)]}
+        name = name.replace("-bar blues", "-bar minor blues")
+    L = len(tpl)
+    return {"name": name, "bars": L, "template": tpl, "bar_sec": round(bar, 2), "chorus_sec": round(L * bar, 1),
+            "match_pct": round(100 * score),
+            "choruses": [round(float(max(0.0, first + k * L * bar)), 1) for k in range(count)]}
+
+
+detect_twelve_bar = detect_blues_form  # older name
+
+
+def detect_song_form(r):
+    """AABA, the 32-bar song form of standards and classic pop ('Over the Rainbow', 'Yesterday'): four 8-bar
+    sections where the 1st, 2nd and 4th share their chords and the 3rd (the bridge) differs. Found by comparing
+    8-bar stretches of bar-by-bar chord roots. Returns None, or {name, bar_sec, section_sec, starts: [A, A, B, A
+    start s], cycles, match_pct}."""
+    spans = _chord_spans(r)
+    if len(spans) < 8 or not r.get("tempo_bpm"):
+        return None
+    same = lambda a, b: float(np.mean([x == y and x is not None for x, y in zip(a, b)]))
+
+    def aaba(chunks, k):  # how clearly chunks k..k+3 are A A B A (A sections alike, the bridge different)
+        a1, a2, b, a3 = chunks[k:k + 4]
+        if len({x for x in a1 if x is not None}) < 2:  # a section on one chord isn't a song form
+            return None
+        a_sim = min(same(a1, a2), same(a1, a3), same(a2, a3))
+        b_sim = max(same(a1, b), same(a2, b), same(a3, b))
+        return a_sim - b_sim if a_sim >= 0.75 and b_sim <= 0.5 else None
+
+    best = None
+    for bar, start, roots, clean, off_speed in _bar_grids(r, spans):
+        if len(roots) < 32:
+            continue
+        for phase in range(8):
+            chunks = [roots[i:i + 8] for i in range(phase, len(roots) - 7, 8)]
+            for k in range(len(chunks) - 3):
+                margin = aaba(chunks, k)
+                if margin is None:
+                    continue
+                # follow the form forward: each further AABA with the same A section is another cycle
+                cycles, j = 1, k + 4
+                while j + 3 < len(chunks) and aaba(chunks, j) is not None and same(chunks[j], chunks[k]) >= 0.75:
+                    cycles, j = cycles + 1, j + 4
+                coverage = cycles * 32 / len(roots)
+                # The 32-bar form has to be what the piece is made of, not one verse-verse-chorus-verse stretch of a
+                # longer song: its cycles must cover most of the bars (an intro or ending may be extra).
+                if coverage < 0.6:
+                    continue
+                cand = (cycles, round(margin, 2), round(clean, 2), -off_speed, -k, bar, start + (phase + 8 * k) * bar)
+                if best is None or cand[:5] > best[:5]:
+                    best = cand
+    if not best:
+        return None
+    cycles, margin, _, _, _, bar, first = best
+    return {"name": "AABA (32-bar song form)", "bar_sec": round(bar, 2), "section_sec": round(8 * bar, 1),
+            "starts": [round(float(first + j * 8 * bar), 1) for j in range(4)], "cycles": cycles,
+            "match_pct": round(100 * min(1.0, 0.5 + margin))}
 
 
 # One chord per bar, as (semitones above the home note, quality).
@@ -680,24 +768,37 @@ MINOR_BLUES_VARIATIONS = [
 
 
 def blues_variations(r):
-    """The 12-bar variations, spelled in the track's key: dominant-7th blues in a major key, minor blues in a minor
-    one."""
+    """Variations of the detected blues form, spelled in the track's key: for a 12-bar, the classic dominant-7th and
+    jazz versions (minor-blues versions in a minor key); for an 8- or 16-bar, the same form with 7th chords."""
     k = r["key_index"]
     t = key_tonic(k)
-    table = MINOR_BLUES_VARIATIONS if key_is_minor(k) else BLUES_VARIATIONS
+    form = r.get("blues_form") or {"bars": 12}
+    if form["bars"] == 12:
+        table = MINOR_BLUES_VARIATIONS if key_is_minor(k) else BLUES_VARIATIONS
+    else:
+        minor = key_is_minor(k)
+        q = lambda off: "m7" if minor and off in (0, 5) else "7"
+        table = [(f"{form['name']} with 7th chords", [(off, q(off)) for off in form["template"]],
+                 "The same form with the chords blues players reach for: " +
+                 ("minor 7ths on i and iv, a dominant V7." if minor else "a dominant 7th on every chord.")),
+                 ]
     return [{"name": name, "why": why, "chords": [chord_name((t + off) % 12, q, k) for off, q in bars]}
             for name, bars, why in table]
 
 
-def fits_twelve_bar(chords, tonic):
-    """Do 12 chords (one per bar) follow the blues form? Checks the anchor bars - 1 on I, 5 on IV, 7 on I,
-    9 on V (or ii), 11 on I - allowing one substitution."""
+def fits_form(chords, template, tonic):
+    """Do these chords (one per bar) follow the form? Checks the bars where the form's harmony moves (bar 1, and
+    each change of chord), allowing a quarter of them to be substitutions (a V bar may also be ii or bVI)."""
     roots = [(parse_chord(c) or (None,))[0] for c in chords]
-    if len(roots) != 12 or None in roots:
+    if len(roots) != len(template) or None in roots:
         return False
     rel = [(x - tonic) % 12 for x in roots]
-    anchors = [rel[0] == 0, rel[4] == 5, rel[6] == 0, rel[8] in (7, 2, 8), rel[10] == 0]  # bar 9: V, ii or bVI
-    return sum(anchors) >= 4
+    ok = [rel[i] == template[i] or (template[i] == 7 and rel[i] in V_SUBS) for i in _anchors(template)]
+    return sum(ok) >= 0.75 * len(ok)
+
+
+def fits_twelve_bar(chords, tonic):
+    return fits_form(chords, BLUES_FORMS["12-bar blues"], tonic)
 
 
 def key_fifths(k):
@@ -823,7 +924,10 @@ def _analyze_audio(path):
     # Instruments are often not at A440 (phone demos, detuned guitars). Correct for it, or every
     # note smears across two semitones and keys/chords come out wrong.
     tuning = float(librosa.estimate_tuning(y=y_harm, sr=sr))
-    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP, tuning=tuning)
+    # Notes are read from C2 (65 Hz) up: below that, kicks and sub-bass (electronic 808s, a pitched kick) swamp the
+    # pitch picture. Bass notes lower than C2 still count through their overtones.
+    chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP, tuning=tuning,
+                                        fmin=librosa.note_to_hz("C2"), n_octaves=6)
     mfcc =librosa.feature.mfcc(y=y, sr=sr, hop_length=HOP, n_mfcc=13)
     rms_db = 20 * np.log10(librosa.feature.rms(y=y, hop_length=HOP)[0] + 1e-9)
     n = min(chroma.shape[1], mfcc.shape[1], len(rms_db))
@@ -883,8 +987,13 @@ def _analyze_audio(path):
             runner_up = old_key
             scale["mode_confidence"] = "medium" if scale["mode_confidence"] == "high" else scale["mode_confidence"]
 
+    # With almost no percussive sound (legato strings, pads, soft piano) the beat grid can lock onto the wrong
+    # speed, and a wrong grid can make chord changes look like 5/4 or 7/4. So in that case the tempo is marked
+    # approximate and odd meters aren't claimed.
+    weak_pulse = clear_beat and float(np.sum(y_perc ** 2)) < 0.06 * float(np.sum(y ** 2))
     meter = detect_meter(rms_db, chroma,
-                         librosa.util.fix_frames(tracked_frames[tracked_frames < n], x_min=0, x_max=n), clear_beat)
+                         librosa.util.fix_frames(tracked_frames[tracked_frames < n], x_min=0, x_max=n), clear_beat,
+                         allow_odd=not weak_pulse)
     bass, bass_line = instruments.bass_notes(y_harm, sr, btimes, tuning)  # per beat + note-by-note
     for c in chords:
         k = key_at(ksec, (c["start"] + c["end"]) / 2)
@@ -960,6 +1069,7 @@ def _analyze_audio(path):
         "duration": fmt_time(duration),
         "tuning_cents": int(round(tuning * 100)),
         "tempo_bpm": round(tempo, 1) if clear_beat else None,
+        "tempo_approximate": bool(weak_pulse),
         "meter": meter,
         "key": KEY_NAMES[main_key],
         "key_index": int(main_key),
@@ -1025,7 +1135,7 @@ def _analyze_audio(path):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-16a"
+ANALYSIS_VERSION = "2026-10-17c"
 
 
 def _cache_key(path):
@@ -1200,7 +1310,8 @@ def analyze(path, melody_text=None, cache_dir=None, context=None):
     # re-analysis of the audio.
     result["bass_sheet"] = bass_sheet(result, [(c["start"], c["chord"]) for c in result["chord_timeline"]])
     result["bass_rhythm"] = notation.rhythm_from_score(result["bass_sheet"]) if result.get("bass_sheet") else {}
-    result["blues_form"] = detect_twelve_bar(result)
+    result["blues_form"] = detect_blues_form(result)
+    result["song_form"] = detect_song_form(result)
     if melody_text:
         result["melody"] = inspiration.analyse_melody(melody_text, key_tonic(main_key), result["mode"], MODES,
                                                       lambda pc: spell(pc, main_key))
@@ -1814,8 +1925,8 @@ Only cite times that appear in the analysis (chord timeline, section starts, key
 When explaining a chord, be musically exact (e.g. a dominant 7th leads to the chord a fifth below it).
 Titles: evocative but specific to this track; avoid stock words like "Midnight", "Echo", "Pulse".
 2 alt_progressions in {key}, 3-6 chords each (names like Bm, F#7, Gmaj7), preferring chords the track doesn't use.
-If a Form is given (e.g. 12-bar blues), the alt_progressions must keep that form: for a 12-bar blues give exactly 12
-chords, one per bar (e.g. a quick change, dominant 7ths throughout, a ii-V in bars 9-10, or a new turnaround).
+If a blues Form is given (8-, 12- or 16-bar), the alt_progressions must keep that form: exactly one chord per bar,
+as many chords as the form has bars (e.g. a quick change, dominant 7ths throughout, a ii-V before the turnaround).
 Chord names ending in 5 (D5, C#5) are power chords (root and fifth), not single notes; call single notes "the note C#".
 If the musician named the instruments, write ideas for that line-up; suggesting an added instrument is fine if you say so.
 2 references only if you are certain the recording exists and really shares that element; otherwise [].
@@ -1841,7 +1952,8 @@ def ai_summary(r):
              f"{ctx.get('genre') or 'not given'}." + (f" Felt tempo ~{ctx['felt_tempo']} BPM." if ctx.get("felt_tempo") else "")
              ] if ctx else []
     lines += [
-        f"Length {r['duration']}, {r['tempo_bpm'] or 'free'} BPM ({rh['tempo_feel']}), {s['tone']} tone.",
+        f"Length {r['duration']}, {r['tempo_bpm'] or 'free'} BPM{' (approximate, weak beat)' if r.get('tempo_approximate') else ''} "
+        f"({rh['tempo_feel']}), {s['tone']} tone.",
         f"Key {r['key']} (confidence {r['key_confidence']}{', uncertain' if r['key_confidence'] < 0.6 else ''}); "
         f"mode {r['mode']} ({r['mode_confidence']} confidence); scale {' '.join(r['scale_notes'])}."
         + (f" Tuned {r['tuning_cents']:+d} cents." if abs(r.get('tuning_cents', 0)) >= 10 else ""),
@@ -1855,6 +1967,10 @@ def ai_summary(r):
         b = r["blues_form"]
         lines.append(f"Form: {b['name']}, choruses of {b['chorus_sec']} s starting at "
                      + ", ".join(fmt_time(t) for t in b["choruses"]) + ".")
+    if r.get("song_form"):
+        f_ = r["song_form"]
+        lines.append(f"Song form: AABA, 8-bar sections starting at " + ", ".join(fmt_time(t) for t in f_["starts"])
+                     + " (the third is the bridge).")
     if r["loops"]:
         lines.append("Chord loops: " + "; ".join(f"{' - '.join(l['chords'])} ({' - '.join(l['roman'])})"
                                                  for l in r["loops"]) + ".")
@@ -2105,7 +2221,9 @@ def ai_brainstorm(r, llm):
     if r.get("blues_form"):
         # The AI is asked to keep the 12-bar form but doesn't always (it once padded a pop loop to 12 chords and
         # called it a blues), so check each progression and drop the ones that don't follow the form.
-        kept = [p for p in out["alt_progressions"] if fits_twelve_bar(p["chords"], key_tonic(r["key_index"]))]
+        form = r["blues_form"]
+        tpl = form.get("template") or BLUES_FORMS["12-bar blues"]
+        kept = [p for p in out["alt_progressions"] if fits_form(p["chords"], tpl, key_tonic(r["key_index"]))]
         if len(kept) < len(out["alt_progressions"]):
             out["dropped_progressions"] = len(out["alt_progressions"]) - len(kept)
         out["alt_progressions"] = kept
@@ -2290,6 +2408,9 @@ GUIDE = {
         "Roman numerals": "Chords named by their place in the key: I = the home chord, IV and V = built on the 4th and "
                           "5th notes. Upper case = major, lower case = minor, so 'i - iv - V' is the same progression "
                           "in any key.",
+        "AABA": "The 32-bar song form of jazz standards and classic pop: an 8-bar A section played twice, a contrasting "
+                "8-bar B section (the bridge, or 'middle eight'), then A again. Found by comparing the chords of "
+                "8-bar stretches.",
         "Chord loop": "A short chord sequence that repeats, like the four chords of a verse. Loops are found inside "
                       "each key section and shown starting on the home chord.",
         "Chord timeline": "Every chord change in order, with the time it starts. A/E-style names show the bass note "
@@ -2402,6 +2523,12 @@ MODE_INFO = {
 }
 
 
+BLUES_TIPS = {
+    8: "An 8-bar blues, e.g. 'Key to the Highway': I–V–IV–IV–I–V–I–V. Shorter and quicker-turning than the 12-bar; "
+       "one pass is a 'chorus'.",
+    16: "A 16-bar blues: the 12-bar idea stretched, either with 8 bars on the home chord before the change (e.g. "
+        "'Hoochie Coochie Man') or with an extended V–IV turnaround. One pass is a 'chorus'.",
+}
 BLUES_TIP = ("The 12-bar blues: 4 bars on the home chord (I), 2 on the IV chord, 2 on I, then V, IV, I, I "
              "(often V in the last bar to lead back round). One pass is a 'chorus'; solos and verses follow it.")
 
@@ -2440,6 +2567,8 @@ def track_report(r):
         return L + [f"⚠️ Could not analyse this file: {r['error']}", ""]
     rh, s = r["rhythm"], r["sound"]
     tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
+    if r["tempo_bpm"] and r.get("tempo_approximate"):
+        tempo = f"~{tempo} (approximate: hardly any percussive attacks to measure the beat from)"
     meter = r.get("meter") or {}
     if r["tempo_bpm"] and meter.get("label"):
         tempo += f" in {meter['label']}" + (" (waltz feel)" if meter["beats_per_bar"] == 3 else "") + \
@@ -2487,8 +2616,9 @@ def track_report(r):
         L += ["", f"**{tip('Key timeline')}:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
     b = r.get("blues_form")
     if b:
-        L += ["", f"**{tip('Form', explanation=BLUES_TIP)}: {b['name']}** — choruses of ~{b['chorus_sec']} s "
-              f"(12 bars of {b['bar_sec']} s), starting at " + ", ".join(fmt_time(t) for t in b["choruses"])
+        L += ["", f"**{tip('Form', explanation=BLUES_TIPS.get(b.get('bars', 12), BLUES_TIP))}: {b['name']}** — choruses of "
+              f"~{b['chorus_sec']} s ({b.get('bars', 12)} bars of {b['bar_sec']} s), starting at "
+              + ", ".join(fmt_time(t) for t in b["choruses"])
               + f" · {b['match_pct']}% of the bars follow the pattern"
               + (" · before the first full chorus: an intro or pickup" if b["choruses"][0] > b["bar_sec"] * 2 else "")]
         k = r["key_index"]
@@ -2503,6 +2633,12 @@ def track_report(r):
             L.append(f"_In a blues, “{r['key']}” means {home} is home. Expect dominant-7th chords ({home}7, {four}7, "
                      f"{five}7) and the blue notes {spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) and "
                      f"{spell((key_tonic(k) + 10) % 12, k)} (flat 7th) against the major scale._")
+    sf = r.get("song_form")
+    if sf:
+        names = ["A", "A", "B (bridge)", "A"]
+        L += ["", f"**{tip('Song form', 'AABA')}: {sf['name']}** — " + ", ".join(
+              f"{n} at {fmt_time(t)}" for n, t in zip(names, sf["starts"])) + f" (8 bars each, {sf['section_sec']} s)"
+              + (f" · the whole AABA comes round {sf['cycles']} times" if sf["cycles"] > 1 else "")]
     if r["loops"]:
         L += ["", f"**{tip('Chord loops', 'Chord loop')}**", ""]
         for lp in r["loops"]:
@@ -2570,8 +2706,9 @@ def track_report(r):
             for i in ai["ideas"]:
                 L.append(f"- **{i.get('area', 'idea')}:** {i['idea']}")
             if ai.get("dropped_progressions"):
-                L += ["", f"_The AI suggested {ai['dropped_progressions']} progression(s) that didn't keep the 12-bar "
-                      "form, so they were left out — the blues variations under Harmony do._"]
+                L += ["", f"_The AI suggested {ai['dropped_progressions']} progression(s) that didn't keep the "
+                      f"{(r.get('blues_form') or {}).get('name', 'blues')} form, so they were left out — the "
+                      "variations under Harmony do._"]
             if ai["alt_progressions"]:
                 L += ["", "**Alternative progressions**", ""]
                 for p in ai["alt_progressions"]:

@@ -202,6 +202,76 @@ def guitar_blues(bpm=140, choruses=3, minor=False):
     return (y / np.abs(y).max() * 0.8).astype(np.float32)
 
 
+def _partials(freq, t, harmonics, vib_hz=0.0, vib_cents=0.0):
+    """A pitched tone built from harmonics (amplitudes), with optional vibrato."""
+    phase_mod = 0 if not vib_hz else (vib_cents / 1200 * np.log(2)) * freq / vib_hz * np.sin(2 * np.pi * vib_hz * t)
+    return sum(a * np.sin(2 * np.pi * freq * (k + 1) * t + (k + 1) * phase_mod) for k, a in enumerate(harmonics))
+
+
+def electronic_track(bpm=124, bars=32):
+    """House: kick on every beat, clap on 2 and 4, open hats on the off-beats, an off-beat synth bass and a pad
+    that ducks after every kick (sidechain pumping). A minor: Am | F | Dm | E."""
+    beat = 60 / bpm
+    y = np.zeros(int(SR * (bars * 4 * beat + 1)))
+    pad = np.zeros_like(y)
+    loop = [(57, [57, 60, 64]), (53, [53, 57, 60]), (50, [50, 53, 57]), (52, [52, 56, 59])]  # root, chord notes
+    for b in range(bars):
+        t0 = b * 4 * beat
+        root, notes = loop[b % 4]
+        t = np.arange(int(SR * 4 * beat)) / SR
+        place(pad, sum(0.06 * _partials(hz(n + 12), t, (1, .5, .33, .25, .2)) for n in notes), t0)
+        for i in range(4):
+            tb = t0 + i * beat
+            tk = np.arange(int(SR * 0.25)) / SR  # kick: a falling sine "thump"
+            place(y, 0.9 * np.sin(2 * np.pi * (45 + 80 * np.exp(-tk * 40)) * tk) * np.exp(-tk * 12), tb)
+            if i in (1, 3):
+                place(y, noise(0.12, 0.35, 35, seed=i), tb)  # clap
+            place(y, noise(0.09, 0.12, 40, hp=True, seed=i + 20), tb + beat / 2)  # open hat
+            tbass = np.arange(int(SR * beat * 0.45)) / SR  # bass on the off-beat
+            place(y, 0.3 * np.exp(-tbass * 6) * _partials(hz(root - 24), tbass, (1, .45, .2)), tb + beat / 2)
+    # sidechain: the pad drops after each kick and swells back
+    tt = np.arange(len(pad)) / SR
+    pad *= 1 - 0.75 * np.exp(-((tt % beat) / 0.12))
+    y = y + pad
+    return (y / np.abs(y).max() * 0.8).astype(np.float32)
+
+
+def orchestral_track(bpm=72):
+    """Strings, D minor, no drums: legato chords with slow attacks and vibrato over a cello line, the tempo
+    breathing +-8% (rubato), and a quiet - loud - quiet arc (the middle adds octave doublings)."""
+    prog = [("D", "m"), ("G", "m"), ("A", "7"), ("D", "m"), ("Bb", ""), ("G", "m"), ("A", "7"), ("D", "m")]
+    plan = [(prog, 0.35), (prog, 1.0), (prog, 0.35)]  # (chords, loudness) per section
+    beats = [0.0]
+    for i in range(sum(len(p) for p, _ in plan) * 4):  # rubato: each beat's length follows a slow wave
+        beats.append(beats[-1] + 60 / (bpm * (1 + 0.08 * np.sin(2 * np.pi * i / 24))))
+    y = np.zeros(int(SR * (beats[-1] + 2.5)))
+    rng = np.random.default_rng(7)
+    bar = 0
+    for chords, level in plan:
+        for root, q in chords:
+            a, e = beats[bar * 4], beats[bar * 4 + 4]
+            t = np.arange(int(SR * (e - a + 0.6))) / SR
+            env = np.minimum(1, t / 0.25) * np.minimum(1, (e - a + 0.6 - t) / 0.6)  # slow bow attack, overlap
+            tones = [midi(root, 4) + iv for iv in CHORD[q]]
+            if level > 0.5:
+                tones += [n + 12 for n in tones]
+            # each player's vibrato has its own speed and timing, as in a real section (in-sync vibrato would wobble
+            # the whole orchestra together and fake a beat)
+            sig = sum(0.08 * _partials(hz(n), t + rng.uniform(0, 1), (1, .6, .4, .25, .15), rng.uniform(4.8, 6.4), 18)
+                      for n in tones)
+            sig += 0.22 * _partials(hz(midi(root, 2)), t + rng.uniform(0, 1), (1, .7, .45, .3), rng.uniform(4.5, 5.5), 12)
+            place(y, level * env * sig, a)
+            bar += 1
+    return (y / np.abs(y).max() * 0.8).astype(np.float32)
+
+
+EIGHT_BAR_E = [("E", "7"), ("B", "7"), ("A", "7"), ("A", "7"), ("E", "7"), ("B", "7"), ("E", "7"), ("B", "7")]
+SIXTEEN_BAR_G = [("G", "7")] * 8 + [("C", "7"), ("C", "7"), ("G", "7"), ("G", "7"), ("D", "7"), ("C", "7"), ("G", "7"),
+                                    ("G", "7")]
+AABA_A = [("C", ""), ("A", "m"), ("F", ""), ("G", ""), ("C", ""), ("A", "m"), ("D", "m"), ("G", "")]
+AABA_B = [("E", "7"), ("E", "7"), ("A", "m"), ("A", "m"), ("D", "7"), ("D", "7"), ("G", ""), ("G", "7")]
+
+
 def make_test_set(folder):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -228,6 +298,11 @@ def make_test_set(folder):
                            song([("D", "m"), ("G", ""), ("C", ""), ("A", "m")], 120, 5, loops=4)),
         "seven_four": write(folder / "odd_meter_7-4_140bpm.wav",
                             song([("E", "m"), ("C", ""), ("G", ""), ("D", "")], 140, 7, loops=4)),
+        "eight_bar": write(folder / "eight_bar_blues_E_110bpm.wav", song(EIGHT_BAR_E, 110, 4, loops=3)),
+        "sixteen_bar": write(folder / "sixteen_bar_blues_G_130bpm.wav", song(SIXTEEN_BAR_G, 130, 4, loops=2)),
+        "aaba": write(folder / "aaba_song_form_C_140bpm.wav", song(AABA_A + AABA_A + AABA_B + AABA_A, 140, 4, loops=2)),
+        "electronic": write(folder / "electronic_house_Am_124bpm.wav", electronic_track()),
+        "orchestral": write(folder / "orchestral_strings_Dm_rubato.wav", orchestral_track()),
     }
 
 
@@ -372,6 +447,40 @@ def analysis_checks(tmp):
         if check("analysis", f"{label} song analyses", "error" not in r, r.get("error", "")):
             check("analysis", f"odd meter {label} recognised", r["meter"]["label"] == label,
                   f"{r['meter']['label']} {r['meter'].get('scores')}")
+    # other song forms
+    for key, want, label in (("eight_bar", "8-bar", "8-bar blues in E"), ("sixteen_bar", "16-bar", "16-bar blues in G")):
+        r = res[key]
+        if check("analysis", f"{label} analyses", "error" not in r, r.get("error", "")):
+            check("analysis", f"{label} recognised", (r.get("blues_form") or {}).get("name", "").startswith(want),
+                  str((r.get("blues_form") or {}).get("name")))
+    r = res["aaba"]
+    if check("analysis", "AABA (32-bar) song analyses", "error" not in r, r.get("error", "")):
+        f = r.get("song_form") or {}
+        check("analysis", "AABA song form recognised, from the start, both passes",
+              f and f["starts"][0] < 2 and f["cycles"] == 2, str(f))
+    no_form = [k for k in ("pop4", "power", "modulate", "bassline", "guitar_blues") if "error" not in res[k]]
+    check("analysis", "no AABA claimed for songs that aren't one", not any(res[k].get("song_form") for k in no_form),
+          ", ".join(k for k in no_form if res[k].get("song_form")))
+    # styles the other tests don't cover
+    r = res["electronic"]
+    if check("analysis", "electronic (house) track analyses", "error" not in r, r.get("error", "")):
+        check("analysis", "electronic: 124 BPM, 4/4, four-on-the-floor kick",
+              near(r["tempo_bpm"], 124, 4) and r["meter"]["label"] == "4/4"
+              and "four-on-the-floor" in (r["drums"].get("traits") or []), f"{r['tempo_bpm']} {r['drums'].get('traits')}")
+        check("analysis", "electronic: the kick's low boom doesn't fool the key (A minor)", r["key"] == "A minor",
+              f"{r['key']} {[c['chord'] for c in r['chords_used'][:4]]}")
+        check("analysis", "electronic: synth bass found, house groove referenced",
+              r["bass"].get("present") and "house" in (r["references"].get("groove") or ""), str(r["bass"].get("present")))
+    r = res["orchestral"]
+    if check("analysis", "orchestral (legato strings) track analyses", "error" not in r, r.get("error", "")):
+        check("analysis", "orchestral: legato strings' tempo is flagged (approximate or no pulse), no odd meter invented",
+              (r["tempo_bpm"] is None or r.get("tempo_approximate")) and r["meter"]["label"] in ("3/4", "4/4"),
+              f"{r['tempo_bpm']} approx={r.get('tempo_approximate')} meter {r['meter']['label']}")
+        check("analysis", "orchestral: key D minor, no drums", r["key"] == "D minor" and not r["drums"].get("present"),
+              f"{r['key']} drums={r['drums'].get('present')}")
+        check("analysis", "orchestral: the loud middle section is found (quiet - loud - quiet)",
+              "peak in the middle" in r["feel"]["arc"] and r["feel"]["valence"] < 50,
+              f"{r['feel']['arc']} / positivity {r['feel']['valence']}")
     others = [k for k in ("pop4", "waltz3", "power", "modulate", "bassline") if "error" not in res[k]]
     check("analysis", "no 12-bar blues claimed for songs that aren't one",
           not any(res[k].get("blues_form") for k in others),
