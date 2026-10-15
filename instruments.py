@@ -29,9 +29,16 @@ def separation_method():
 
 # ---------------------------------------------------------------- separation
 
-def separate(y, sr):
-    """Return (drums, music, method) where music is everything except the drums."""
+def separate(y, sr, fast=False):
+    """Return (drums, music, method) where music is everything except the drums.
+    fast=True (tag mode): a coarser harmonic/percussive split, 3-4x quicker; on the test recordings it gave the same
+    drums / no-drums verdicts as the full one."""
     import librosa
+    if fast:
+        D = librosa.stft(y, n_fft=1024, hop_length=512)
+        H, P = librosa.decompose.hpss(D, kernel_size=15)
+        return (librosa.istft(P, hop_length=512, length=len(y)), librosa.istft(H, hop_length=512, length=len(y)),
+                "fast")
     if SEPARATION != "simple":
         try:
             drums, music = _demucs_split(y, sr)

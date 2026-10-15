@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block bodyclass %}{{ 'tags-mode' if mode == 'tags' }}{% endblock %}
 {% block head %}
 <style>
   .hero { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-items: start; }
@@ -39,6 +40,19 @@
   .limits summary::marker { color: var(--accent); }
   .limits ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
   .limits li { margin: 0 0 6px; } .limits b { color: var(--ink); font-weight: 600; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); margin: 0 0 20px; }
+  .modes label { position: relative; cursor: pointer; }
+  .modes input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .modes span { display: block; padding: 10px 12px; text-align: center; font-weight: 600; font-size: .92rem; }
+  .modes label + label span { border-left: 1px solid var(--ink); }
+  .modes input:checked + span { background: var(--ink); color: var(--bg); }
+  .modes input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
+  #form.tags [data-only="musician"], #form:not(.tags) [data-only="tags"],
+  body.tags-mode .hero [data-only="musician"], body:not(.tags-mode) .hero [data-only="tags"],
+  body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"] { display: none; }
+  input.text { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
+               background: var(--bg); color: var(--ink); margin-bottom: 6px; }
+  input.text:focus { border-color: var(--ink); outline: none; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
          padding-top: 18px; border-top: 1px solid var(--line); }
   .row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
@@ -58,11 +72,20 @@
 {% block content %}
 <section class="hero">
   <div>
+    <div data-only="musician">
     <p class="eyebrow">For musicians · instrumental tracks</p>
     <h1>Turn your tracks into ideas.</h1>
-    <p class="lede">Upload a recording and get its key, mode, chord loops, structure, groove, bass line as sheet music,
-      energy and mood — plus ideas to try and MIDI you can drag into your DAW.</p>
-    <div class="readout">
+    <p class="lede">Upload a recording and we'll tell you its key, chords, structure, groove and mood, write the bass
+      out as sheet music, and hand you ideas to try, plus MIDI files you can drop straight into your DAW.</p>
+    </div>
+    <div data-only="tags">
+    <p class="eyebrow">For listeners · playlists and favourite songs</p>
+    <h1>Find music like the music you love.</h1>
+    <p class="lede">Tell us which songs you love (upload them, paste a playlist link or type their names) and we'll
+      work out what they have in common: styles, moods, sound and rhythm, in the words music sites search by. Search
+      with those and you'll reach artists the big recommendation engines tend to skip.</p>
+    </div>
+    <div class="readout" data-only="musician">
       <div><b><abbr title="{{ glossary['Key'] }} {{ glossary['Mode'] }}">Key</abbr></b><span>& mode</span></div>
       <div><b><abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">BPM</abbr></b><span>& meter</span></div>
       <div><b><abbr title="{{ glossary['MIDI'] }} {{ glossary['MusicXML'] }}">MIDI</abbr></b><span>& sheet music</span></div>
@@ -71,22 +94,57 @@
 
   <div class="panel">
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
-    <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data">
+    <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data"
+          class="{{ 'tags' if mode == 'tags' }}">
+      <div class="modes" role="radiogroup" aria-label="What do you want to do?">
+        <label><input type="radio" name="mode" value="musician" {{ 'checked' if mode != 'tags' }}><span>Analyse my music</span></label>
+        <label><input type="radio" name="mode" value="tags" {{ 'checked' if mode == 'tags' }}><span>Find music like this</span></label>
+      </div>
       <label class="drop" id="drop">
         <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
         <span class="plus" aria-hidden="true">+</span>
-        <div class="title">Choose audio files</div>
+        <div class="title">Choose audio files<span data-only="tags" class="muted" style="font-weight:400"> — optional</span></div>
         <div class="muted small">or drop them here · <abbr title="Most audio files work: phone voice memos (.m4a),
-          mp3, wav, flac, ogg and aac. Pure instrumental recordings give the clearest results; with singing, the
-          melody analysis follows the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
+          mp3, wav, flac, ogg and aac. Instrumental recordings give the clearest results. If there's singing, the
+          melody we find will usually be the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
       </label>
       <ul id="chosen"></ul>
-      <fieldset class="about">
-        <legend class="field"><abbr title="Optional, but it makes the analysis more reliable. On a phone recording the
-          program can't tell a bass guitar from a guitar's low strings by sound alone, and it sometimes counts the beat
-          at half or double speed — your answers settle both. They also set the sound of the MIDI files, write a guitar
-          part in guitar notation, label a sung melody, and give the AI and the ideas some context.">About the music</abbr>
-          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, applies to all tracks</span></legend>
+      <div data-only="tags">
+        <label class="field" for="playlist"><abbr title="A public Spotify playlist, album or track, or a YouTube
+          playlist. We only read the song names from it, not the audio, so these songs count for less than the ones
+          you upload.">Playlist link</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+        <input class="text" id="playlist" name="playlist" type="url" maxlength="500" value="{{ form.get('playlist', '') }}"
+               placeholder="https://open.spotify.com/playlist/…  or  https://www.youtube.com/playlist?list=…">
+        <label class="field" for="songs" style="margin-top:14px">Song names <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, one per line</span></label>
+        <textarea id="songs" name="songs" rows="4" maxlength="8000"
+          placeholder="Massive Attack - Teardrop&#10;Khruangbin - Maria También">{{ form.get('songs', '') }}</textarea>
+        <details class="limits">
+          <summary>How we come up with the tags</summary>
+          <ul>
+            <li><b>Songs you upload, we listen to:</b> tempo, time signature, mood and energy, whether there are drums,
+              blues forms and, where the style model is installed, styles from 400 categories, moods and instruments.
+              These count in full.</li>
+            <li><b>Songs from a link or a list, we look up by name</b> on MusicBrainz, using the tags listeners gave the
+              song or, more often, the artist. That describes the artist's music in general rather than this exact
+              song, so each one counts for less (0.4 against 1). Upload the audio too and we'll listen to it as well.</li>
+            <li><b>A few limits:</b> up to 100 songs, and we can't open private playlists. Lesser-known songs may not be
+              on MusicBrainz yet, and the style model is surer about broad families than close neighbours. We show
+              broad tags like “rock” but leave them out of the searches, because they lead straight back to the
+              biggest names.</li>
+            <li>Style model: Essentia by MTG, Universitat Pompeu Fabra — CC BY-NC-SA 4.0, non-commercial use.</li>
+          </ul>
+        </details>
+        <div class="row" style="margin-top:20px">
+          <span class="muted small">No AI, MIDI or sheet music here, just tags and searches.</span>
+          <button class="btn primary" type="submit">Find tags →</button>
+        </div>
+      </div>
+      <fieldset class="about" data-only="musician">
+        <legend class="field"><abbr title="Optional, but it helps. From a phone recording alone we can't tell a bass guitar
+          from a guitar's low strings, and we sometimes count the beat at half or double speed. Your answers settle
+          both. They also pick the sounds for the MIDI files, write a guitar part in guitar notation, label a sung
+          melody, and give the AI some context.">About the music</abbr>
+          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, for every track you upload</span></legend>
         <div class="chips" role="group" aria-label="Instruments that play">
           {% for key, label in instruments.items() %}
             <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}"><span>{{ label }}</span></label>
@@ -96,58 +154,72 @@
           <option value="">Genre — not sure / mixed</option>
           {% for key, label in genres.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
         </select>
-        <p class="muted small" style="margin:6px 0 0">Tick only the instruments you hear. Leave everything empty to let the
-          program guess.</p>
+        <p class="muted small" style="margin:6px 0 0">Tick the instruments you can hear, or leave it all blank and we'll
+          make our best guess.</p>
         <details class="limits">
-          <summary>What ticking does — and its limits</summary>
+          <summary>What ticking a box changes</summary>
           <ul>
-            <li><b>Drums, bass</b> — decide whether the report shows a drum grid and a bass line. On a phone recording
-              this matters most: a bass guitar and a guitar's low strings sound alike there.</li>
-            <li><b>One instrument alone</b> (e.g. solo guitar or piano) — its lowest notes are written out as its own
-              part: in guitar notation for a guitar, with the right sound in the MIDI file.</li>
-            <li><b>Voice, or a single lead instrument</b> — the melody line is labelled as theirs.</li>
-            <li><b>Limit:</b> apart from the drums and the lowest part, instruments aren't transcribed one by one —
-              a guitar or piano in a band is covered by the chords and the melody line, not its own sheet music.
-              Ticking it still helps: the app knows it's there, and the AI gets the full line-up.</li>
+            <li><b>Drums and bass</b> decide whether you get a drum grid and a bass line. This matters most on phone
+              recordings, where a bass guitar and a guitar's low strings sound alike.</li>
+            <li><b>One instrument on its own</b> (say, solo guitar or piano): we write its lowest notes out as their own
+              part, in guitar notation for a guitar, with the right sound in the MIDI file.</li>
+            <li><b>Voice, or one lead instrument:</b> we label the melody line as theirs.</li>
+            <li><b>What it can't do:</b> apart from the drums and the lowest part, we don't write out each instrument
+              separately. A guitar or piano in a band shows up in the chords and the melody line. Ticking it still
+              helps: we know it's there, and so does the AI.</li>
           </ul>
         </details>
       </fieldset>
-      <label class="field" for="melody"><abbr title="Automatic melody detection is unreliable on full-band
-        recordings, so you can type the tune instead: note names separated by spaces (C D E, F# Bb ...), optionally
-        with octaves (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+      <div data-only="musician">
+      <label class="field" for="melody"><abbr title="Picking a tune out of a full band automatically is hit and
+        miss, so you can type it instead: note names with spaces between them (C D E, F# Bb …), with octaves if you
+        like (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
       <textarea id="melody" name="melody" rows="2" maxlength="2000"
         placeholder="A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"></textarea>
-      <p class="muted small" style="margin:0 0 20px">Type the notes you hear for a melody analysis, variations as MIDI,
-        and a check of each note against the recording.</p>
+      <p class="muted small" style="margin:0 0 20px">Type the notes you hear and we'll analyse the melody, turn it into
+        variations you can download as MIDI, and check each note against the recording.</p>
       <div class="row">
         {% if ai_label %}
           <label class="small"><input type="checkbox" name="ai" value="1" checked>
-            <abbr title="{{ glossary['AI brainstorm'] }} It arrives 20 seconds to 2 minutes after the analysis; you can
-            read the results meanwhile.">AI brainstorm</abbr>
+            <abbr title="{{ glossary['AI brainstorm'] }} It turns up 20 seconds to 2 minutes after the analysis, and you
+            can read your results in the meantime.">AI brainstorm</abbr>
             <span class="muted">({{ ai_label }})</span></label>
         {% else %}
-          <span class="muted small">AI brainstorm is off (no API key on the server).</span>
+          <span class="muted small">AI ideas are switched off on this server.</span>
         {% endif %}
         <button class="btn primary" id="go" type="submit">Analyse →</button>
+      </div>
       </div>
     </form>
   </div>
 </section>
 
-<section class="features">
-  <div><span class="n">01</span><b>Harmony</b>Key timeline, mode and its colour note, chord loops in Roman numerals.</div>
-  <div><span class="n">02</span><b>Structure &amp; feel</b>Sections, energy and mood per section, builds and breakdowns.</div>
-  <div><span class="n">03</span><b>Rhythm &amp; parts</b>Tempo, meter and groove, and what each part of the
-    band plays, written out as rhythm grids and sheet music.</div>
-  <div><span class="n">04</span><b>Ideas &amp; exports</b>Concrete suggestions and links to well-known music, plus MIDI, sheet
-    music and the full report to download.</div>
+<section class="features" data-only="tags">
+  <div><span class="n">01</span><b>Listened to</b>We measure the songs you upload: tempo, rhythm, mood, energy,
+    sound and style.</div>
+  <div><span class="n">02</span><b>Looked up</b>We match playlist songs by name to the tags listeners gave them
+    on MusicBrainz.</div>
+  <div><span class="n">03</span><b>Weighed</b>Every tag gets a share of your list. What we heard counts for more
+    than what others wrote.</div>
+  <div><span class="n">04</span><b>Searched</b>Specific tags and two-tag combos, linked straight to Bandcamp,
+    Last.fm, RYM, YouTube and Spotify.</div>
 </section>
-<p class="muted small" style="margin-top:40px;max-width:46em">No account needed. Uploaded audio is deleted as soon as it's
-  analysed. Without an account, results are kept for {{ ttl|round|int }} hours and anyone with the results link can
-  open them. {% if user %}You're signed in, so this analysis goes into your private
+<section class="features" data-only="musician">
+  <div><span class="n">01</span><b>Harmony</b>Where the key moves, the mode and its colour note, and your chord
+    loops in Roman numerals.</div>
+  <div><span class="n">02</span><b>Structure &amp; feel</b>The sections, the energy and mood of each one, and where it
+    builds and drops.</div>
+  <div><span class="n">03</span><b>Rhythm &amp; parts</b>Tempo, time signature and groove, with the drums as a rhythm
+    grid and the bass as sheet music.</div>
+  <div><span class="n">04</span><b>Ideas &amp; exports</b>Things to try, well-known songs that share your track's DNA,
+    and MIDI, sheet music and the full report to take away.</div>
+</section>
+<p class="muted small" style="margin-top:40px;max-width:46em">You don't need an account. We delete your audio as soon as
+  we've analysed it. Without an account, results stay for {{ ttl|round|int }} hours and anyone with the link can open
+  them. {% if user %}You're signed in, so this goes into your private
   <a href="{{ url_for('history') }}">history</a>.{% else %}<a href="{{ url_for('signup') }}">Create a free account</a>
-  to keep your analyses in a private history and get a profile that sums up your music.{% endif %}
-  Only the analysis numbers go to the AI, never the audio.</p>
+  to keep everything in a private history, with a profile that sums up your music.{% endif %}
+  The AI only ever sees the analysis numbers, never your audio.</p>
 
 <script>
   const input = document.getElementById('tracks'), drop = document.getElementById('drop'),
@@ -166,9 +238,25 @@
   ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => { input.files = ev.dataTransfer.files; show(); });
+  function setMode() {
+    const tags = form.querySelector('input[name=mode]:checked').value === 'tags';
+    form.classList.toggle('tags', tags);
+    document.body.classList.toggle('tags-mode', tags);
+    try { history.replaceState(null, '', tags ? "{{ url_for('find') }}" : "{{ url_for('index') }}"); } catch (e) {}
+  }
+  form.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', setMode));
+  setMode();
   form.addEventListener('submit', ev => {
-    if (!input.files.length) { ev.preventDefault(); alert('Please choose at least one audio file.'); return; }
-    go.disabled = true; go.textContent = 'Uploading…';
+    const tags = form.classList.contains('tags');
+    const named = document.getElementById('playlist').value.trim() || document.getElementById('songs').value.trim();
+    if (!input.files.length && !(tags && named)) {
+      ev.preventDefault();
+      alert(tags ? 'Add some songs: upload them, paste a playlist link, or type their names.'
+                 : 'Please choose at least one audio file.');
+      return;
+    }
+    const btn = ev.submitter || go;
+    btn.disabled = true; btn.textContent = input.files.length ? 'Uploading…' : 'Starting…';
   });
 </script>
 {% endblock %}

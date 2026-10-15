@@ -33,3 +33,7 @@ presentation/
 
 # Your confirmed facts about your own recordings (private file paths)
 my_facts.json
+
+# Style-model files (downloaded by tagger.py --download; CC BY-NC-SA, not ours to redistribute) and tag output
+models/
+tags/

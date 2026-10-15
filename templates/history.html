@@ -66,7 +66,12 @@
         <button type="submit">Delete</button>
       </form>
     </div>
-    {% if it.summary %}
+    {% if it.summary and it.summary.kind == 'tags' %}
+    <div class="tracks">
+      <div class="trk"><b>{{ it.summary.list_name or 'Tags' }}</b><span>{{ it.summary.songs }} songs</span>
+        {% for tag, _ in it.summary.styles + it.summary.moods %}<span>{{ tag }}</span>{% endfor %}</div>
+    </div>
+    {% elif it.summary %}
     <div class="tracks">
       {% for t in it.summary.tracks %}
         <div class="trk"><b>{{ t.file }}</b>

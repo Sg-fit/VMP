@@ -51,6 +51,11 @@
     are faster, half slower. {{ glossary['Tempo'] }}">typical BPM</abbr></span></div>
 </div>
 
+{% if p.listening %}
+  <div class="stat"><h3><abbr title="The strongest tags from the song lists you've tagged with “Find music like this”:
+    the styles and moods your listening has in common. Each one is a search on its own page.">What you listen to</abbr></h3>
+    <div class="chips">{% for tag, _ in p.listening %}<span>{{ tag }}</span>{% endfor %}</div></div>
+{% endif %}
 {% if p.tracks %}
   <p class="sentence">{{ p.sentence }}</p>
   <p class="muted small" style="max-width:46em">Everything below sums up all the tracks in your history. Numbers are
@@ -76,7 +81,7 @@
     </ul>
     <p><a href="{{ url_for('history') }}">All of your history →</a></p>
   </div>
-{% else %}
+{% elif not p.listening %}
   <p class="sentence muted">Your summary appears here once you've saved an analysis.</p>
   <a class="btn primary" href="{{ url_for('index') }}">Analyse a track →</a>
 {% endif %}

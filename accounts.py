@@ -55,16 +55,16 @@ def create_user(username, password):
     """Returns (user_id, None) or (None, an error message for the form)."""
     username = (username or "").strip()
     if not USERNAME.match(username):
-        return None, "Usernames are 3–30 letters, numbers, dots, dashes or underscores."
+        return None, "Pick a username of 3–30 letters, numbers, dots, dashes or underscores, with no spaces."
     if len(password or "") < MIN_PASSWORD:
-        return None, f"Use a password of at least {MIN_PASSWORD} characters."
+        return None, f"Your password needs at least {MIN_PASSWORD} characters."
     try:
         with _connect() as db:
             cur = db.execute("INSERT INTO users (username, pw_hash, created) VALUES (?, ?, ?)",
                              (username, generate_password_hash(password), time.time()))
             return cur.lastrowid, None
     except sqlite3.IntegrityError:
-        return None, "That username is taken — try another."
+        return None, "Someone's already using that username. Try another one."
 
 
 def check_login(username, password):
@@ -160,10 +160,26 @@ def job_summary(results):
     return {"tracks": tracks}
 
 
+def tags_summary(data):
+    """A "find music like this" job (from tags.json): the list's top tags, for the history and profile pages."""
+    t = data.get("tags") or {}
+    top = lambda cat, n: [(x["tag"], x["score"]) for x in t.get(cat, [])[:n]]
+    return {"kind": "tags", "tracks": [], "songs": len(data.get("songs") or []), "list_name": data.get("list_name"),
+            "styles": top("style", 6), "moods": top("mood", 4) + top("sound", 3)}
+
+
 def profile_summary(items):
-    """Everything a user has saved, summed up: what keys, tempos, modes, chords and moods they gravitate to."""
+    """Everything a user has saved, summed up: what keys, tempos, modes, chords and moods they gravitate to,
+    and (from their tag lists) the styles they listen to."""
     tracks = [t for it in items if it.get("summary") for t in it["summary"]["tracks"] if not t.get("error")]
     out = {"analyses": len(items), "tracks": len(tracks)}
+    listening = Counter()
+    for it in items:
+        sm = it.get("summary") or {}
+        if sm.get("kind") == "tags":
+            for tag, score in sm.get("styles", []) + sm.get("moods", []):
+                listening[tag] += score
+    out["listening"] = [(tag, round(v, 2)) for tag, v in listening.most_common(12)]
     if not tracks:
         return out
     out["minutes"] = round(sum(t.get("duration_sec") or 0 for t in tracks) / 60, 1)

@@ -15,3 +15,6 @@ anthropic>=0.40
 
 # Optional: AI drum separation (big download). Install separately if you want it:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install demucs
+
+# Tag mode: reads YouTube playlist titles (no downloads)
+yt-dlp

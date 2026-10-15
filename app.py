@@ -107,7 +107,7 @@ def fail_interrupted_jobs():
     """Jobs left queued/running by a previous process will never finish — mark them failed."""
     for d in DATA_DIR.iterdir():
         if d.is_dir() and JOB_ID.match(d.name) and read_status(d).get("state") in ("queued", "running"):
-            write_status(d, state="error", message="The server restarted before this job finished. Please upload again.")
+            write_status(d, state="error", message="The server restarted before we could finish. Sorry about that. Please upload it again.")
             shutil.rmtree(d / "input", ignore_errors=True)
 
 
@@ -146,7 +146,7 @@ class Runner:
             self.proc.stdin.flush()
         except OSError:
             self.proc.kill()
-            return "The analysis worker stopped unexpectedly. Please try again."
+            return "Something stopped the analysis partway through. Please try again."
         deadline = time.time() + timeout
         while True:
             try:
@@ -159,9 +159,11 @@ class Runner:
                 code = self.proc.wait()
                 self.last_exit = code
                 if code in (-9, 137):
-                    return "The analysis was killed — the server probably ran out of memory. Try fewer or shorter tracks."
+                    return ("The server ran out of memory partway through. Try fewer tracks at once, or "
+                            "shorter ones.")
                 if code in (-11, 139):
-                    return "The analysis crashed inside an audio/maths library (segmentation fault, exit code -11)."
+                    return ("One of the audio libraries we use crashed (a segmentation fault). Please try again. "
+                            "If it keeps happening with this file, try exporting it as mp3 or wav.")
                 return f"The analysis process stopped unexpectedly (exit code {code})."
             if line == f"@@done {job_dir}":
                 return None
@@ -186,7 +188,7 @@ def worker():
                 # A native crash can be a one-off: retry once in a fresh worker before giving up.
                 where = read_status(d).get("message", "")
                 app.logger.error("job %s crashed (%s) while: %s - retrying once", job_id, runner.last_exit, where)
-                write_status(d, state="running", message="Retrying after a worker crash…")
+                write_status(d, state="running", message="That didn't work the first time, so we're trying again…")
                 runner.last_exit = None
                 problem2 = runner.run(d, JOB_TIMEOUT_MIN * 60)
                 if problem2:
@@ -197,12 +199,12 @@ def worker():
             if problem:
                 app.logger.error("job %s failed: %s", job_id, problem)
                 if read_status(d).get("state") == "done":  # analysis already shown; only the AI part was lost
-                    write_status(d, ai_pending=False, message="The AI ideas could not be added this time.")
+                    write_status(d, ai_pending=False, message="We couldn't get the AI ideas this time.")
                 else:
                     write_status(d, state="error", message=problem)
         except Exception as e:  # never let one bad job kill the worker thread
             app.logger.exception("job %s failed", job_id)
-            write_status(d, state="error", message=f"Analysis failed: {str(e)[:300]}")
+            write_status(d, state="error", message=f"Something went wrong during the analysis: {str(e)[:300]}")
         finally:
             shutil.rmtree(d / "input", ignore_errors=True)  # don't keep uploaded audio
             job_queue.task_done()
@@ -276,7 +278,7 @@ def signup():
     nxt, error = _safe_next(), None
     if request.method == "POST":
         if request.form.get("password") != request.form.get("password2"):
-            error = "The two passwords don't match."
+            error = "Those two passwords don't match. Have another go."
         else:
             uid, error = accounts.create_user(request.form.get("username"), request.form.get("password"))
             if uid:
@@ -295,7 +297,7 @@ def login():
             _sign_in(uid)
             return redirect(nxt)
         time.sleep(1)  # slow down password guessing
-        error = "That username and password don't match."
+        error = "That username and password don't match. Check for a typo and try again."
     return render_template("account.html", mode="login", error=error, next=nxt,
                            username=request.form.get("username", "")), (401 if error else 200)
 
@@ -307,17 +309,26 @@ def logout():
 
 
 def _job_title(d):
-    files = read_status(d).get("files") or []
-    return ", ".join(Path(f).stem for f in files[:3]) + (f" +{len(files) - 3} more" if len(files) > 3 else "") or "Analysis"
+    st = read_status(d)
+    files = st.get("files") or []
+    title = ", ".join(Path(f).stem for f in files[:3]) + (f" +{len(files) - 3} more" if len(files) > 3 else "")
+    if st.get("mode") == "tags":
+        names = [ln.strip() for ln in (st.get("songs") or "").splitlines() if ln.strip()]
+        what = title or ", ".join(names[:2]) + (f" +{len(names) - 2} more" if len(names) > 2 else "")
+        return "Tags: " + (what or ("playlist" if st.get("playlist") else "songs"))
+    return title or "Analysis"
 
 
 def _summaries(items):
     """Fill in the summary of saved analyses that finished since they were saved."""
     for it in items:
-        if it["summary"] is None:
-            res = DATA_DIR / it["job_id"] / "output" / "music_results.json"
-            if res.exists() and read_status(DATA_DIR / it["job_id"]).get("state") == "done":
-                it["summary"] = accounts.job_summary(json.loads(res.read_text(encoding="utf-8")))
+        if it["summary"] is None and read_status(DATA_DIR / it["job_id"]).get("state") == "done":
+            out = DATA_DIR / it["job_id"] / "output"
+            if (out / "music_results.json").exists():
+                it["summary"] = accounts.job_summary(json.loads((out / "music_results.json").read_text(encoding="utf-8")))
+            elif (out / "tags.json").exists():
+                it["summary"] = accounts.tags_summary(json.loads((out / "tags.json").read_text(encoding="utf-8")))
+            if it["summary"] is not None:
                 accounts.store_summary(it["job_id"], it["summary"])
     return items
 
@@ -395,7 +406,9 @@ def _too_many_uploads():
 def form_page(error=None, code=200):
     return render_template("index.html", error=error, ai_label=LLM_LABEL, max_files=MAX_FILES, version=ma.CODE_VERSION,
                            instruments=ma.INSTRUMENTS, genres={k: v[0] for k, v in ma.GENRES.items()},
-                           max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS), code
+                           max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
+                           mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
+                           form=request.form), code
 
 
 @app.get("/")
@@ -403,16 +416,30 @@ def index():
     return form_page()
 
 
+@app.get("/find")
+def find():
+    """The same form, opened on "Find music like this"."""
+    return form_page()
+
+
 @app.post("/analyze")
 def analyze():
     uploads = [f for f in request.files.getlist("tracks") if f and f.filename]
-    if not uploads:
-        return form_page("Please choose at least one audio file.", 400)
+    tags_mode = request.form.get("mode") == "tags"
+    playlist = (request.form.get("playlist") or "").strip()[:500]
+    songs = (request.form.get("songs") or "")[:8000]
+    if tags_mode and playlist and not re.match(r"^(https?://|spotify:)", playlist):
+        return form_page("That playlist link doesn't look right. It should start with https://, like a link "
+                         "copied from Spotify or YouTube.", 400)
+    if not uploads and not (tags_mode and (playlist or songs.strip())):
+        return form_page("Choose at least one audio file to get started." if not tags_mode else
+                         "Add a few songs first: upload them, paste a playlist link, or type their names.", 400)
     if len(uploads) > MAX_FILES:
-        return form_page(f"Too many files — the limit is {MAX_FILES} per upload.", 400)
+        return form_page(f"That's more than {MAX_FILES} files. Upload up to {MAX_FILES} at a time.", 400)
 
     if _too_many_uploads():
-        return form_page(f"You've started {UPLOADS_PER_HOUR} analyses in the last hour — please wait a little.", 429)
+        return form_page(f"You've started {UPLOADS_PER_HOUR} analyses in the last hour, which is our limit. "
+                         "Give it a little while and try again.", 429)
     cleanup_old_jobs()
     job_id = uuid.uuid4().hex
     d = DATA_DIR / job_id
@@ -427,16 +454,20 @@ def analyze():
             name, n = f"{stem}_{n}{ext}", n + 1
         f.save(d / "input" / name)
         saved.append(name)
-    if not saved:
+    if not saved and uploads and not (tags_mode and (playlist or songs.strip())):
         shutil.rmtree(d, ignore_errors=True)
-        return form_page("None of those files is a supported audio format.", 400)
+        return form_page("We can't read any of those files. Try mp3, wav, m4a, flac, ogg or aac.", 400)
 
     ahead = job_queue.qsize()
-    write_status(d, state="queued", files=saved, use_ai=bool(LLM and request.form.get("ai")),
-                 melody=(request.form.get("melody") or "")[:2000],
-                 context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
-                 created=time.time(),
-                 message=f"Waiting in line ({ahead} job{'s' if ahead != 1 else ''} ahead)…" if ahead else "Starting…")
+    if tags_mode:  # finding music: none of the musician's options apply
+        write_status(d, state="queued", mode="tags", files=saved, playlist=playlist, songs=songs, created=time.time(),
+                     message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
+    else:
+        write_status(d, state="queued", mode="musician", files=saved, use_ai=bool(LLM and request.form.get("ai")),
+                     melody=(request.form.get("melody") or "")[:2000],
+                     context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
+                     created=time.time(),
+                     message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     u = current_user()
     if u:  # signed in: goes straight into their history
         accounts.save_job(u["id"], job_id, _job_title(d))
@@ -449,7 +480,12 @@ def job(job_id):
     d = get_job_dir(job_id)
     s = read_status(d)
     report_html, midi_files = None, []
-    if s.get("state") == "done":
+    if s.get("state") == "done" and s.get("mode") == "tags":
+        report_md = (d / "output" / "tags_report.md").read_text(encoding="utf-8")
+        report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
+        # search links open in a new tab, so the tags stay open while browsing
+        report_html = report_html.replace('<a href="http', '<a target="_blank" rel="noopener" href="http')
+    elif s.get("state") == "done":
         report_md = (d / "output" / "music_report.md").read_text(encoding="utf-8")
         report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
         report_html = re.sub(  # turn `midi/x.mid` and `sheets/x.html` mentions into links
@@ -495,7 +531,7 @@ def job_zip(job_id):
 
 @app.errorhandler(413)
 def too_large(_e):
-    return form_page(f"Upload too large — the limit is {MAX_UPLOAD_MB} MB per upload.", 413)
+    return form_page(f"That upload is too big. Keep it under {MAX_UPLOAD_MB} MB in total.", 413)
 
 
 if __name__ == "__main__":

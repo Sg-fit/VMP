@@ -138,15 +138,45 @@
     return { finished, isOn: get };
   })();
 </script>
-{% if s.state == 'done' %}
+{% if s.state == 'done' and s.mode == 'tags' %}
+  <div>
+    <p class="eyebrow">Find music like this</p>
+    <h1>Your tags</h1>
+    <div class="muted">{% if s.list_name %}{{ s.list_name }} · {% endif %}{{ s.songs_count or 0 }} song{{ 's' if s.songs_count != 1 }}{% if s.files %}, {{ s.files|length }} listened to{% endif %}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
+    <div class="toolbar">
+      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='tags_report.md') }}"
+         title="The tags and search links as a text file.">Tags (.md)</a>
+      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='tags.json') }}"
+         title="Every tag with its score and the songs it came from, for other programs.">Data (.json)</a>
+      <a class="btn secondary" href="{{ url_for('find') }}">Tag more songs</a>
+    </div>
+    <div class="savebar">
+      {% if saved %}
+        <span class="ok">Saved in your history</span> · <a href="{{ url_for('history') }}">History</a>
+      {% elif user %}
+        <form method="post" action="{{ url_for('job_save', job_id=job_id) }}"><button class="btn secondary" type="submit">Save to history</button></form>
+        <span class="muted small">If you don't, we'll delete them after a day.</span>
+      {% else %}
+        <span class="muted small">We'll delete these results after a day.
+          <a href="{{ url_for('login', next=request.path) }}">Sign in</a> to keep them, and your profile will show
+          what all your lists have in common.</span>
+      {% endif %}
+    </div>
+  </div>
+  <script>document.addEventListener('DOMContentLoaded', () => aiNotify.finished('Your tags are ready.'));</script>
+  <p class="muted small" style="margin:32px 0 0;max-width:46em">Your tags come first, then searches built from them
+    (they open in a new tab), then each song and where its tags came from.</p>
+  <div class="report">{{ report_html|safe }}</div>
+
+{% elif s.state == 'done' %}
   <div>
     <p class="eyebrow">Results</p>
     <h1>Your analysis</h1>
-    <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · temporary results — save them or download anything you want to keep{% endif %}</div>
+    <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
     <div class="toolbar">
       <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}"
          title="One file with the report, the data, all MIDI files and the sheet music.">Download everything (.zip) ↓</a>
-      {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet — wait for “ready” for the complete package.</span>{% endif %}
+      {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet. Wait until they're ready to get everything in one go.</span>{% endif %}
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}"
          title="{{ glossary['Report file'] }}">Report (.md)</a>
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}"
@@ -158,11 +188,11 @@
         <span class="ok">Saved in your history</span> · <a href="{{ url_for('history') }}">History</a>
       {% elif user %}
         <form method="post" action="{{ url_for('job_save', job_id=job_id) }}"><button class="btn secondary" type="submit">Save to history</button></form>
-        <span class="muted small">Otherwise these results are deleted after a day.</span>
+        <span class="muted small">If you don't, we'll delete them after a day.</span>
       {% else %}
-        <span class="muted small">These results are deleted after a day.
+        <span class="muted small">We'll delete these results after a day.
           <a href="{{ url_for('login', next=request.path) }}">Sign in</a> or
-          <a href="{{ url_for('signup', next=request.path) }}">create a free account</a> to keep them in your history.</span>
+          <a href="{{ url_for('signup', next=request.path) }}">create a free account</a> to keep them.</span>
       {% endif %}
     </div>
     {% if midi_files %}
@@ -184,10 +214,10 @@
             const s = await (await fetch("{{ url_for('job_status', job_id=job_id) }}")).json();
             if (!s.ai_pending) {
               document.getElementById('aitext').textContent = s.state === 'error'
-                ? 'The AI ideas could not be added this time.' : 'The AI ideas are ready.';
+                ? "We couldn't get the AI ideas this time." : 'The AI ideas are ready.';
               document.getElementById('aibar').classList.add('done');
               if (s.state !== 'error') document.getElementById('aibtn').style.display = 'inline-flex';
-              aiNotify.finished(s.state === 'error' ? 'The AI ideas could not be added this time.'
+              aiNotify.finished(s.state === 'error' ? "We couldn't get the AI ideas this time."
                                                      : 'The AI ideas for your music are ready.');
               return;
             }
@@ -208,10 +238,10 @@
       if (y) { sessionStorage.removeItem('scroll-{{ job_id }}'); window.addEventListener('load', () => window.scrollTo(0, +y)); }
     } catch (e) {}
   </script>
-  <p class="muted small" style="margin:32px 0 0;max-width:46em">How to read this: the table gives each track at a
-    glance, then each track has its own sections — harmony, structure, energy & mood, instruments, melody, links to
-    well-known music, groove & sound, ideas and downloads. Underlined terms explain themselves — hover, or tap on a
-    phone — and the full guide is under “How to read this report”.</p>
+  <p class="muted small" style="margin:32px 0 0;max-width:46em">Where to start: the table shows every track at a
+    glance. Below it, each track has its own sections: harmony, structure, energy and mood, instruments, melody,
+    well-known music it shares something with, groove and sound, ideas and downloads. Hover over (or tap) any
+    underlined word for a quick explanation. There's a full guide under “How to read this report”.</p>
   <div class="report">{{ report_html|safe }}</div>
 
 {% elif s.state == 'error' %}
@@ -226,9 +256,15 @@
   <div>
     <div class="working" role="img" aria-label="Working"><i></i><i></i><i></i><i></i><i></i></div>
     <p class="eyebrow">Working</p>
-    <h1>Analysing your music…</h1>
+    <h1>{% if s.mode == 'tags' %}Tagging your songs…{% else %}Analysing your music…{% endif %}</h1>
     <p id="msg" class="lede" style="margin-bottom:12px">{{ s.message }}</p>
-    <p class="muted small" style="max-width:40em">This takes about 30–60 seconds per track (seconds if a track was analysed before). Results appear as soon as the analysis is done — AI ideas follow. This page updates by itself.</p>
+    {% if s.mode == 'tags' %}
+    <p class="muted small" style="max-width:40em">Songs you uploaded take 10–40 seconds each. Songs we look up by name
+      take about 2 seconds each, because the music database asks us to send one request a second. You don't need to
+      refresh.</p>
+    {% else %}
+    <p class="muted small" style="max-width:40em">Each track takes about 30–60 seconds, or a few seconds if we've heard it before. Your results show up as soon as they're ready and the AI ideas follow. You don't need to refresh.</p>
+    {% endif %}
     {% if s.use_ai %}
     <p style="margin-top:20px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
       <button type="button" class="notify" aria-pressed="false">Notify me when the AI is done</button>

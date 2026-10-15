@@ -105,12 +105,13 @@
   </style>
   {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
 <header class="bar"><div class="bar-in">
   <a class="brand" href="{{ url_for('index') }}" aria-label="Music Inspiration Analyzer, home"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
     <span class="name">Music Inspiration Analyzer</span></a>
   <nav>
     <a href="{{ url_for('index') }}">Analyse</a>
+    <a href="{{ url_for('find') }}">Find music</a>
     {% if user %}
       <a href="{{ url_for('history') }}">History</a>
       <a href="{{ url_for('profile') }}" class="me">{{ user.username }}</a>
@@ -144,28 +145,33 @@
   <button class="x" type="button" data-close aria-label="Close">×</button>
   <div class="in">
     <p class="eyebrow">Before you start</p>
-    <h2 id="intro-title">What the app can and can't do</h2>
-    <p class="muted small" style="margin:0">It's a fast, automatic second pair of ears — a starting point for ideas,
-      not a transcription service. Worth knowing:</p>
+    <h2 id="intro-title">A few things worth knowing</h2>
+    <p class="muted small" style="margin:0">Think of this as a quick second pair of ears. It's good at sparking ideas,
+      but it isn't a transcription service. Here's what to expect:</p>
     <ul>
-      <li><b>Made for instrumental music.</b> Singing isn't recognised as such; with a singer, the melody line it finds is
-        usually the voice.</li>
-      <li><b>Only the drums and the lowest part are written out</b> (a bass, or a solo instrument's own low notes).
-        Other instruments are covered by the chords and the melody line, not their own sheet music.</li>
-      <li><b>Phone recordings lose the low end,</b> so a bass guitar and a guitar's low strings sound alike. Tick the
-        instruments you hear when uploading and the app takes your word for it.</li>
-      <li><b>Results are approximate:</b> keys can be mixed up with their relative (C major / A minor), tempo can read
-        half or double (and is marked approximate for legato music with hardly any attacks: strings, pads, soft piano),
-        chords are simplified, and section letters are a rough guide.</li>
-      <li><b>Forms it recognises:</b> 8-, 12- and 16-bar blues (major and minor) and the 32-bar AABA song form, from the
-        chords. Other forms are shown as sections (A, B, C…). Odd meters (5/4, 7/4) are only recognised when there's a
-        clear rhythmic attack, e.g. drums.</li>
-      <li><b>Type the melody</b> if it matters — automatic melody detection is unreliable on full-band recordings.</li>
-      <li><b>AI ideas are optional</b> and sometimes slow or unavailable; times and chords they name are checked, their
-        opinions aren't.</li>
-      <li><b>Your audio is deleted</b> right after analysis. Results last a day unless you save them to a free account.</li>
+      <li><b>It's built for instrumental music.</b> It doesn't pick out lyrics, and if someone's singing, the melody
+        it finds will usually be their voice.</li>
+      <li><b>We write out the drums and the lowest part</b>: the bass, or the low notes of a solo instrument.
+        Everything else shows up in the chords and the melody line rather than as its own sheet music.</li>
+      <li><b>Phone recordings lose a lot of low end,</b> so a bass guitar and a guitar's low strings can sound the
+        same. Tick the instruments you hear when you upload and we'll go with what you tell us.</li>
+      <li><b>Treat the numbers as good guesses.</b> A key can get mixed up with its relative (C major and A minor
+        share their notes), tempo sometimes comes out at half or double speed, chords get simplified, and section
+        letters are a rough map. For slow, smooth music with few clear attacks (strings, pads, soft piano) we mark
+        the tempo as approximate.</li>
+      <li><b>We recognise 8-, 12- and 16-bar blues</b> (major and minor) and the 32-bar AABA song form. Anything else
+        is shown as sections: A, B, C. Odd time signatures like 5/4 and 7/4 need a clear beat, such as drums, before
+        we'll call them.</li>
+      <li><b>If the melody matters, type it in.</b> Picking a tune out of a full band automatically is hit and miss.</li>
+      <li><b>AI ideas are optional</b>, and sometimes slow or unavailable. We check any times and chords they mention
+        against your track. Their opinions are their own.</li>
+      <li><b>Find music like this:</b> we listen to the songs you upload. For songs from a playlist link or a list we
+        only read the names and look up the tags other listeners gave them, usually for the artist rather than the
+        song, so they count for less. Very obscure songs might not turn up at all.</li>
+      <li><b>We delete your audio</b> as soon as we're done with it. Results stay for a day, or for as long as you
+        like if you save them to a free account.</li>
     </ul>
-    <button class="btn primary" type="button" data-close>Got it →</button>
+    <button class="btn primary" type="button" data-close>Got it</button>
   </div>
 </dialog>
 <script>

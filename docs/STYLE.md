@@ -39,3 +39,33 @@ The rules that follow from that:
 - **Motion:** the "analysing" spinner is a level meter that bounces; it stops for people who prefer reduced motion.
 - **Emoji** are stripped from the interface and from report headings when shown on the page (the downloaded `.md`
   report is unchanged).
+
+# Voice and tone
+
+How the app talks. Based on reading (Oct 2026) the **Mailchimp Content Style Guide** (voice and tone), **Ableton's
+Learning Music** lessons and **Bandcamp's** about page: three companies whose writing people trust.
+
+What they share:
+
+- **Plainspoken.** Mailchimp strips out hype and "fluffy metaphors"; clarity beats entertainment. Bandcamp says
+  what happens to your money in one sentence, with the number.
+- **Talk to one person.** Ableton: "you'll learn", "check out the boxes below", "next, you'll make some of your
+  own". Short sentences in the second person that say what to do and what happens next.
+- **Active and positive.** Say what something *does*, not what it isn't. Active voice ("we listen to the songs",
+  not "songs are analysed").
+- **Translate the expert words.** Explain a term the first time it shows up, in everyday words, without talking
+  down.
+- **Humour only when it comes naturally.** Dry, never forced. When in doubt, keep a straight face.
+- **Tone follows the reader's mood.** Calm and short when something failed; a little warmer when they've finished.
+
+How the app applies it:
+
+1. **"We" for the app, "you" for the reader.** "We couldn't read this file", not "File unreadable".
+2. **Contractions** (we'll, you're, isn't) and everyday words: "about", not "approximately"; "use", not "utilise".
+3. **Lead with what they get, then the how.** Caveats go after the result, in one plain sentence, not a list of
+   disclaimers.
+4. **Honest about limits, without apologising at length.** "This is a guess from the sound, so check it by ear."
+5. **Errors say what happened and what to do next**, in that order, with no blame.
+6. **No exclamation marks in the interface**, no "simply" or "just" (it makes hard things sound easy), no
+   marketing superlatives.
+7. **Numbers stay concrete.** "About 30 seconds a song", "counts 0.4 against 1".

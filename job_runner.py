@@ -50,21 +50,31 @@ def run_job(job_dir):
         import ctypes
         ctypes.string_at(0)  # invalid memory read -> the same kind of crash as a library segfault
     try:
-        files = sorted((d / "input").iterdir())
-        llm = ma.make_llm()[0] if read_status(d).get("use_ai") else None
+        files = sorted((d / "input").iterdir()) if (d / "input").is_dir() else []
+        cache = os.environ.get("MUSIC_CACHE_DIR") or str(d.parent / "cache")  # shared by all jobs
+        st = read_status(d)
+        if st.get("mode") == "tags":
+            # Finding music: tags only. None of the musician's extras (AI, MIDI, sheet music, ideas).
+            import discover
+            data, _ = discover.run_tags(files, d / "output", song_text=st.get("songs"), playlist_url=st.get("playlist"),
+                                        progress=lambda msg: write_status(d, message=msg), cache_dir=cache)
+            write_status(d, state="done", ai_pending=False, message="Done", list_name=data.get("list_name"),
+                         songs_count=len(data.get("songs") or []))
+            return
+        llm = ma.make_llm()[0] if st.get("use_ai") else None
 
         def analysis_ready(report):  # show the analysis now; the AI section is filled in later
             write_status(d, state="done", ai_pending=True, message="AI ideas on the way…")
-        cache = os.environ.get("MUSIC_CACHE_DIR") or str(d.parent / "cache")  # shared by all jobs
         ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg),
                         melody_text=read_status(d).get("melody"), context=read_status(d).get("context"),
                         on_analysis_done=analysis_ready if llm else None, cache_dir=cache)
         write_status(d, state="done", ai_pending=False, message="Done")
     except Exception as e:
         if read_status(d).get("state") == "done":  # analysis already shown: keep it, just stop waiting for AI
-            write_status(d, ai_pending=False, message="The AI ideas could not be added this time.")
+            write_status(d, ai_pending=False, message="We couldn't get the AI ideas this time.")
         else:
-            write_status(d, state="error", ai_pending=False, message=f"Analysis failed: {str(e)[:300]}")
+            write_status(d, state="error", ai_pending=False,
+                         message=f"Something went wrong during the analysis: {str(e)[:300]}")
 
 
 def warm_up():

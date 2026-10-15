@@ -20,6 +20,29 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 
 It comes as a **web app** (upload tracks in the browser) and a **command-line tool**. Only the analysis numbers are sent to the AI, never the audio.
 
+## Find music like this (tags for a playlist)
+
+A second mode, for listeners rather than musicians: describe a set of songs in the words music sites search by,
+then search with those words to reach artists the big sites' recommendations rarely show.
+
+- **Input:** upload songs, paste a public **Spotify** playlist/album/track link or a **YouTube** playlist link, or
+  type song names (`Artist - Title`, one per line). Up to 100 songs.
+- **Uploaded songs are listened to** (weight 1.0): a quicker "light" analysis (tempo, time signature, energy and
+  mood, drums or not, blues forms) plus, when installed, a trained **style model** — Essentia's Discogs-EffNet
+  (400 Discogs styles, moods/themes, instruments, vocals or not).
+- **Songs from a link or a list are looked up by name** (weight 0.4) on MusicBrainz (and Last.fm when
+  `LASTFM_API_KEY` is set). Those are listeners' tags, mostly for the artist, so they count for less. Only the names
+  are read from a playlist page, never the audio.
+- **Output:** each tag's share of the list, broad genres kept apart (shown, never searched), and links to the tag
+  pages on Bandcamp, Last.fm, MusicBrainz and RYM plus two-tag YouTube/Spotify searches. Artists already in
+  the list are named so you can skip them.
+- **Kept separate:** a tag job runs none of the musician's work (no AI, MIDI, sheet music, ideas), and a
+  musician's analysis never runs the tag search.
+- **Licence:** the Essentia models are **CC BY-NC-SA 4.0 — non-commercial use only** (Music Technology Group,
+  Universitat Pompeu Fabra). If this app is ever used commercially, build without them (`WITH_STYLE_MODEL=0`)
+  or license them from MTG.
+- Command line: `python discover.py song.mp3 --songs list.txt --playlist URL --out tags/`
+
 ## Run the web app locally
 
 ```bash
@@ -72,6 +95,9 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `MUSIC_LLM_BASE_URL` | NVIDIA's API | Any OpenAI-compatible endpoint, for example a self-hosted model |
 | `MUSIC_CACHE_DIR` | `DATA_DIR/cache` (web), `~/.cache/music-analyzer` (CLI) | Cached analyses. A re-upload of the same recording skips the slow analysis. Entries unused for 30 days are deleted |
 | `CPU_LIMIT` / `MEM_LIMIT` | 1.0 / 1500m | Docker only: caps on CPU cores and memory for the analyzer, so jobs can't slow down other sites on the server. A job that needs more memory fails with a message instead of freezing the machine |
+| `WITH_STYLE_MODEL` | 1 | Docker build only: installs the Essentia style model for "Find music like this" in its own Python environment (Linux x86-64; a failed install only turns style tags off). `0` = smaller image |
+| `LASTFM_API_KEY` | — | Optional: also look songs up on Last.fm (richer listener tags than MusicBrainz) |
+| `MUSIC_OFFLINE` | — | `1` turns off looking songs up by name and reading playlist links |
 | `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI drum separation (about 1 GB larger image, 1–2 min of CPU per track). Rebuild with `docker compose up -d --build` after changing it |
 
 ### Behind a domain (nginx)

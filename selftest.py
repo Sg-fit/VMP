@@ -688,7 +688,8 @@ def web_checks(tmp, files):
     fake = fake_ai_server(ai_port)
     env = {**os.environ, "PORT": str(port), "DATA_DIR": str(Path(tmp) / "jobs"), "APP_PASSWORD": "selftest",
            "NVIDIA_API_KEY": "nvapi-selftest", "MUSIC_LLM_BASE_URL": f"http://127.0.0.1:{ai_port}/v1",
-           "MUSIC_SEPARATION": "simple", "MUSIC_SELFTEST_CRASH_ONCE": str(Path(tmp) / "crash-flag")}
+           "MUSIC_SEPARATION": "simple", "MUSIC_SELFTEST_CRASH_ONCE": str(Path(tmp) / "crash-flag"),
+           "MUSIC_TAGGER": "fake", "MUSIC_OFFLINE": "1"}
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MUSIC_MODEL", "MUSIC_FALLBACK_MODELS"):
         env.pop(k, None)
     proc = subprocess.Popen([sys.executable, str(HERE / "app.py")], env=env, cwd=HERE,
@@ -774,6 +775,17 @@ def web_checks(tmp, files):
         check("web", "the upload form's instruments and genre reach the analysis",
               (r5.get("context") or {}).get("genre") == "Blues" and "voice" in r5["context"]["instruments"]
               and "<sign>G</sign>" in sheet.text, str(r5.get("context")))
+        check("web", "a musician's analysis doesn't run the tag search",
+              requests.get(f"{base}/jobs/{job5}/files/tags.json", timeout=10).status_code == 404)
+        job6, s6, _, _ = run_job([files["guitar_blues"]], extra={"mode": "tags", "songs": "Portishead - Roads"})
+        t6 = requests.get(f"{base}/jobs/{job6}/files/tags.json", timeout=10)
+        check("web", "a tag job runs from the form and skips the musician's work (no report, MIDI or AI)",
+              s6["state"] == "done" and t6.ok and "12-bar blues" in t6.text
+              and requests.get(f"{base}/jobs/{job6}/files/music_report.md", timeout=10).status_code == 404
+              and "Your tags" in requests.get(f"{base}/jobs/{job6}", timeout=10).text, s6.get("state"))
+        r7 = requests.post(base + "/analyze", data={"mode": "tags", "songs": "Massive Attack - Teardrop"},
+                           allow_redirects=False, timeout=30)
+        check("web", "a tag job needs no upload when songs are named", r7.status_code == 302, f"HTTP {r7.status_code}")
     finally:
         import psutil
         try:
@@ -933,6 +945,152 @@ def live_checks(base, tmp):
     if ok:
         page = get(f"/jobs/{job}")
         check("live", "results page shows the analysis", "Harmony" in page and "3/4" in page)
+        try:
+            get(f"/jobs/{job}/files/tags.json")
+            check("live", "a musician's analysis doesn't run the tag search", False, "tags.json was made")
+        except urllib.error.HTTPError as e:
+            check("live", "a musician's analysis doesn't run the tag search", e.code == 404, f"HTTP {e.code}")
+
+    # "Find music like this" through the running app: one upload plus one song by name
+    fields = {"mode": "tags", "songs": "Massive Attack - Teardrop"}
+    body = b"".join(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+                    for k, v in fields.items())
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"tracks\"; filename=\"{track.name}\"\r\n"
+             f"Content-Type: audio/wav\r\n\r\n").encode() + track.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(base + "/analyze", data=body, method="POST",
+                                 headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        urllib.request.build_opener(NoRedirect).open(req, timeout=60)
+        check("live", "tag job accepted", False, "no redirect to a job page")
+        return
+    except urllib.error.HTTPError as e:
+        if e.code != 302:
+            check("live", "tag job accepted", False, f"HTTP {e.code}")
+            return
+        tjob = e.headers["Location"].rsplit("/", 1)[-1]
+    t0 = time.time()
+    while time.time() - t0 < 400:
+        s = json.loads(get(f"/jobs/{tjob}/status"))
+        if s["state"] in ("error", "done"):
+            break
+        time.sleep(2)
+    if check("live", "a tag job finishes", s.get("state") == "done",
+             f"{s.get('state')}: {s.get('message', '')} after {time.time() - t0:.0f}s"):
+        tags = json.loads(get(f"/jobs/{tjob}/files/tags.json"))
+        check("live", "the tag job's results page and tags", "Your tags" in get(f"/jobs/{tjob}")
+              and any(x["audio"] for x in tags["songs"]), f"{len(tags['songs'])} songs, model: {tags.get('model')}")
+        try:
+            get(f"/jobs/{tjob}/files/music_report.md")
+            check("live", "a tag job skips the musician's analysis, MIDI and AI", False, "music_report.md was made")
+        except urllib.error.HTTPError as e:
+            check("live", "a tag job skips the musician's analysis, MIDI and AI", e.code == 404, f"HTTP {e.code}")
+        named = next((x for x in tags["songs"] if not x["audio"]), {})
+        if not named.get("found"):
+            warn("live", "the song typed by name was found on MusicBrainz", " | ".join(tags.get("notes", [])))
+
+def tag_checks(tmp, online=False):
+    """"Find music like this": parsing song names, weighting, the light analysis, the style model, and that a tag
+    job does none of the musician's work."""
+    import discover
+    import musicanalyze as ma
+    import tagger
+    print("\n== Tags for finding music ==")
+    songs = discover.parse_song_list("1. Massive Attack - Teardrop\nRoads by Portishead\n"
+                                     "Khruangbin – Maria También [Official Audio]\nBecky G - Mayores ft. Bad Bunny")
+    check("tags", "song names in common formats are read",
+          [(x["artist"], x["title"]) for x in songs] == [("Massive Attack", "Teardrop"), ("Portishead", "Roads"),
+                                                         ("Khruangbin", "Maria También"), ("Becky G", "Mayores")],
+          str(songs))
+    check("tags", "a YouTube 'Title - Artist' is turned round using the channel name",
+          discover.split_name("Teardrop - Massive Attack (Official Video)", "Massive Attack")
+          == {"artist": "Massive Attack", "title": "Teardrop"})
+    html = ('<html><script id="__NEXT_DATA__" type="application/json">' + json.dumps(
+        {"props": {"pageProps": {"state": {"data": {"entity": {"name": "My list", "trackList": [
+            {"title": "Roads", "subtitle": "Portishead"}, {"title": "Teardrop", "subtitle": "Massive Attack, Liz Fraser"}]}}}}}})
+        + "</script></html>")
+    check("tags", "a Spotify playlist page is read (names only)",
+          discover.parse_spotify_embed(html) == ("My list", [{"artist": "Portishead", "title": "Roads"},
+                                                            {"artist": "Massive Attack", "title": "Teardrop"}]))
+    check("tags", "Spotify links of every shape are recognised",
+          discover.spotify_id("https://open.spotify.com/intl-de/playlist/37i9dQZF1DX?si=1") == ("playlist", "37i9dQZF1DX")
+          and discover.spotify_id("spotify:album:abc") == ("album", "abc"))
+    agg = discover.aggregate([{"weight": 1.0, "tags": {"style": {"shoegaze": 1.0, "rock": 1.0}}},
+                              {"weight": 0.4, "tags": {"style": {"dream pop": 1.0}}}])
+    st_ = {t["tag"]: t["score"] for t in agg["style"]}
+    check("tags", "a song we listened to counts more than one known only by name",
+          abs(st_["shoegaze"] - 1 / 1.4) < 0.01 and abs(st_["dream pop"] - 0.4 / 1.4) < 0.01, str(st_))
+    plan = discover.search_plan(agg, set())
+    check("tags", "broad genres are shown but never searched",
+          "rock" in [t["tag"] for t in agg.get("genre", [])] and "rock" not in [t["tag"] for t in plan["styles"]])
+    check("tags", "tag search links use each site's tag address",
+          discover.links("Trip Hop")["Bandcamp"] == "https://bandcamp.com/tag/trip-hop"
+          and discover.links("Trip Hop")["Last.fm"] == "https://www.last.fm/tag/trip%20hop/artists")
+
+    # The light analysis: what tags need, quicker, same verdicts on drums
+    blues = write(Path(tmp) / "Test Artist - Tag Blues.wav", guitar_blues())
+    edm = write(Path(tmp) / "tag_electronic.wav", electronic_track())
+    t0 = time.time()
+    lb, le = ma.analyze(blues, light=True), ma.analyze(edm, light=True)
+    secs = time.time() - t0
+    check("tags", "light analysis: solo guitar has no drums or bass, the electronic track has both",
+          lb["drums"].get("present") is False and lb["bass"].get("present") is False
+          and le["drums"].get("present") and le["bass"].get("present"),
+          f"guitar {lb['drums'].get('present')}/{lb['bass'].get('present')}, electronic {le['drums'].get('present')}/{le['bass'].get('present')}")
+    check("tags", "light analysis: tempos right, 12-bar blues found, musician-only parts skipped",
+          # (the sparse guitar shuffle reads at half time, 70 - the full analysis reads it the same way)
+          any(near(lb["tempo_bpm"], t, 4) for t in (140, 70)) and near(le["tempo_bpm"], 124, 4) and bool(lb.get("blues_form"))
+          and lb.get("light") and not lb["top_line"].get("present") and not lb.get("bass_line"),
+          f"{lb['tempo_bpm']} / {le['tempo_bpm']} BPM in {secs:.0f}s")
+
+    # A whole tag job, offline, with the stand-in model: tags only, none of the musician's extras
+    saved = {k: os.environ.get(k) for k in ("MUSIC_TAGGER", "MUSIC_OFFLINE")}
+    os.environ.update(MUSIC_TAGGER="fake", MUSIC_OFFLINE="1")
+    try:
+        out = Path(tmp) / "tag_job"
+        data, report = discover.run_tags([blues, edm], out, song_text="Portishead - Roads")
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    made = sorted(x.name for x in out.iterdir())
+    check("tags", "a tag job writes tags only (no MIDI, sheet music, AI or musician report)",
+          made == ["tags.json", "tags_report.md"], ", ".join(made))
+    styles = [t["tag"] for t in data["tags"].get("style", [])]
+    check("tags", "tags come from the audio (12-bar blues) and the model", "12-bar blues" in styles and
+          any(t in styles for t in ("downtempo", "delta blues")), ", ".join(styles[:6]))
+    check("tags", "the file's name 'Artist - Title' is used for the lookup",
+          any(s_["name"] == "Test Artist - Tag Blues" for s_ in data["songs"]), str([s_["name"] for s_ in data["songs"]]))
+    check("tags", "with lookups off, the named song is reported as not found (not silently dropped)",
+          any("Portishead - Roads" in n for n in data["notes"]), " | ".join(data["notes"]))
+
+    # The real style model (on the server)
+    kind = tagger.backend()
+    if kind == "essentia":
+        try:
+            t0 = time.time()
+            pred = tagger.predict([str(blues), str(edm)], ma.load_audio)
+            pb, pe = pred.get(str(blues), {}), pred.get(str(edm), {})
+            check("tags", "the style model runs and names styles", bool(pb.get("styles")) and bool(pe.get("styles")),
+                  f"{time.time() - t0:.0f}s")
+            fam = lambda p_: {lab.split("---")[0] for lab, _ in p_.get("styles", [])[:3]}
+            if "Electronic" not in fam(pe):
+                warn("tags", "style model: the synthetic electronic track wasn't called Electronic",
+                     str(pe.get("styles", [])[:3]))
+            print(f"    model says: guitar blues → {[x for x, _ in pb.get('styles', [])[:3]]}; "
+                  f"electronic → {[x for x, _ in pe.get('styles', [])[:3]]}")
+        except Exception as e:
+            check("tags", "the style model runs and names styles", False, str(e)[:300])
+    elif os.environ.get("MUSIC_ESSENTIA_PYTHON"):
+        warn("tags", "the style model isn't installed (the Docker build skipped it); tags still work without styles "
+             "from the audio", "")
+    else:
+        print("    (style model not set up on this machine - skipped)")
+
+    if online:  # outside services: a failure is a warning, the app copes without them
+        try:
+            got = discover.lookup({"artist": "Massive Attack", "title": "Teardrop"}, discover.Cache(None))
+            (check if "trip hop" in got else warn)("tags", "MusicBrainz lookup by name works", ", ".join(got))
+        except Exception as e:
+            warn("tags", "MusicBrainz lookup by name works", str(e)[:200])
 
 
 # ---------------------------------------------------------------- main
@@ -958,6 +1116,10 @@ def main():
         except Exception:
             check("analysis", "analysis checks ran", False, traceback.format_exc(limit=2))
             res = {}
+        try:
+            tag_checks(tmp, online=bool(args.live))
+        except Exception:
+            check("tags", "tag checks ran", False, traceback.format_exc(limit=3))
         if not args.no_ai:
             try:
                 ai_checks(res)
