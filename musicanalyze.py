@@ -2174,8 +2174,10 @@ def _check_times(text, r, tolerance=3):
     # "<chord> at m:ss": is that chord (same root) really playing around then?
     # Skip chords the AI suggests adding: the verb governs the chord directly ("play A7", "add a G#7").
     # With a preposition in between ("add G#7 before C#m"), the second chord is a claim to check.
-    suggest = re.compile(r"\b(?:insert|add|play|use|try|layer|introduce|swap|put|with)\s+"
-                         r"(?:(?!(?:before|after|over|under|on|into|to|than|from|of|at|in|the)\b)[\w#'-]+\s+){0,3}$", re.I)
+    # Up to five describing words may sit between the verb and the chord ("introduce a secondary dominant A7",
+    # "add a bright, open Dsus4"), but no preposition: after one, the chord is what's already there.
+    suggest = re.compile(r"\b(?:insert|add|play|use|try|layer|introduce|swap|put|with|substitute|borrow)\s+"
+                         r"(?:(?!(?:before|after|over|under|on|into|to|than|from|of|at|in|the)\b)[\w#',-]+\s+){0,5}$", re.I)
     tl = sorted(r["chord_timeline"], key=lambda c: c.get("start", _to_sec(c["time"])))
     starts = [c.get("start", _to_sec(c["time"])) for c in tl]
     ends = starts[1:] + [r.get("duration_sec", 1e9)]
@@ -2189,7 +2191,9 @@ def _check_times(text, r, tolerance=3):
     claims += [(None, m_.group(2), m_.group(1)) for m_ in
                re.finditer(r"\bthe\s+(\d{1,2}:\d{2})\s+([A-G][b#]?(?:maj7|m7|m|7|5)?)\b(?!\s+section)", text)]
     for pos, name, t in claims:
-        if pos is not None and suggest.search(text[max(0, pos - 30):pos]):
+        # look back to the start of the chord's own clause, however long the description is
+        clause = re.split(r"[.;:!?()]", text[:pos])[-1] if pos is not None else ""
+        if pos is not None and suggest.search(clause):
             continue  # a chord the AI suggests adding, not a claim about the recording
         want = parse_chord(name)
         if not want:
