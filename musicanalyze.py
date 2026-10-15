@@ -634,6 +634,11 @@ def _bar_grids(r, spans):
         bar = beat_bar * family * (1 + nudge)
         if not 0.8 <= bar <= 8:
             continue
+        # Half/double length stands for "the beat was counted at the wrong speed", so the tempo it implies must be
+        # one music is actually played at. Doubling a 90 BPM ballad's bars means 45 BPM: no correction, just a
+        # longer grid that makes one pass of anything look like most of the song.
+        if family != 1.0 and not 50 <= (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / bar <= 200:
+            continue
         for q in range(8):
             start = (down + q * bar / 8) % bar
             roots, purity = [], []
