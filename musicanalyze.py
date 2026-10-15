@@ -71,6 +71,8 @@ DETECT_QUALITIES = {"": ([0, 4, 7], 1.0), "m": ([0, 3, 7], 1.0),
                     "7": ([0, 4, 7, 10], 0.92), "m7": ([0, 3, 7, 10], 0.92),
                     "5": ([0, 7], 0.86)}
 CHORD_SWITCH_PENALTY = 0.12
+# chord_clarity() below this: the chord's notes are no louder than the other notes around them (shown with a ?)
+UNCLEAR_CHORD = 1.0
 # Wider vocabulary accepted when reading chord names (e.g. from the AI) for MIDI export.
 # The longest matching quality wins, so "m7b5" beats "m7" and "m".
 CHORD_INTERVALS = {"": [0, 4, 7], "maj": [0, 4, 7], "M": [0, 4, 7], "m": [0, 3, 7], "min": [0, 3, 7],
@@ -353,8 +355,23 @@ def detect_chords(chroma, rms_db, bounds, btimes):
                 if third < 3 * floor:
                     q = "5"
         chords.append({"start": round(float(s), 2), "end": round(float(e), 2),
-                       "beats": max(1, int(round((e - s) / beat_len))), "root": root, "q": q})
+                       "beats": max(1, int(round((e - s) / beat_len))), "root": root, "q": q,
+                       "clarity": round(chord_clarity(sync, btimes, s, e, root, q), 2)})
     return chords
+
+
+def chord_clarity(sync, btimes, s, e, root, q):
+    """How much the chord's own notes stand out from the other notes over its span: the quietest chord tone
+    divided by the typical (median) non-chord note. A strummed or held chord is well above 1; a melodic run or a
+    blues lick, where five or six notes sound about equally, sits near 1 - a chord name there is a guess."""
+    cols = [i for i in range(len(btimes) - 1) if s <= btimes[i] < e and i < sync.shape[1]]
+    if not cols:
+        return 0.0
+    v = sync[:, cols].mean(axis=1)
+    ivs = DETECT_QUALITIES.get(q, ([0, 7], 1.0))[0]
+    core = {(root + i) % 12 for i in ivs[:3]}  # root, third, fifth: a 7th is often played quietly, or left out
+    others = [v[i] for i in range(12) if (i - root) % 12 not in ivs]
+    return float(min(v[i] for i in core) / (np.median(others) + 1e-9))
 
 
 def detect_meter(rms_db, chroma, bounds, clear_beat, allow_odd=True):
@@ -603,13 +620,18 @@ def _chord_spans(r):
     return [(c["start"], e, parse_chord(c["chord"])[0]) for c, e in zip(tl, ends)]
 
 
+BAR_STRETCH = (0.0, -0.01, 0.01, -0.02, 0.02, -0.03, 0.03)
+
+
 def _bar_grids(r, spans):
-    """Candidate bar grids: bar length (the detected one, double and half, in case the beat was counted at the
-    wrong speed) x where bar lines fall (every half beat from the detected downbeat). Yields
-    (bar_sec, first_bar_line, [root of each bar], how cleanly chords change on the bar lines)."""
+    """Candidate bar grids. Bar length: the one the tempo gives, and double and half in case the beat was counted
+    at the wrong speed (the 'family'), each nudged by up to 3%: a tempo off by a percent or two slides a long form
+    off its bar lines by the third or fourth chorus. Bar lines: every 1/8 bar from the detected downbeat. Yields
+    (bar_sec, first_bar_line, [root of each bar], how cleanly chords change on the bar lines, family, nudge)."""
     beat_bar = (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / r["tempo_bpm"]
     down = r.get("downbeat_sec") or 0.0
-    for bar in (beat_bar, 2 * beat_bar, beat_bar / 2):
+    for family, nudge in ((f, n) for f in (1.0, 2.0, 0.5) for n in BAR_STRETCH):
+        bar = beat_bar * family * (1 + nudge)
         if not 0.8 <= bar <= 8:
             continue
         for q in range(8):
@@ -624,7 +646,44 @@ def _bar_grids(r, spans):
                         cover[root] += overlap
                 roots.append(cover.most_common(1)[0][0] if cover else None)
                 purity.append(cover.most_common(1)[0][1] / bar if cover else 0)
-            yield bar, start, roots, float(np.mean(purity)) if purity else 0.0, abs(bar - beat_bar)
+            yield bar, start, roots, float(np.mean(purity)) if purity else 0.0, family, abs(nudge)
+
+
+def _pick_family(best):
+    """best: {family: (score, bars it was measured on, candidate)}. The bar length the tempo gives wins unless half or
+    double fits better by more than chance: two standard errors of the difference between two hit rates. (A 12-bar
+    at 152 BPM also half-fits as a 24-bar at 76; with half as many bars that reading is far less certain.)"""
+    if 1.0 not in best:
+        return max(best.values(), key=lambda x: x[0])[2] if best else None
+    p1, n1, choice = best[1.0]
+    top = p1
+    for fam, (p2, n2, cand) in best.items():
+        if fam == 1.0:
+            continue
+        se = np.sqrt(p1 * (1 - p1) / max(n1, 1) + p2 * (1 - p2) / max(n2, 1))
+        if p2 - p1 > 2 * se and p2 > top:
+            top, choice = p2, cand
+    return choice
+
+
+def _harmonic_loop_sec(spans, step=0.1):
+    """The shortest time after which the chord roots repeat almost exactly (>= 90% of the time), measured on the
+    chord timeline itself rather than on a bar grid, so a slightly wrong bar length can't hide a short loop.
+    None if nothing repeats that well, or the piece is one chord (the bar-grid check handles drones)."""
+    if not spans:
+        return None
+    grid = np.arange(spans[0][0], spans[-1][1], step)
+    roots = np.full(len(grid), -1)
+    for s_, e_, root in spans:
+        roots[(grid >= s_) & (grid < e_)] = root
+    if len(set(roots[roots >= 0].tolist())) < 2:
+        return None
+    for lag in range(int(1.5 / step), len(grid) // 2):
+        a, b = roots[:-lag], roots[lag:]
+        ok = (a >= 0) & (b >= 0)
+        if ok.sum() > 0.4 * len(grid) and np.mean(a[ok] == b[ok]) >= 0.9:
+            return lag * step
+    return None
 
 
 def _anchors(tpl):
@@ -645,8 +704,9 @@ def detect_blues_form(r):
     for s, e, root in spans:
         longest[root] += e - s
     tonics.add(longest.most_common(1)[0][0])
-    best = None
-    for bar, start, roots, clean, off_speed in _bar_grids(r, spans):
+    loop_sec = _harmonic_loop_sec(spans)
+    best = {}
+    for bar, start, roots, clean, family, nudge in _bar_grids(r, spans):
         # How exactly the piece repeats after each number of bars. A piece that repeats with a period shorter than a
         # form (a drone, a 4- or 8-bar loop) is that loop, not the form, however well it lines up on average.
         valid = lambda i, lag: roots[i] is not None and roots[i + lag] is not None
@@ -658,6 +718,8 @@ def detect_blues_form(r):
                 L = len(tpl)
                 if len(rel) < 2 * L or max(repeats[lag] for lag in range(1, L)) >= 0.9:
                     continue  # need two full choruses, and no shorter cycle
+                if loop_sec and loop_sec < 0.9 * L * bar:
+                    continue  # the chords as heard repeat sooner than this form would: a short loop, on any grid
                 pos = lambda i: (i - phase) % L
                 hit = lambda i: (rel[i] == tpl[pos(i)] or (pos(i) == L - 1 and rel[i] == 7)  # turnaround on V
                                  or (tpl[pos(i)] == 7 and rel[i] in V_SUBS))
@@ -682,16 +744,14 @@ def detect_blues_form(r):
                     # A chorus that began just before the recording (first bar cut off) still counts if its other
                     # bars fit: chord changes are often detected a beat early.
                     early = phase - L >= -1 and np.mean([hit(i) for i in range(max(0, phase - L), phase)]) >= 0.7
-                    # Half or double the detected bar length is only a fallback for a misread tempo: it must fit
-                    # clearly better, not by a point or two (a 12-bar at 152 BPM also half-fits as a 24-bar at 76).
-                    rank = round(float(score) - (0.06 if off_speed else 0.0), 2)
-                    cand = (rank, round(clean, 2), L == 12, -off_speed, name, tpl, bar,
-                            start + (phase - L * early) * bar, len(idx) // L + early, round(float(score), 2))
-                    if best is None or cand[:4] > best[:4]:
-                        best = cand
-    if not best or best[-1] < 0.7:
+                    cand = (round(float(score), 2), round(clean, 2), L == 12, -nudge, name, tpl, bar,
+                            start + (phase - L * early) * bar, len(idx) // L + early)
+                    if family not in best or cand[:4] > best[family][2][:4]:
+                        best[family] = (float(score), len(idx), cand)
+    best = _pick_family(best)
+    if not best or best[0] < 0.7:
         return None
-    _, _, _, _, name, tpl, bar, first, count, score = best
+    score, _, _, _, name, tpl, bar, first, count = best
     if key_is_minor(r["key_index"]):
         name = name.replace("-bar blues", "-bar minor blues")
     L = len(tpl)
@@ -721,8 +781,8 @@ def detect_song_form(r):
         b_sim = max(same(a1, b), same(a2, b), same(a3, b))
         return a_sim - b_sim if a_sim >= 0.75 and b_sim <= 0.5 else None
 
-    best = None
-    for bar, start, roots, clean, off_speed in _bar_grids(r, spans):
+    best = {}
+    for bar, start, roots, clean, family, nudge in _bar_grids(r, spans):
         if len(roots) < 32:
             continue
         for phase in range(8):
@@ -740,9 +800,11 @@ def detect_song_form(r):
                 # longer song: its cycles must cover most of the bars (an intro or ending may be extra).
                 if coverage < 0.6:
                     continue
-                cand = (cycles, round(margin, 2), round(clean, 2), -off_speed, -k, bar, start + (phase + 8 * k) * bar)
-                if best is None or cand[:5] > best[:5]:
-                    best = cand
+                cand = (cycles, round(margin, 2), round(clean, 2), -nudge, -k, bar, start + (phase + 8 * k) * bar)
+                if family not in best or cand[:5] > best[family][2][:5]:
+                    # how well it fits, on the same 0-1 scale as the blues hit rate, over the bars it covers
+                    best[family] = (min(1.0, 0.5 + margin), cycles * 32, cand)
+    best = _pick_family(best)
     if not best:
         return None
     cycles, margin, _, _, _, bar, first = best
@@ -894,6 +956,25 @@ def feel_analysis(y, sr, rms_db, sections, chords, r):
             "peak": {"label": peak["label"], "start": peak["start"], "end": peak["end"]}, "sections": out}
 
 
+def refine_tempo(y, sr, coarse):
+    """The beat tracker's tempo can only take values one analysis frame apart: around 150 BPM that's 152.0 or
+    161.5, around 120 it's 117.5 or 123.0. Re-measure it at 4x finer time resolution, only within 6% of the coarse
+    value (so a half/double-speed choice is never changed), and interpolate between frames. On synthetic tracks
+    of known tempo this lands within 0.1 BPM; it returns the coarse value if there's no clear peak."""
+    import librosa
+    hop = 128
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    lag0 = 60 / coarse * sr / hop
+    lo, hi = int(lag0 * 0.94), int(np.ceil(lag0 * 1.06)) + 1
+    ac = librosa.autocorrelate(env - env.mean(), max_size=hi + 2)
+    k = lo + int(np.argmax(ac[lo:hi]))
+    if k in (lo, hi - 1) or ac[k] <= 0:
+        return coarse  # the peak is at the edge of the window, or there is none: keep what we had
+    a, b, c = ac[k - 1], ac[k], ac[k + 1]
+    k = k + 0.5 * (a - c) / (a - 2 * b + c) if (a - 2 * b + c) != 0 else k
+    return float(60 * sr / hop / k)
+
+
 def _analyze_audio(path, light=False):
     """The expensive part: everything that depends only on the audio (cacheable)."""
     import librosa
@@ -915,6 +996,8 @@ def _analyze_audio(path, light=False):
         if len(frames2) > len(beat_frames):
             tempo, beat_frames = float(np.atleast_1d(tempo2)[0]), frames2
     clear_beat = len(beat_frames) >= 8
+    if clear_beat:
+        tempo = refine_tempo(y, sr, tempo)
     tracked_frames = beat_frames  # beats actually heard (the meter is judged on these only)
     if clear_beat:
         # The tracker often stops at the last clear hit; keep counting beats to the end so a final
@@ -933,7 +1016,10 @@ def _analyze_audio(path, light=False):
     # singer) pull the estimate around, and one 20 s stretch can read 10 cents flat while the next reads in tune.
     chunk = 20 * sr
     parts = [float(librosa.estimate_tuning(y=y_harm[i:i + chunk], sr=sr)) for i in range(0, len(y_harm) - chunk // 2, chunk)]
-    tuning_steady = len(parts) < 2 or (np.percentile(parts, 75) - np.percentile(parts, 25) <= 0.06
+    # agree = the stretches spread less than half the offset they claim (and never more than 15 cents), and
+    # none of them points the other way
+    spread = np.percentile(parts, 75) - np.percentile(parts, 25) if len(parts) >= 2 else 0.0
+    tuning_steady = len(parts) < 2 or (spread <= min(0.15, max(0.06, abs(tuning) / 2))
                                        and all(np.sign(p_) == np.sign(tuning) or abs(p_) < 0.05 for p_ in parts))
     # Notes are read from C2 (65 Hz) up: below that, kicks and sub-bass (electronic 808s, a pitched kick) swamp the
     # pitch picture. Bass notes lower than C2 still count through their overtones.
@@ -1102,7 +1188,8 @@ def _analyze_audio(path, light=False):
         "harmonic_rhythm_sec": round(float(np.mean([c["end"] - c["start"] for c in chords])), 1) if chords else None,
         "chord_timeline": [{"time": fmt_time(c["start"]), "start": round(float(c["start"]), 2),
                             "chord": c["name"], "roman": c["roman"],
-                            "with_bass": c.get("slash", c["name"]), "beats": c["beats"]} for c in chords],
+                            "with_bass": c.get("slash", c["name"]), "beats": c["beats"],
+                            "clarity": c.get("clarity")} for c in chords],
         "loops": loops,
         "sections": sections,
         "rhythm": rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr),
@@ -1160,7 +1247,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-18a"
+ANALYSIS_VERSION = "2026-10-18b"
 
 
 def _cache_key(path, light=False):
@@ -2453,7 +2540,8 @@ GUIDE = {
         "Chord loop": "A short run of chords that repeats, like the four chords under a verse. We look for loops "
                       "within each key and show them starting on the home chord.",
         "Chord timeline": "Every chord change in order, with the time it starts. Names like A/E show the bass note "
-                          "when it isn't the chord's root.",
+                          "when it isn't the chord's root. A ? means that chord's notes were no louder than the other "
+                          "notes sounding at the time, as in a fast run or a lick, so the name is a best guess.",
         "Harmonic rhythm": "How often the chord changes.",
         "Time in each key": "How long the music stays in each key. Songs often move to a new key (modulate) for a "
                             "chorus or a bridge.",
@@ -2697,7 +2785,8 @@ def track_report(r):
     if r["chord_timeline"]:
         L += ["", "<details><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
               f"_{GLOSSARY['Chord timeline']} {GLOSSARY['Chord names']}_", "",
-              " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" for c in r["chord_timeline"]), "",
+              " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" + ("?" if (c.get("clarity") or 9) < UNCLEAR_CHORD else "")
+                         for c in r["chord_timeline"]), "",
               "</details>"]
 
     # Structure

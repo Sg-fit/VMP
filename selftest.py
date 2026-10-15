@@ -992,6 +992,51 @@ def live_checks(base, tmp):
         named = next((x for x in tags["songs"] if not x["audio"]), {})
         if not named.get("found"):
             warn("live", "the song typed by name was found on MusicBrainz", " | ".join(tags.get("notes", [])))
+def precision_checks(tmp):
+    """Measurements that must hold for any track, checked on generated audio where the answer is known:
+    tempo to a fraction of a BPM, tuning claimed only when it's real, brightness that tells tracks apart,
+    chord names marked when they're a guess, and half/double-speed readings that need real evidence."""
+    import librosa
+
+    import musicanalyze as ma
+    print("\n== Precision on tracks with known answers ==")
+    pops = {bpm: write(Path(tmp) / f"prec_{bpm}.wav", song([("A", "m"), ("F", ""), ("C", ""), ("G", "")], bpm, 4, loops=8))
+            for bpm in (100, 128, 137)}
+    got = {bpm: ma.analyze(f)["tempo_bpm"] for bpm, f in pops.items()}
+    check("precision", "tempo within 0.5 BPM at speeds between the beat tracker's steps (100, 128, 137)",
+          all(abs(got[b] - b) <= 0.5 for b in got), str(got))
+
+    # Tuning: the same song played 30 cents flat, in tune, and drifting from 25 flat to in tune halfway through
+    base = song([("C", ""), ("A", "m"), ("F", ""), ("G", "")], 100, 4, loops=10)
+    flat = lambda y, cents: librosa.resample(y, orig_sr=ma.SR, target_sr=int(ma.SR * 2 ** (cents / 1200)))
+    half = len(base) // 2
+    cases = {"30 cents flat": (write(Path(tmp) / "tune_flat.wav", flat(base, 30)), lambda c: -36 <= c <= -24),
+             "in tune": (write(Path(tmp) / "tune_ok.wav", base), lambda c: abs(c) < 10),  # the report mentions >= 10
+             "drifting": (write(Path(tmp) / "tune_drift.wav", np.concatenate([flat(base[:half], 25), base[half:]])),
+                          lambda c: abs(c) < 10)}
+    res = {n: ma.analyze(f)["tuning_cents"] for n, (f, _) in cases.items()}
+    check("precision", "tuning: a real 30-cent detune is reported; in-tune and drifting recordings claim nothing",
+          all(ok(res[n]) for n, (_, ok) in cases.items()), str(res))
+
+    # Brightness: a dark string pad and a bright electronic track must not both read "dark/warm"
+    dark = ma.analyze(write(Path(tmp) / "prec_orch.wav", orchestral_track()))["sound"]
+    bright = ma.analyze(write(Path(tmp) / "prec_edm.wav", electronic_track()))["sound"]
+    check("precision", "brightness tells a dark track from a brighter one",
+          bright["brightness_hz"] > 1.5 * dark["brightness_hz"] and bright["tone"] != dark["tone"],
+          f"{dark['brightness_hz']} Hz {dark['tone']} vs {bright['brightness_hz']} Hz {bright['tone']}")
+
+    # Chord names: clean, known chords are never marked as guesses
+    tl = ma.analyze(pops[100])["chord_timeline"]
+    check("precision", "known chords are clear (no '?' on a clean recording)",
+          all((c.get("clarity") or 0) >= ma.UNCLEAR_CHORD for c in tl), str([(c["chord"], c["clarity"]) for c in tl][:6]))
+
+    # Half/double bar length: needs to beat the detected one by more than chance
+    on, off = (0.77, 60, "on"), (0.79, 24, "off")
+    check("precision", "a half/double-speed form reading needs more than a lucky point or two",
+          ma._pick_family({1.0: on, 2.0: off}) == "on"
+          and ma._pick_family({1.0: (0.55, 60, "on"), 2.0: (0.95, 24, "off")}) == "off"
+          and ma._pick_family({2.0: off}) == "off")
+
 
 def tag_checks(tmp, online=False):
     """"Find music like this": parsing song names, weighting, the light analysis, the style model, and that a tag
@@ -1121,6 +1166,10 @@ def main():
         except Exception:
             check("analysis", "analysis checks ran", False, traceback.format_exc(limit=2))
             res = {}
+        try:
+            precision_checks(tmp)
+        except Exception:
+            check("precision", "precision checks ran", False, traceback.format_exc(limit=3))
         try:
             tag_checks(tmp, online=bool(args.live))
         except Exception:
