@@ -527,7 +527,9 @@ def sound_features(y, sr, rms_db, duration):
     total = S.sum() + 1e-9
     bands = {name: round(100 * float(S[(freqs >= lo) & (freqs < hi)].sum() / total), 1)
              for name, (lo, hi) in band_edges.items()}
-    centroid = float(np.mean(librosa.feature.spectral_centroid(S=S, sr=sr)))
+    # Brightness from the magnitude spectrum (S is power): the power-weighted centre sits at 400-500 Hz for almost
+    # any music, so every track read "dark/warm". This is also the measure the per-section mood table uses.
+    centroid = float(np.mean(librosa.feature.spectral_centroid(S=np.sqrt(S), sr=sr)))
     flatness = float(np.mean(librosa.feature.spectral_flatness(S=S)))
 
     # Energy arc, one value per second.
@@ -680,13 +682,16 @@ def detect_blues_form(r):
                     # A chorus that began just before the recording (first bar cut off) still counts if its other
                     # bars fit: chord changes are often detected a beat early.
                     early = phase - L >= -1 and np.mean([hit(i) for i in range(max(0, phase - L), phase)]) >= 0.7
-                    cand = (round(float(score), 2), round(clean, 2), L == 12, -off_speed, name, tpl, bar,
-                            start + (phase - L * early) * bar, len(idx) // L + early)
+                    # Half or double the detected bar length is only a fallback for a misread tempo: it must fit
+                    # clearly better, not by a point or two (a 12-bar at 152 BPM also half-fits as a 24-bar at 76).
+                    rank = round(float(score) - (0.06 if off_speed else 0.0), 2)
+                    cand = (rank, round(clean, 2), L == 12, -off_speed, name, tpl, bar,
+                            start + (phase - L * early) * bar, len(idx) // L + early, round(float(score), 2))
                     if best is None or cand[:4] > best[:4]:
                         best = cand
-    if not best or best[0] < 0.7:
+    if not best or best[-1] < 0.7:
         return None
-    score, _, _, _, name, tpl, bar, first, count = best
+    _, _, _, _, name, tpl, bar, first, count, score = best
     if key_is_minor(r["key_index"]):
         name = name.replace("-bar blues", "-bar minor blues")
     L = len(tpl)
@@ -924,6 +929,12 @@ def _analyze_audio(path, light=False):
     # Instruments are often not at A440 (phone demos, detuned guitars). Correct for it, or every
     # note smears across two semitones and keys/chords come out wrong.
     tuning = float(librosa.estimate_tuning(y=y_harm, sr=sr))
+    # Only *say* it's sharp or flat when the whole recording agrees: bends, slides and vibrato (blues guitar, a
+    # singer) pull the estimate around, and one 20 s stretch can read 10 cents flat while the next reads in tune.
+    chunk = 20 * sr
+    parts = [float(librosa.estimate_tuning(y=y_harm[i:i + chunk], sr=sr)) for i in range(0, len(y_harm) - chunk // 2, chunk)]
+    tuning_steady = len(parts) < 2 or (np.percentile(parts, 75) - np.percentile(parts, 25) <= 0.06
+                                       and all(np.sign(p_) == np.sign(tuning) or abs(p_) < 0.05 for p_ in parts))
     # Notes are read from C2 (65 Hz) up: below that, kicks and sub-bass (electronic 808s, a pitched kick) swamp the
     # pitch picture. Bass notes lower than C2 still count through their overtones.
     chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, hop_length=HOP, tuning=tuning,
@@ -1070,7 +1081,9 @@ def _analyze_audio(path, light=False):
         "file": Path(path).name,
         "duration_sec": round(duration, 1),
         "duration": fmt_time(duration),
-        "tuning_cents": int(round(tuning * 100)),
+        # what we report (and bend the MIDI by): 0 unless the whole recording agrees it's off A440
+        "tuning_cents": int(round(tuning * 100)) if tuning_steady else 0,
+        "tuning_spread_cents": [int(round(100 * p_)) for p_ in parts],
         "tempo_bpm": round(tempo, 1) if clear_beat else None,
         "tempo_approximate": bool(weak_pulse),
         "meter": meter,
@@ -1147,7 +1160,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-17c"
+ANALYSIS_VERSION = "2026-10-18a"
 
 
 def _cache_key(path, light=False):

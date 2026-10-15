@@ -885,6 +885,11 @@ def facts_checks(facts_file, tmp):
             got = bool(r["bass"].get("present"))
             check("facts", f"{n}: separate bass {'present' if e['bass_instrument'] else 'absent'}",
                   got == e["bass_instrument"], str(r["bass"]))
+        if "form" in e:
+            b = r.get("blues_form") or {}
+            check("facts", f"{n}: {e['form']}" + (f", choruses of ~{e['chorus_sec']} s" if "chorus_sec" in e else ""),
+                  b.get("name") == e["form"] and ("chorus_sec" not in e or near(b.get("chorus_sec"), e["chorus_sec"], 5)),
+                  f"{b.get('name')}, {b.get('chorus_sec')} s" if b else "no blues form found")
         if "no_progression_claims" in e:
             check("facts", f"{n}: no famous-progression claim", not r["references"]["progressions"],
                   "; ".join(p["progression"] for p in r["references"]["progressions"]))
