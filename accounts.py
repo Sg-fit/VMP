@@ -143,6 +143,8 @@ def job_summary(results):
     history and profile pages don't have to re-read every result file."""
     tracks = []
     for r in results:
+        if r.get("role") == "reference":  # someone else's song: not part of the musician's own profile
+            continue
         if "error" in r:
             tracks.append({"file": r.get("file", "?"), "error": True})
             continue

@@ -778,7 +778,7 @@ def _bar_grids(r, spans):
         # Half/double length stands for "the beat was counted at the wrong speed", so the tempo it implies must be
         # one music is actually played at. Doubling a 90 BPM ballad's bars means 45 BPM: no correction, just a
         # longer grid that makes one pass of anything look like most of the song.
-        if family != 1.0 and not 50 <= (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / bar <= 200:
+        if family != 1.0 and not TACTUS_MIN <= (r.get("meter") or {}).get("beats_per_bar", 4) * 60 / bar <= TACTUS_MAX:
             continue
         for q in range(8):
             start = (down + q * bar / 8) % bar
@@ -1121,6 +1121,33 @@ def refine_tempo(y, sr, coarse):
     return float(60 * sr / hop / k)
 
 
+TACTUS_MIN, TACTUS_MAX = 50, 200  # the beat people tap along to sits in this range (BPM)
+PREFERRED_TEMPO = 120             # and, given no other evidence, near here (listeners' preferred tempo is ~2 Hz)
+
+
+def tactus_factor(y, sr, tempo):
+    """A beat tracker reading below 50 BPM has counted bars or half bars - typical of soft pads or held chords that
+    only change once a bar. Return how many beats to split each counted one into (2, 3 or 4): the split the
+    audio's rhythm supports most (onset autocorrelation at that beat length); if nothing in the audio favours one,
+    the one nearest the preferred tempo. 1 when the reading is already a tempo people tap along to."""
+    import librosa
+    if tempo >= TACTUS_MIN:
+        return 1
+    options = [k for k in (2, 3, 4) if TACTUS_MIN <= tempo * k <= TACTUS_MAX]
+    if not options:
+        return 1
+    hop = 256
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    env = env - env.mean()
+    ac = librosa.autocorrelate(env, max_size=int(60 / tempo * sr / hop) + 2)
+    ac = ac / (ac[0] + 1e-9)
+    evidence = {k: float(ac[int(round(60 / (tempo * k) * sr / hop))]) for k in options}
+    best = max(evidence, key=evidence.get)
+    if evidence[best] >= 0.1:  # a real (if weak) periodicity at that beat length; uncorrelated onsets sit near 0
+        return best
+    return min(options, key=lambda k: abs(np.log(tempo * k / PREFERRED_TEMPO)))
+
+
 def _analyze_audio(path, light=False):
     """The expensive part: everything that depends only on the audio (cacheable)."""
     import librosa
@@ -1142,8 +1169,14 @@ def _analyze_audio(path, light=False):
         if len(frames2) > len(beat_frames):
             tempo, beat_frames = float(np.atleast_1d(tempo2)[0]), frames2
     clear_beat = len(beat_frames) >= 8
+    raised = 1
     if clear_beat:
         tempo = refine_tempo(y, sr, tempo)
+        raised = tactus_factor(y, sr, tempo)
+        if raised > 1:  # the tracker counted bars (or half bars): split each counted beat into `raised` beats
+            beat_frames = np.concatenate([np.linspace(a, b, raised, endpoint=False) for a, b in
+                                          zip(beat_frames[:-1], beat_frames[1:])] + [beat_frames[-1:]]).round().astype(int)
+            tempo *= raised
     tracked_frames = beat_frames  # beats actually heard (the meter is judged on these only)
     if clear_beat:
         # The tracker often stops at the last clear hit; keep counting beats to the end so a final
@@ -1233,7 +1266,7 @@ def _analyze_audio(path, light=False):
     # With almost no percussive sound (legato strings, pads, soft piano) the beat grid can lock onto the wrong
     # speed, and a wrong grid can make chord changes look like 5/4 or 7/4. So in that case the tempo is marked
     # approximate and odd meters aren't claimed.
-    weak_pulse = clear_beat and float(np.sum(y_perc ** 2)) < 0.06 * float(np.sum(y ** 2))
+    weak_pulse = clear_beat and (float(np.sum(y_perc ** 2)) < 0.06 * float(np.sum(y ** 2)) or raised > 1)
     meter = detect_meter(rms_db, chroma,
                          librosa.util.fix_frames(tracked_frames[tracked_frames < n], x_min=0, x_max=n), clear_beat,
                          allow_odd=not weak_pulse)
@@ -1820,6 +1853,168 @@ def guitar_capo(r):
             "shapes": [{"sounds": spell(root, k) + q, "shape": s[0], "fingering": s[1]} for s, root, q, _ in shapes if s]}
 
 
+# How big a difference has to be before a listener notices it - the bar for "they do X, you do Y".
+TEMPO_JND = 0.04          # tempo changes of about 4% are noticed (discrimination studies put it at 2-6%)
+LOUDNESS_JND_LU = 1.0     # about 1 dB/LU is the smallest loudness change most people hear
+BAND_DIFF_DB = 3.0        # a 3 dB shift in one frequency band is a clear tonal difference
+BRIGHTNESS_RATIO = 2 ** (1 / 3)  # a third of an octave brighter or darker
+WIDTH_DIFF = 0.2          # stereo correlation (-1..1)
+SYNC_DIFF_PCT = 15        # share of off-beat hits, percentage points
+CONTRAST_DIFF = 15        # energy contrast between sections, on the 0-100 arousal scale (a mood band is ~20)
+LRA_DIFF_LU = 3 * LOUDNESS_JND_LU  # loudness range: three just-noticeable steps
+HARMONIC_RATIO = 1.5      # chords changing half as often again (or more) is a different harmonic pace
+
+
+def _first_peak(r):
+    """When the track first gets within 10 points of its highest section energy (arousal 0-100)."""
+    secs = (r.get("feel") or {}).get("sections") or []
+    if not secs:
+        return None
+    top = max(s["arousal"] for s in secs)
+    return next(s["start"] for s in secs if s["arousal"] >= top - 10)
+
+
+def _key_relation(a, b):
+    if a == b:
+        return "the same key"
+    nb = camelot_neighbours(a)
+    if nb["relative"] == b:
+        return "relative keys (the same notes)"
+    if b in (nb["up a fifth"], nb["down a fifth"]):
+        return "neighbours on the Camelot wheel (a fifth apart)"
+    if key_tonic(a) == key_tonic(b):
+        return "the same home note, one major and one minor"
+    return f"{min((key_tonic(a) - key_tonic(b)) % 12, (key_tonic(b) - key_tonic(a)) % 12)} semitones apart"
+
+
+def compare_tracks(mine, ref):
+    """Your track next to a reference you admire: the same measurements side by side, and - only where the gap is
+    big enough to hear (the constants above) - what they do differently and what you could try. Comparing a
+    track with itself reports no differences."""
+    rows, notes = [], []
+    phone = lambda r: (r["sound"]["frequency_balance_pct"]["sub (<60 Hz)"] < 1
+                       and r["sound"]["frequency_balance_pct"]["air (>6k)"] < 1)
+
+    # Tempo (a half- or double-time reading is the same pulse, not a different tempo)
+    tm, tr = mine.get("tempo_bpm"), ref.get("tempo_bpm")
+    show = lambda r, t: (("~" if r.get("tempo_approximate") else "") + f"{t:.0f} BPM") if t else "free"
+    rows.append(("Tempo", show(mine, tm), show(ref, tr)))
+    # an approximate tempo (weak pulse) can't support a "you're 6% slower" claim
+    if tm and tr and not mine.get("tempo_approximate") and not ref.get("tempo_approximate"):
+        ratio, factor = min(((tm * f / tr, f) for f in (1, 2, 0.5)), key=lambda x: abs(np.log(x[0])))
+        if abs(ratio - 1) > TEMPO_JND:
+            faster = "faster" if ratio < 1 else "slower"
+            felt = (f" (your {tm:.0f} BPM felt at {'double' if factor == 2 else 'half'} speed is {tm * factor:.0f})"
+                    if factor != 1 else "")
+            notes.append(("tempo", f"Theirs moves about {abs(1 / ratio - 1):.0%} {faster}: {tr:.0f} BPM against your "
+                          f"{tm * factor:.0f}{felt}. Try yours {'faster' if ratio < 1 else 'slower'}, around "
+                          f"{tr / factor:.0f} BPM as you count it, and see whether the feel you're after is partly "
+                          "its pace."))
+        elif factor != 1:
+            notes.append(("tempo", f"Same pulse, but theirs is felt at {'double' if factor == 2 else 'half'} your "
+                          "counted speed: the drums or strumming mark different beats."))
+    # Key, mode, metre
+    rows.append(("Key", mine["key"], ref["key"]))
+    rows.append(("Mode", mine["mode"], ref["mode"]))
+    rel = _key_relation(mine["key_index"], ref["key_index"])
+    if rel != "the same key":
+        notes.append(("key", f"Your keys are {rel}. To borrow their sound directly, or to play the two back to back, "
+                      f"try yours in {ref['key']}."))
+    if mine["mode"] != ref["mode"] and ref.get("mode_confidence") != "low":
+        notes.append(("harmony", f"They lean on {ref['mode']}, you on {mine['mode']}: {MODE_INFO.get(ref['mode'], '')} "
+                      "One borrowed colour note can bring that flavour into a section of yours."))
+    mm, mr = (mine.get("meter") or {}).get("label"), (ref.get("meter") or {}).get("label")
+    rows.append(("Time signature", mm or "-", mr or "-"))
+    # Shape: length, sections, how soon it gets going, how much it moves
+    rows.append(("Length", mine["duration"], ref["duration"]))
+    rows.append(("Sections", " ".join(s["label"] for s in mine["sections"]), " ".join(s["label"] for s in ref["sections"])))
+    pm, pr = _first_peak(mine), _first_peak(ref)
+    if pm is not None and pr is not None:
+        rows.append(("First reaches full energy", fmt_time(pm), fmt_time(pr)))
+        if pm - pr > 20 and pm > 1.5 * max(pr, 1):
+            notes.append(("arrangement", f"They reach full energy by {fmt_time(pr)}, you by {fmt_time(pm)}. A shorter "
+                          "intro, or bringing your loudest section's idea in earlier, gets the listener there sooner."))
+        elif pr - pm > 20 and pr > 1.5 * max(pm, 1):
+            notes.append(("arrangement", f"They take until {fmt_time(pr)} to reach full energy, you get there by "
+                          f"{fmt_time(pm)}: a slower build leaves you more room to grow later."))
+    fm, fr = mine.get("feel") or {}, ref.get("feel") or {}
+    if fm and fr:
+        rows.append(("Energy · mood", f"{fm['energy']}/10 · {fm['mood']}", f"{fr['energy']}/10 · {fr['mood']}"))
+        if fr["contrast"] - fm["contrast"] > CONTRAST_DIFF:
+            notes.append(("arrangement", f"Their sections differ much more in energy (theirs {fr['arc']}; yours "
+                          f"{fm['arc']}). A real breakdown, or a fuller last section, would give yours that shape."))
+        elif fm["contrast"] - fr["contrast"] > CONTRAST_DIFF:
+            notes.append(("arrangement", "Yours moves between quiet and loud far more than theirs: theirs holds one "
+                          "level, which is part of its steady, hypnotic feel."))
+    # Groove
+    sm, sr_ = mine["rhythm"].get("syncopation_pct"), ref["rhythm"].get("syncopation_pct")
+    if sm is not None and sr_ is not None:
+        rows.append(("Off-beat hits", f"{sm}%", f"{sr_}%"))
+        if sr_ - sm > SYNC_DIFF_PCT:
+            notes.append(("rhythm", f"{sr_}% of their strong hits fall between the beats against your {sm}%. Anticipate a "
+                          "few chord changes by an 8th note, or push the kick or strum off the beat."))
+        elif sm - sr_ > SYNC_DIFF_PCT:
+            notes.append(("rhythm", f"Yours is more syncopated ({sm}% off-beat against their {sr_}%); theirs gets its "
+                          "drive from sitting squarely on the beat."))
+    dm, dr = bool((mine.get("drums") or {}).get("present")), bool((ref.get("drums") or {}).get("present"))
+    bm, br = bool((mine.get("bass") or {}).get("present")), bool((ref.get("bass") or {}).get("present"))
+    rows.append(("Drums · bass", f"{'yes' if dm else 'no'} · {'yes' if bm else 'no'}", f"{'yes' if dr else 'no'} · {'yes' if br else 'no'}"))
+    if dr and not dm:
+        notes.append(("arrangement", "Theirs has drums and yours doesn't. Even a simple kick-and-snare pattern, or a "
+                      "percussive strum, would bring in some of that push."))
+    if br and not bm:
+        notes.append(("arrangement", "Theirs has a separate bass line. A bass following your chord roots would add "
+                      "the weight theirs has."))
+    # Harmony: how often the chords change
+    hm, hr = mine.get("harmonic_rhythm_beats"), ref.get("harmonic_rhythm_beats")
+    if hm and hr:
+        rows.append(("A chord change every", f"{hm} beats", f"{hr} beats"))
+        if hm / hr >= HARMONIC_RATIO:
+            notes.append(("harmony", f"Their chords change about every {hr} beats, yours every {hm}: more movement "
+                          "under the melody. Try splitting some of your long chords in two."))
+        elif hr / hm >= HARMONIC_RATIO:
+            notes.append(("harmony", f"Their chords sit longer (every {hr} beats against your {hm}), which gives the "
+                          "melody room. Holding one of your chords twice as long is worth a try."))
+    # Sound: loudness, tone, width, frequency balance
+    lm, lr = (mine["sound"].get("streaming") or {}), (ref["sound"].get("streaming") or {})
+    if lm.get("lufs") is not None and lr.get("lufs") is not None:
+        rows.append(("Loudness", f"{lm['lufs']} LUFS", f"{lr['lufs']} LUFS"))
+        if lr["lufs"] - lm["lufs"] > LOUDNESS_JND_LU:
+            notes.append(("sound", f"Theirs is mastered {lr['lufs'] - lm['lufs']:.1f} LU louder. On Spotify both are "
+                          f"levelled to about {SPOTIFY_TARGET_LUFS:g} LUFS, so match the mix first; loudness comes last, "
+                          "from a limiter on the master."))
+        if lm.get("loudness_range_lu") is not None and lr.get("loudness_range_lu") is not None:
+            rows.append(("Loudness range", f"{lm['loudness_range_lu']} LU", f"{lr['loudness_range_lu']} LU"))
+            if lm["loudness_range_lu"] - lr["loudness_range_lu"] > LRA_DIFF_LU:
+                notes.append(("sound", f"Your level moves more ({lm['loudness_range_lu']} LU against their "
+                              f"{lr['loudness_range_lu']}): theirs is more even, usually from compression."))
+        cm, cr = lm.get("stereo_correlation"), lr.get("stereo_correlation")
+        if cm is not None and cr is not None:
+            rows.append(("Stereo correlation", f"{cm}", f"{cr}"))
+            if cm - cr > WIDTH_DIFF:
+                notes.append(("sound", "Theirs is noticeably wider: instruments panned apart, or stereo reverb and "
+                              "doubled parts on the sides."))
+    bm_, br_ = mine["sound"]["brightness_hz"], ref["sound"]["brightness_hz"]
+    rows.append(("Brightness", f"{bm_} Hz", f"{br_} Hz"))
+    if br_ / max(bm_, 1) >= BRIGHTNESS_RATIO:
+        notes.append(("sound", "Theirs is clearly brighter: more cymbals, string noise or upper harmonics. A high "
+                      "shelf, a brighter instrument or a high part would close the gap."))
+    elif bm_ / max(br_, 1) >= BRIGHTNESS_RATIO:
+        notes.append(("sound", "Yours is clearly brighter than theirs; theirs sits darker and warmer."))
+    fbm, fbr = mine["sound"]["frequency_balance_pct"], ref["sound"]["frequency_balance_pct"]
+    gaps = [(band, 10 * np.log10((fbr[band] + 0.1) / (fbm[band] + 0.1))) for band in fbm]
+    big = [(band, d) for band, d in gaps if abs(d) >= BAND_DIFF_DB]
+    if big:
+        band, d = max(big, key=lambda x: abs(x[1]))
+        more = "more" if d > 0 else "less"
+        caveat = (" Part of this is the recording: a phone microphone loses the lowest and highest ranges."
+                  if phone(mine) and not phone(ref) and band in ("sub (<60 Hz)", "air (>6k)") else "")
+        notes.append(("sound", f"Theirs puts {abs(d):.0f} dB {more} energy into the {band} range than yours."
+                      + caveat))
+    return {"reference": ref["file"], "rows": [{"aspect": a, "yours": y, "theirs": t} for a, y, t in rows],
+            "ideas": [{"area": a, "idea": i} for a, i in notes]}
+
+
 def rule_based_ideas(r):
     k = r["key_index"]
     t = key_tonic(k)
@@ -2320,6 +2515,12 @@ def ai_summary(r):
     if known:
         lines.append("Already compared with: " + "; ".join(known) + ".")
     lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
+    c = r.get("comparison")
+    if c:
+        lines.append(f"The musician admires a reference track ({c['reference']}). Side by side, yours vs theirs: "
+                     + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in c["rows"]) + ".")
+        if c["ideas"]:
+            lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in c["ideas"]) + ".")
     return "\n".join(lines)
 
 
@@ -3040,6 +3241,7 @@ def track_report(r):
     L.append("```")
 
     # Ideas
+    L += comparison_report(r)
     L += ["", "### 💡 Ideas to try", "", "_We worked these out from the analysis itself, no AI involved. Try "
           "them out and keep whatever works for you._", ""]
     for i in r["ideas"]:
@@ -3373,10 +3575,49 @@ def feel_report(r):
     return L
 
 
+def reference_report(r):
+    """The reference song, briefly: the facts the comparison rests on, its shape and its loudness."""
+    L = [f"## 🎯 Your reference: {r['file']}", ""]
+    if "error" in r:
+        return L + [f"⚠️ We couldn't analyse the reference ({r['error']}), so there's no comparison this time. "
+                    "Try exporting it again as mp3 or wav.", ""]
+    tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
+    L += ["_The song you're measuring yourself against. We analysed it the same way as yours; the comparison is in "
+          "each of your tracks above._", "",
+          f"**{r['duration']}** · **{tempo}** · **{r['key']}** · {mode_tip(r['mode'])} · form "
+          f"**{' '.join(s['label'] for s in r['sections'])}**", ""]
+    svg = timeline_svg(r)
+    if svg:
+        L += [svg, ""]
+    L += loudness_lines(r["sound"]) + [""]
+    return L
+
+
+def comparison_report(r):
+    c = r.get("comparison")
+    if not c:
+        return []
+    L = ["", f"### 🎯 Next to your reference", "",
+         f"_Your track beside **{c['reference']}**, measured the same way. We only point out differences big enough "
+         "to hear; a song you admire is a guide, not a target._", "",
+         "| | Yours | Theirs |", "|---|---|---|"]
+    L += [f"| {x['aspect']} | {x['yours']} | {x['theirs']} |" for x in c["rows"]]
+    L.append("")
+    if c["ideas"]:
+        L += ["**What they do differently, and what you could try**", ""]
+        L += [f"- **{i['area']}:** {i['idea']}" for i in c["ideas"]]
+    else:
+        L.append("Nothing we measure differs enough to hear: in tempo, shape, groove and sound you're already close.")
+    return L
+
+
 def build_report(results):
+    refs = [r for r in results if r.get("role") == "reference"]
+    results = [r for r in results if r.get("role") != "reference"]
     ok = [r for r in results if "error" not in r]
     L = ["# 🎵 Music Inspiration Report", "",
-         f"_{len(results)} track{'' if len(results) == 1 else 's'}, analysed and ready for ideas._", ""]
+         f"_{len(results)} track{'' if len(results) == 1 else 's'}, analysed and ready for ideas"
+         + (f", next to your reference {refs[0]['file']}" if refs else "") + "._", ""]
     if ok:
         heads = ["Length", "Tempo", "Key", "Camelot", "Mode", "Form", "Energy"]
         L += ["| Track | " + " | ".join(tip(h) for h in heads) + " |",
@@ -3401,6 +3642,8 @@ def build_report(results):
         else:
             L.append("- None of these share a compatible key, so together they'd contrast rather than blend.")
         L.append("")
+    for r in refs:
+        L += reference_report(r)
 
     L += ["---",
           "_A quick word on accuracy: all of this is automatic, so treat it as a well-informed first listen. "
@@ -3462,7 +3705,7 @@ def _write_outputs(results, out):
 
 
 def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analysis_done=None,
-                 cache_dir=DEFAULT_CACHE_DIR, context=None):
+                 cache_dir=DEFAULT_CACHE_DIR, context=None, reference=None):
     """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
 
     Built to keep the musician waiting as little as possible:
@@ -3476,6 +3719,17 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
     out = Path(out)
     results, pending = [], []
     ai_pool = cf.ThreadPoolExecutor(max_workers=2) if llm else None  # free endpoints queue bursts
+    ref = None
+    if reference:  # a song the musician admires: analysed first, so each comparison can reach the AI too
+        reference = Path(reference)
+        progress(f"Listening to your reference, {reference.name}…")
+        try:
+            ref = analyze(reference, cache_dir=cache_dir)
+            ref.update(role="reference", analyzer_version=CODE_VERSION)
+        except Exception as e:
+            progress(f"  ! {reference.name}: {e}")
+            ref = {"file": reference.name, "role": "reference", "error": "unreadable or unsupported audio"
+                   if "Error opening" in str(e) or "Invalid data" in str(e) else str(e)[:200]}
     try:
         for i, f in enumerate(files, 1):
             f = Path(f)
@@ -3483,6 +3737,8 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
             try:
                 r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir, context=context)
                 r["analyzer_version"] = CODE_VERSION
+                if ref and "error" not in ref:
+                    r["comparison"] = compare_tracks(r, ref)
                 r["midi"] = export_midis(r, out / "midi")
                 try:
                     r["sheets"] = export_sheets(r, out / "sheets")
@@ -3496,6 +3752,8 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
                 r = {"file": f.name, "error": "unreadable or unsupported audio" if "Error opening" in str(e)
                      or "Invalid data" in str(e) else str(e)[:200]}
             results.append(r)
+        if ref:
+            results.append(ref)
 
         if pending:
             for r, _ in pending:
@@ -3525,6 +3783,7 @@ def main():
                                      "(prefix with part of a file name to target one track: \"copy 4: A E F E\")")
     ap.add_argument("--instruments", help="which instruments play, comma-separated: " + ", ".join(INSTRUMENTS))
     ap.add_argument("--genre", choices=list(GENRES), help="the genre")
+    ap.add_argument("--reference", help="a song you admire: compared side by side with each of your tracks")
     ap.add_argument("--no-cache", action="store_true", help="re-analyse even if this recording was analysed before")
     ap.add_argument("--bench-llm", action="store_true", help="time the AI models and recommend the fastest")
     args = ap.parse_args()
@@ -3551,7 +3810,8 @@ def main():
     out = Path(args.out)
     _, report = run_analysis(files, out, llm, progress=lambda msg: print(msg, file=sys.stderr),
                              melody_text=args.melody, cache_dir=None if args.no_cache else DEFAULT_CACHE_DIR,
-                             context=clean_context((args.instruments or "").replace(" ", "").split(","), args.genre))
+                             context=clean_context((args.instruments or "").replace(" ", "").split(","), args.genre),
+                             reference=args.reference)
     print(report)
     print(f"\nWrote {out / 'music_report.md'}, {out / 'music_results.json'} and MIDI files in {out / 'midi'}",
           file=sys.stderr)

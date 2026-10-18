@@ -170,9 +170,15 @@
 
 {% elif s.state == 'done' %}
   <div>
-    <p class="eyebrow">Results</p>
-    <h1>Your analysis</h1>
+    <p class="eyebrow">{{ 'Demo' if s.demo else 'Results' }}</p>
+    <h1>{{ demos[s.demo].title if s.demo and s.demo in demos else 'Your analysis' }}</h1>
+    {% if s.demo %}
+    <div class="muted" style="max-width:46em">This is a demo report, made from computer-generated audio, so it sounds
+      simpler than a real recording and has no AI ideas (those come with your own uploads). Everything else is what
+      you'd get for your track. <a href="{{ url_for('index') }}">Upload yours →</a></div>
+    {% else %}
     <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
+    {% endif %}
     <div class="toolbar">
       <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}"
          title="One file with the report, the data, all MIDI files and the sheet music.">Download everything (.zip) ↓</a>
@@ -183,6 +189,7 @@
          title="{{ glossary['Data file'] }}">Data (.json)</a>
       <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>
     </div>
+    {% if not s.demo %}
     <div class="savebar">
       {% if saved %}
         <span class="ok">Saved in your history</span> · <a href="{{ url_for('history') }}">History</a>
@@ -195,6 +202,7 @@
           <a href="{{ url_for('signup', next=request.path) }}">create a free account</a> to keep them.</span>
       {% endif %}
     </div>
+    {% endif %}
     {% if midi_files %}
       <div class="midis"><span class="label"><abbr title="{{ glossary['MIDI'] }}">MIDI</abbr></span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}

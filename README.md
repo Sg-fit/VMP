@@ -7,6 +7,7 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **Harmony** | Key and [Camelot](https://mixedinkey.com/camelot-wheel/) code, key timeline, time spent in each key, **mode** (Dorian, harmonic minor, Mixolydian…) with its signature "colour note", the notes used most, the chords used most, harmonic rhythm, **repeating chord loops** with Roman numerals (for example `Bm – Em – F#` = i – iv – V), and the full chord timeline |
 | **Structure** | Sections (A, B, A…) with times, energy level, key and main chords. Recognised forms: 8-, 12- and 16-bar blues (major and minor, with correct variations to try) and the 32-bar AABA song form. Meters: 3/4, 4/4, 5/4, 7/4 |
 | **⚡ Energy & mood** | Measured on the audio, per section: energy 1–10 (loudness, notes per second, brightness, tempo) and mood/positivity (mode, minor-chord share, brightness, tempo), with words like *calm*, *driving* or *melancholic*, plus the track's energy shape (builds, peaks, winds down) |
+| **🎯 Next to your reference** (optional) | Add a finished song you admire and each of your tracks is measured beside it: tempo, key and mode, length and sections, how soon it reaches full energy, energy contrast, off-beat feel, drums and bass, how often the chords change, loudness, loudness range, stereo width, brightness and frequency balance. Only differences big enough to hear are pointed out (about 4% tempo, 1 LU loudness, 3 dB in a frequency band, a third of an octave in brightness), each with something to try. The reference gets no ideas, MIDI or sheet music of its own, isn't counted in your profile, and is deleted with your audio. Command line: `--reference song.mp3` |
 | **For guitar** | A capo position that turns the song's chords into open shapes, with fingerings (only suggested when it clearly helps; power chords left out) |
 | **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline. The bass is transcribed note by note and written out as **sheet music** (bars of the detected meter, chord symbols above); its rhythm analysis (note lengths, off-beat and syncopated share, the most common bar rhythm) is read from that sheet |
 | **Groove & sound** | Pulse steadiness, how busy the rhythm is, syncopation, percussive vs. tonal balance, tone and texture, energy arc, biggest build, quietest moment, frequency balance from sub to air. **Loudness as streaming services measure it**: integrated LUFS and true peak (ITU-R BS.1770), loudness range (EBU Tech 3342) and stereo correlation, plus what Spotify's published normalisation would do to the track (turned down to −14 LUFS, or lifted only as far as a −1 dBTP true peak allows) and warnings for clipping, hot peaks and phase problems |
@@ -20,6 +21,11 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **🔗 Tracks that blend well** | With several files: which tracks are key-compatible (on the Camelot wheel) and close in tempo, for medleys, mashups or set lists |
 
 It comes as a **web app** (upload tracks in the browser) and a **command-line tool**. Only the analysis numbers are sent to the AI, never the audio.
+
+**Demo reports** (`/demo/blues`, `/demo/band`, `/demo/electronic`, linked from the home page) show a finished report
+before anyone uploads: a solo guitar blues, a band song compared with a reference, and a house track. They're made
+from generated audio (the self-test's synthesizers, so no rights issues), built the first time someone opens them
+(the deploy self-test does that) and shared by everyone; they can't be saved into a private history.
 
 ## Find music like this (tags for a playlist)
 

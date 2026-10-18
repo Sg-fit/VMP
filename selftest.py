@@ -798,6 +798,31 @@ def web_checks(tmp, files):
               s6["state"] == "done" and t6.ok and "12-bar blues" in t6.text
               and requests.get(f"{base}/jobs/{job6}/files/music_report.md", timeout=10).status_code == 404
               and "Your tags" in requests.get(f"{base}/jobs/{job6}", timeout=10).text, s6.get("state"))
+        up = [("tracks", (Path(files["pop4"]).name, open(files["pop4"], "rb"))),
+              ("reference", ("my_reference.wav", open(files["waltz3"], "rb")))]
+        job8 = requests.post(base + "/analyze", files=up, allow_redirects=False, timeout=60).headers["Location"].rsplit("/", 1)[-1]
+        t0 = time.time()
+        while time.time() - t0 < 300 and requests.get(f"{base}/jobs/{job8}/status", timeout=10).json()["state"] not in ("done", "error"):
+            time.sleep(1)
+        page8 = requests.get(f"{base}/jobs/{job8}", timeout=10).text
+        for _ in range(20):  # the status says "done" a moment before the worker deletes the uploads
+            if not (Path(tmp) / "jobs" / job8 / "reference").exists():
+                break
+            time.sleep(0.5)
+        check("web", "a reference uploaded with the form is compared, and deleted with the audio afterwards",
+              "Next to your reference" in page8 and "my_reference.wav" in page8
+              and not (Path(tmp) / "jobs" / job8 / "reference").exists())
+        demo1 = requests.get(base + "/demo/blues", allow_redirects=False, timeout=60).headers.get("Location", "")
+        did = demo1.rsplit("/", 1)[-1]
+        t0 = time.time()
+        while time.time() - t0 < 300 and requests.get(f"{base}/jobs/{did}/status", timeout=10).json()["state"] not in ("done", "error"):
+            time.sleep(1)
+        dpage = requests.get(f"{base}/jobs/{did}", timeout=10).text
+        again = requests.get(base + "/demo/blues", allow_redirects=False, timeout=30).headers.get("Location", "")
+        check("web", "a demo builds once from generated audio, then opens straight away for everyone",
+              "This is a demo report" in dpage and "12-bar" in dpage and "Save to history" not in dpage
+              and again.endswith(did), f"{did[:8]} / {again.rsplit('/', 1)[-1][:8]}")
+        check("web", "an unknown demo is a 404", requests.get(base + "/demo/nope", timeout=10).status_code == 404)
         r7 = requests.post(base + "/analyze", data={"mode": "tags", "songs": "Massive Attack - Teardrop"},
                            allow_redirects=False, timeout=30)
         check("web", "a tag job needs no upload when songs are named", r7.status_code == 302, f"HTTP {r7.status_code}")
@@ -1009,6 +1034,26 @@ def live_checks(base, tmp):
         named = next((x for x in tags["songs"] if not x["audio"]), {})
         if not named.get("found"):
             warn("live", "the song typed by name was found on MusicBrainz", " | ".join(tags.get("notes", [])))
+
+    # The demos: build them now, so no visitor waits for one, and check they finish
+    started = {}
+    for slug in ("blues", "band", "electronic"):
+        try:
+            urllib.request.build_opener(NoRedirect).open(urllib.request.Request(base + f"/demo/{slug}", headers=headers),
+                                                         timeout=60)
+        except urllib.error.HTTPError as e:
+            if e.code == 302:
+                started[slug] = e.headers["Location"].rsplit("/", 1)[-1]
+    t0, states = time.time(), {}
+    while time.time() - t0 < 600:
+        states = {s: json.loads(get(f"/jobs/{j}/status"))["state"] for s, j in started.items()}
+        if states and all(v in ("done", "error") for v in states.values()):
+            break
+        time.sleep(3)
+    check("live", "the three demos are built and ready for visitors", len(started) == 3
+          and all(v == "done" for v in states.values()), f"{states} after {time.time() - t0:.0f}s")
+
+
 def precision_checks(tmp):
     """Measurements that must hold for any track, checked on generated audio where the answer is known:
     tempo to a fraction of a BPM, tuning claimed only when it's real, brightness that tells tracks apart,
@@ -1022,6 +1067,15 @@ def precision_checks(tmp):
     got = {bpm: ma.analyze(f)["tempo_bpm"] for bpm, f in pops.items()}
     check("precision", "tempo within 0.5 BPM at speeds between the beat tracker's steps (100, 128, 137)",
           all(abs(got[b] - b) <= 0.5 for b in got), str(got))
+
+    # Soft pads that only change chord once a bar: the beat tracker counts bars (25 BPM for a 100 BPM song);
+    # the reading must come back to a tempo people tap along to, flagged as approximate.
+    pads = {bpm: ma.analyze(write(Path(tmp) / f"prec_pads_{bpm}.wav",
+                                  song([("A", "m"), ("F", ""), ("C", ""), ("G", "")], bpm, 4, loops=6, drums=False, soft=True)))
+            for bpm in (100, 72)}
+    check("precision", "soft pads changing once a bar read at their real tempo (not bars per minute), marked approximate",
+          all(abs(r_["tempo_bpm"] - b) <= 1 and r_.get("tempo_approximate") for b, r_ in pads.items()),
+          str({b: (r_["tempo_bpm"], r_.get("tempo_approximate")) for b, r_ in pads.items()}))
 
     # Tuning: the same song played 30 cents flat, in tune, and drifting from 25 flat to in tune halfway through
     base = song([("C", ""), ("A", "m"), ("F", ""), ("G", "")], 100, 4, loops=10)
@@ -1085,6 +1139,35 @@ def precision_checks(tmp):
           ma._pick_family({1.0: on, 2.0: off}) == "on"
           and ma._pick_family({1.0: (0.55, 60, "on"), 2.0: (0.95, 24, "off")}) == "off"
           and ma._pick_family({2.0: off}) == "off")
+
+
+def comparison_checks(tmp):
+    """Your track next to a reference: differences you'd hear are named, nothing else - and the reference never
+    becomes part of your own results."""
+    import accounts
+    import musicanalyze as ma
+    print("\n== Compared with a reference track ==")
+    chords = [("A", "m"), ("F", ""), ("C", ""), ("G", "")]
+    mine = write(Path(tmp) / "cmp_mine.wav", song(chords, 100, 4, loops=6))
+    ref = write(Path(tmp) / "cmp_reference.wav", song(chords, 128, 4, loops=8))
+    out = Path(tmp) / "cmp_out"
+    results, report = ma.run_analysis([mine], out, cache_dir=None, reference=ref)
+    r = results[0]
+    areas = {i["area"]: i["idea"] for i in (r.get("comparison") or {}).get("ideas", [])}
+    check("compare", "a reference is analysed and compared: a 100 vs 128 BPM tempo gap is named",
+          "tempo" in areas and "128" in areas["tempo"], " | ".join(f"{a}: {i[:60]}" for a, i in areas.items()))
+    bare = ma.analyze(write(Path(tmp) / "cmp_bare.wav", song(chords, 100, 4, loops=6, drums=False)))
+    check("compare", "a reference with drums against a track without: the drums are named",
+          any("drums" in i["idea"] for i in ma.compare_tracks(bare, results[-1])["ideas"]))
+    check("compare", "a track compared with itself shows no differences", not ma.compare_tracks(r, r)["ideas"])
+    vague = dict(r, tempo_approximate=True)
+    check("compare", "no tempo claim when one tempo is only approximate (weak pulse)",
+          not any(i["area"] == "tempo" for i in ma.compare_tracks(vague, results[-1])["ideas"]))
+    check("compare", "the report shows the comparison and the reference, which stays out of the track table",
+          "Next to your reference" in report and "Your reference: cmp_reference.wav" in report
+          and "| cmp_reference.wav |" not in report and results[-1].get("role") == "reference")
+    check("compare", "the reference isn't counted in the musician's own profile",
+          [t["file"] for t in accounts.job_summary(results)["tracks"]] == ["cmp_mine.wav"])
 
 
 def tag_checks(tmp, online=False):
@@ -1219,6 +1302,10 @@ def main():
             precision_checks(tmp)
         except Exception:
             check("precision", "precision checks ran", False, traceback.format_exc(limit=3))
+        try:
+            comparison_checks(tmp)
+        except Exception:
+            check("compare", "comparison checks ran", False, traceback.format_exc(limit=3))
         try:
             tag_checks(tmp, online=bool(args.live))
         except Exception:

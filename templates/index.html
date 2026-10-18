@@ -49,7 +49,16 @@
   .modes input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
   #form.tags [data-only="musician"], #form:not(.tags) [data-only="tags"],
   body.tags-mode .hero [data-only="musician"], body:not(.tags-mode) .hero [data-only="tags"],
-  body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"] { display: none; }
+  body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"],
+  body.tags-mode .demos[data-only="musician"] { display: none; }
+  .demos { margin-top: 56px; }
+  .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 860px) { .demos .row3 { grid-template-columns: 1fr; } }
+  .demos a.demo { display: block; padding: 16px 18px; border: 1px solid var(--line); color: inherit;
+                  text-decoration: none; transition: border-color .15s, background .15s; }
+  .demos a.demo:hover, .demos a.demo:focus-visible { border-color: var(--accent); background: var(--faint); }
+  .demos a.demo b { display: block; font-size: 1.05rem; margin-bottom: 6px; }
+  .demos a.demo span { color: var(--muted); font-size: .9rem; }
   input.text { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
                background: var(--bg); color: var(--ink); margin-bottom: 6px; }
   input.text:focus { border-color: var(--ink); outline: none; }
@@ -171,6 +180,14 @@
         </details>
       </fieldset>
       <div data-only="musician">
+      <label class="field" for="reference"><abbr title="A finished song you'd like yours to feel like. We analyse it
+        the same way and put the two side by side (tempo, shape, groove, loudness, tone), pointing out only the
+        differences big enough to hear, with things to try. It gets no ideas, MIDI or sheet music of its own, and
+        it's deleted with your audio.">Compare with a song you admire</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, one file</span></label>
+      <input class="text" type="file" id="reference" name="reference" accept="{{ exts.replace(' ', ',') }},audio/*"
+             style="padding:8px">
+      <p class="muted small" style="margin:0 0 18px">We'll show what it does differently from yours, and what you
+        could try.</p>
       <label class="field" for="melody"><abbr title="Picking a tune out of a full band automatically is hit and
         miss, so you can type it instead: note names with spaces between them (C D E, F# Bb …), with octaves if you
         like (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
@@ -203,6 +220,16 @@
     than what others wrote.</div>
   <div><span class="n">04</span><b>Searched</b>Specific tags and two-tag combos, linked straight to Bandcamp,
     Last.fm, RYM, YouTube and Spotify.</div>
+</section>
+<section class="demos" data-only="musician" aria-labelledby="demos-title">
+  <p class="eyebrow" id="demos-title">Not ready to upload? See a finished report first</p>
+  <div class="row3">
+    {% for slug, d in demos.items() %}
+      <a class="demo" href="{{ url_for('demo', slug=slug) }}"><b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
+    {% endfor %}
+  </div>
+  <p class="muted small" style="margin:10px 0 0">Made from computer-generated audio, so they sound simpler than a real
+    recording. The first visitor waits about half a minute while one is made; after that it opens straight away.</p>
 </section>
 <section class="features" data-only="musician">
   <div><span class="n">01</span><b>Harmony</b>Where the key moves, the mode and its colour note, and your chord

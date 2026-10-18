@@ -40,6 +40,7 @@ from flask import (Flask, Response, abort, jsonify, redirect, render_template, r
 from werkzeug.utils import secure_filename
 
 import accounts
+import demos
 import musicanalyze as ma
 from job_runner import read_status, write_status
 
@@ -95,7 +96,7 @@ def get_job_dir(job_id):
 def cleanup_old_jobs():
     """Delete temporary results after JOB_TTL_HOURS. Analyses saved to someone's history are kept."""
     cutoff = time.time() - JOB_TTL_HOURS * 3600
-    keep = accounts.saved_job_ids()
+    keep = accounts.saved_job_ids() | {demos.job_id(s, ma.CODE_VERSION) for s in demos.DEMOS}  # current demos stay
     for d in DATA_DIR.iterdir():
         if d.is_dir() and JOB_ID.match(d.name) and d.name not in keep:
             s = read_status(d)
@@ -108,7 +109,8 @@ def fail_interrupted_jobs():
     for d in DATA_DIR.iterdir():
         if d.is_dir() and JOB_ID.match(d.name) and read_status(d).get("state") in ("queued", "running"):
             write_status(d, state="error", message="The server restarted before we could finish. Sorry about that. Please upload it again.")
-            shutil.rmtree(d / "input", ignore_errors=True)
+            for sub in ("input", "reference"):
+                shutil.rmtree(d / sub, ignore_errors=True)
 
 
 class Runner:
@@ -206,7 +208,8 @@ def worker():
             app.logger.exception("job %s failed", job_id)
             write_status(d, state="error", message=f"Something went wrong during the analysis: {str(e)[:300]}")
         finally:
-            shutil.rmtree(d / "input", ignore_errors=True)  # don't keep uploaded audio
+            for sub in ("input", "reference"):  # don't keep uploaded audio
+                shutil.rmtree(d / sub, ignore_errors=True)
             job_queue.task_done()
 
 
@@ -360,6 +363,8 @@ def profile():
 def job_save(job_id):
     u = _require_user()
     d = get_job_dir(job_id)
+    if read_status(d).get("demo"):  # shared with every visitor: saving would make it one person's private page
+        abort(403, "Demos can't be saved to a history - upload your own track to keep one.")
     problem = accounts.save_job(u["id"], job_id, _job_title(d))
     if problem:
         abort(403, problem)
@@ -408,7 +413,7 @@ def form_page(error=None, code=200):
                            instruments=ma.INSTRUMENTS, genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
                            mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
-                           form=request.form), code
+                           form=request.form, demos=demos.DEMOS), code
 
 
 @app.get("/")
@@ -420,6 +425,28 @@ def index():
 def find():
     """The same form, opened on "Find music like this"."""
     return form_page()
+
+
+_demo_lock = threading.Lock()
+
+
+@app.get("/demo/<slug>")
+def demo(slug):
+    """A finished example report, made from generated audio the first time anyone opens it, then shared."""
+    if slug not in demos.DEMOS:
+        abort(404)
+    job_id = demos.job_id(slug, ma.CODE_VERSION)
+    d = DATA_DIR / job_id
+    with _demo_lock:  # two first visitors at once must not both build it
+        if read_status(d).get("state") not in ("queued", "running", "done"):
+            shutil.rmtree(d, ignore_errors=True)
+            fields = demos.prepare(slug, d)
+            ahead = job_queue.qsize()
+            write_status(d, state="queued", created=time.time(), **fields,
+                         message=f"Making the demo: you're in line, with {ahead} ahead of you…" if ahead
+                         else "Making the demo (only the first visitor waits)…")
+            job_queue.put(job_id)
+    return redirect(url_for("job", job_id=job_id))
 
 
 @app.post("/analyze")
@@ -457,13 +484,24 @@ def analyze():
     if not saved and uploads and not (tags_mode and (playlist or songs.strip())):
         shutil.rmtree(d, ignore_errors=True)
         return form_page("We can't read any of those files. Try mp3, wav, m4a, flac, ogg or aac.", 400)
+    reference = None
+    ref_upload = request.files.get("reference")
+    if not tags_mode and ref_upload and ref_upload.filename:  # a song to measure the musician's track against
+        name = secure_filename(ref_upload.filename) or "reference"
+        if Path(name).suffix.lower() not in ma.AUDIO_EXTS:
+            shutil.rmtree(d, ignore_errors=True)
+            return form_page("We can't read that reference file. Try mp3, wav, m4a, flac, ogg or aac.", 400)
+        (d / "reference").mkdir()
+        ref_upload.save(d / "reference" / name)
+        reference = name
 
     ahead = job_queue.qsize()
     if tags_mode:  # finding music: none of the musician's options apply
         write_status(d, state="queued", mode="tags", files=saved, playlist=playlist, songs=songs, created=time.time(),
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
-        write_status(d, state="queued", mode="musician", files=saved, use_ai=bool(LLM and request.form.get("ai")),
+        write_status(d, state="queued", mode="musician", files=saved, reference=reference,
+                     use_ai=bool(LLM and request.form.get("ai")),
                      melody=(request.form.get("melody") or "")[:2000],
                      context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
                      created=time.time(),
@@ -500,7 +538,7 @@ def job(job_id):
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
-                           version=ma.CODE_VERSION, saved=accounts.owner_of(job_id) is not None)
+                           version=ma.CODE_VERSION, saved=accounts.owner_of(job_id) is not None, demos=demos.DEMOS)
 
 
 @app.get("/jobs/<job_id>/status")

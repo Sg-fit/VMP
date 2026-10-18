@@ -65,9 +65,11 @@ def run_job(job_dir):
 
         def analysis_ready(report):  # show the analysis now; the AI section is filled in later
             write_status(d, state="done", ai_pending=True, message="AI ideas on the way…")
+        refs = sorted((d / "reference").iterdir()) if (d / "reference").is_dir() else []
         ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg),
                         melody_text=read_status(d).get("melody"), context=read_status(d).get("context"),
-                        on_analysis_done=analysis_ready if llm else None, cache_dir=cache)
+                        on_analysis_done=analysis_ready if llm else None, cache_dir=cache,
+                        reference=refs[0] if refs else None)
         write_status(d, state="done", ai_pending=False, message="Done")
     except Exception as e:
         if read_status(d).get("state") == "done":  # analysis already shown: keep it, just stop waiting for AI
