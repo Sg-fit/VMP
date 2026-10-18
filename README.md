@@ -22,6 +22,15 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 
 It comes as a **web app** (upload tracks in the browser) and a **command-line tool**. Only the analysis numbers are sent to the AI, never the audio.
 
+**Your memory** (signed-in accounts, off until switched on at *Profile → What we remember*): the app learns from
+your saved analyses, the corrections you make on a result ("it's 3/4", "there's no bass") and the 👍/👎 you give
+ideas, plus goals you write down. It uses them only to nudge: the upload form is pre-filled with your usual line-up
+and genre; each new track gets **Next to your earlier tracks** (a first minor key, faster than anything you've
+saved, chords you haven't used); close calls get a note (an uncertain tempo where half or double sits in your usual
+range), never a changed result; ideas you disliked are dropped, liked kinds come first and ones you've seen go
+last; the AI gets a short profile of your habits and goals. Everything is listed on that page, deletable one by one
+or all at once ("Forget everything"); anonymous use is unaffected. Logic and rules: `memory.py`.
+
 **Demo reports** (`/demo/blues`, `/demo/band`, `/demo/electronic`, linked from the home page) show a finished report
 before anyone uploads: a solo guitar blues, a band song compared with a reference, and a house track. They're made
 from generated audio (the self-test's synthesizers, so no rights issues), built the first time someone opens them

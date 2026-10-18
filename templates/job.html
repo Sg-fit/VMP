@@ -250,7 +250,64 @@
     glance. Below it, each track has its own sections: harmony, structure, energy and mood, instruments, melody,
     well-known music it shares something with, groove and sound, ideas and downloads. Hover over (or tap) any
     underlined word for a quick explanation. There's a full guide under “How to read this report”.</p>
+  {% if teach %}
+  <details class="limits" style="margin-top:18px;max-width:46em" {{ 'open' if corrected }}>
+    <summary>Something wrong? Tell us, and your memory learns from it</summary>
+    {% if corrected == '1' %}<p class="ok small">Thanks, noted. It'll count from your next upload.</p>{% endif %}
+    <form method="post" action="{{ url_for('job_correct', job_id=job_id) }}" class="correct"
+          style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px">
+      <select name="track" aria-label="Which track">{% for f in s.files %}<option>{{ f }}</option>{% endfor %}</select>
+      <select name="field" aria-label="What's wrong">{% for k, label in fields.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select>
+      <input name="value" class="text" style="width:12em;margin:0" maxlength="60" placeholder="e.g. 96, 3/4, A minor, no" required aria-label="The right value">
+      <button class="btn secondary" type="submit">Save correction</button>
+    </form>
+    <p class="muted small" style="margin:8px 0 0">Corrections and 👍/👎 on ideas are kept on <a href="{{ url_for('memory_page') }}">What we remember</a>,
+      where you can delete them.</p>
+  </details>
+  {% elif user and saved and s.mode != 'tags' and not s.demo %}
+  <p class="muted small" style="margin-top:14px">Want the app to learn from your feedback? <a href="{{ url_for('memory_page') }}">Switch on your memory</a>.</p>
+  {% endif %}
   <div class="report">{{ report_html|safe }}</div>
+  {% if teach %}
+  <style>
+    .vote { margin-left: 8px; white-space: nowrap; }
+    .vote button { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line); color: inherit;
+                   padding: 1px 7px; cursor: pointer; margin-left: 3px; }
+    .vote button[aria-pressed="true"] { border-color: var(--accent); background: var(--faint); }
+  </style>
+  <script>
+    (function () {
+      // 👍/👎 on each idea: the "Ideas to try" and "AI brainstorm" lists of every track
+      const url = "{{ url_for('job_feedback', job_id=job_id) }}";
+      document.querySelectorAll('.report h3').forEach(h => {
+        if (!/Ideas to try|AI brainstorm/.test(h.textContent)) return;
+        let track = h; while (track && track.tagName !== 'H2') track = track.previousElementSibling;
+        let ul = h.nextElementSibling;
+        while (ul && ul.tagName !== 'UL' && ul.tagName !== 'H3' && ul.tagName !== 'H2') ul = ul.nextElementSibling;
+        if (!ul || ul.tagName !== 'UL') return;
+        ul.querySelectorAll(':scope > li').forEach(li => {
+          const strong = li.querySelector('strong');
+          const area = strong ? strong.textContent.replace(/:$/, '').trim() : 'idea';
+          const text = li.textContent.replace(strong ? strong.textContent : '', '').trim();
+          const box = document.createElement('span'); box.className = 'vote';
+          [['👍', 1, 'This idea helps'], ['👎', -1, "This idea doesn't help"]].forEach(([icon, vote, label]) => {
+            const b = document.createElement('button'); b.type = 'button'; b.textContent = icon;
+            b.setAttribute('aria-label', label); b.setAttribute('aria-pressed', 'false');
+            b.onclick = async () => {
+              const on = b.getAttribute('aria-pressed') !== 'true';
+              box.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', 'false'));
+              b.setAttribute('aria-pressed', on ? 'true' : 'false');
+              await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({track: track ? track.textContent.trim() : '', area, text, vote: on ? vote : 0})});
+            };
+            box.appendChild(b);
+          });
+          li.appendChild(box);
+        });
+      });
+    })();
+  </script>
+  {% endif %}
 
 {% elif s.state == 'error' %}
   <div>

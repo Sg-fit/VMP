@@ -79,7 +79,8 @@
         <li><a href="{{ url_for('job', job_id=it.job_id) }}">{{ it.title }}</a><span>{{ it.created|datetime }}</span></li>
       {% endfor %}
     </ul>
-    <p><a href="{{ url_for('history') }}">All of your history →</a></p>
+    <p><a href="{{ url_for('history') }}">All of your history →</a> ·
+      <a href="{{ url_for('memory_page') }}">What we remember{{ ' (on)' if user.memory_on else ' (off)' }} →</a></p>
   </div>
 {% elif not p.listening %}
   <p class="sentence muted">Your summary appears here once you've saved an analysis.</p>

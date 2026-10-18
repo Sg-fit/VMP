@@ -784,6 +784,7 @@ def web_checks(tmp, files):
         job4, s4, _, _ = run_job([files["short_m4a"]])
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
         account_checks(base, job4)
+        memory_web_checks(base, files)
         job5, s5, _, _ = run_job([files["guitar_blues"]], extra={"instruments": ["guitar", "voice"], "genre": "blues"})
         r5 = requests.get(f"{base}/jobs/{job5}/files/music_results.json", timeout=10).json()[0] if s5["state"] == "done" else {}
         sheet = requests.get(f"{base}/jobs/{job5}/files/sheets/solo_guitar_blues_A_140bpm_low_part.musicxml", timeout=10)
@@ -888,6 +889,59 @@ def account_checks(base, job):
     check("web", "deleting from History removes the analysis",
           alice.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and "short_phone_clip" not in
           alice.get(base + "/history", timeout=10).text)
+
+
+def memory_web_checks(base, files):
+    """The musician's memory end to end: off by default, switched on, learns from saved uploads, ratings and
+    corrections, pre-fills the form, compares a new track with earlier ones, and forgets on request."""
+    import requests
+    dana, eve = requests.Session(), requests.Session()
+    dana.post(base + "/signup", data={"username": "dana", "password": "selftest-pw4", "password2": "selftest-pw4"}, timeout=10)
+    eve.post(base + "/signup", data={"username": "eve", "password": "selftest-pw5", "password2": "selftest-pw5"}, timeout=10)
+
+    def upload(sess, path):
+        up = [("tracks", (Path(path).name, open(path, "rb")))]
+        loc = sess.post(base + "/analyze", files=up, data={"instruments": ["guitar"], "genre": "blues"},
+                        allow_redirects=False, timeout=60).headers["Location"]
+        job = loc.rsplit("/", 1)[-1]
+        t0 = time.time()
+        while time.time() - t0 < 300 and sess.get(f"{base}/jobs/{job}/status", timeout=10).json()["state"] not in ("done", "error"):
+            time.sleep(1)
+        return job
+
+    off_page = dana.get(base + "/memory", timeout=10).text
+    check("memory", "the memory is off until the musician switches it on", 'value="1" checked' not in off_page)
+    dana.post(base + "/memory", data={"on": "1", "goals": "more odd meters please"}, timeout=10)
+    j1, j2 = upload(dana, files["pop4"]), upload(dana, files["waltz3"])
+    page1 = dana.get(f"{base}/jobs/{j1}", timeout=10).text
+    res1 = dana.get(f"{base}/jobs/{j1}/files/music_results.json", timeout=10).json()[0]
+    idea = res1["ideas"][0]
+    fb = dana.post(f"{base}/jobs/{j1}/feedback", json={"track": res1["file"], "area": idea["area"],
+                                                        "text": idea["idea"], "vote": -1}, timeout=10)
+    dana.post(f"{base}/jobs/{j2}/correct", data={"track": "waltz", "field": "meter", "value": "3/4"}, timeout=10)
+    stranger = eve.post(f"{base}/jobs/{j1}/feedback", json={"area": "x", "text": "y", "vote": 1}, timeout=10)
+    check("memory", "the owner can rate ideas and correct results; someone else can't",
+          fb.ok and stranger.status_code == 403 and "Something wrong?" in page1)
+    mpage = dana.get(base + "/memory", timeout=10).text
+    check("memory", "What we remember lists the habits, the rating and the correction",
+          "G major" in mpage and "is 3/4" in mpage and idea["idea"][:40] in mpage and "more odd meters please" in mpage)
+    home = dana.get(base + "/", timeout=10).text
+    check("memory", "the upload form is pre-filled with the usual line-up and genre",
+          'value="guitar" checked' in home and 'value="blues" selected' in home and "Ticked from your earlier uploads" in home)
+    j3 = upload(dana, files["modulate"])
+    page3 = dana.get(f"{base}/jobs/{j3}", timeout=10).text
+    res3 = dana.get(f"{base}/jobs/{j3}/files/music_results.json", timeout=10).json()[0]
+    check("memory", "a new track is compared with the earlier ones, and the disliked idea is gone",
+          "Next to your earlier tracks" in page3 and res3.get("memory_tracks") == 2
+          and not any(i["idea"] == idea["idea"] for i in res3["ideas"]), str(res3.get("past")))
+    anon_home = requests.get(base + "/", timeout=10).text
+    check("memory", "anonymous visitors get no pre-fill and no memory", "Ticked from your earlier uploads" not in anon_home)
+    dana.post(base + "/memory/forget", timeout=10)
+    gone = dana.get(base + "/memory", timeout=10).text
+    check("memory", "Forget everything deletes ratings, corrections and goals and switches it off",
+          idea["idea"][:40] not in gone and "is 3/4" not in gone and "more odd meters please" not in gone
+          and 'value="1" checked' not in gone and "Ticked from your earlier uploads" not in
+          dana.get(base + "/", timeout=10).text)
 
 
 # ---------------------------------------------------------------- facts you've confirmed about your own recordings
@@ -1205,6 +1259,9 @@ def memory_checks():
              {"area": "harmony", "idea": "Borrow from A minor: try a minor iv - Dm"}]
     ranked = [i["area"] for i in memory.rank_ideas(ideas, mem)]
     check("memory", "ideas: a disliked one is dropped, a liked kind comes first", ranked == ["harmony", "sound"], str(ranked))
+    thin = memory.build(past[:1] + [dict(past[1], tempo_approximate=True)], ctx[:2], [], [])
+    check("memory", "one reliable tempo isn't a range: no tempo claim from it",
+          thin["tempo"] is None and "Faster" not in " ".join(memory.compare_with_past(new, thin)))
     check("memory", "the AI gets the musician's habits and goals", "darker songs" in memory.ai_profile(mem)
           and "G major" in memory.ai_profile(mem))
 
@@ -1388,6 +1445,10 @@ def main():
             comparison_checks(tmp)
         except Exception:
             check("compare", "comparison checks ran", False, traceback.format_exc(limit=3))
+        try:
+            memory_checks()
+        except Exception:
+            check("memory", "memory checks ran", False, traceback.format_exc(limit=3))
         try:
             tag_checks(tmp, online=bool(args.live))
         except Exception:

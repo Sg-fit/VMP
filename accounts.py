@@ -39,8 +39,27 @@ def init(path):
         """)
         # Added later: has this user closed the "what the app can't do" notice? (kept per account, so it doesn't
         # come back on a new device)
-        if "seen_intro" not in [c[1] for c in db.execute("PRAGMA table_info(users)")]:
+        cols = [c[1] for c in db.execute("PRAGMA table_info(users)")]
+        if "seen_intro" not in cols:
             db.execute("ALTER TABLE users ADD COLUMN seen_intro INTEGER NOT NULL DEFAULT 0")
+        # The musician's memory (memory.py): off until they switch it on; their goals in their own words
+        if "memory_on" not in cols:
+            db.execute("ALTER TABLE users ADD COLUMN memory_on INTEGER NOT NULL DEFAULT 0")
+        if "goals" not in cols:
+            db.execute("ALTER TABLE users ADD COLUMN goals TEXT NOT NULL DEFAULT ''")
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                job_id TEXT NOT NULL, track TEXT NOT NULL, idea_key TEXT NOT NULL,
+                area TEXT NOT NULL, text TEXT NOT NULL, vote INTEGER NOT NULL, created REAL NOT NULL,
+                UNIQUE (user_id, job_id, track, idea_key));
+            CREATE TABLE IF NOT EXISTS corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                job_id TEXT NOT NULL, track TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL,
+                created REAL NOT NULL);
+        """)
 
 
 def _connect():
@@ -78,8 +97,69 @@ def check_login(username, password):
 
 def get_user(user_id):
     with _connect() as db:
-        row = db.execute("SELECT id, username, created, seen_intro FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = db.execute("SELECT id, username, created, seen_intro, memory_on, goals FROM users WHERE id = ?",
+                         (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------- the musician's memory (see memory.py)
+
+CORRECTABLE = {"tempo": "Tempo (BPM)", "meter": "Time signature", "key": "Key", "drums": "Drums", "bass": "Bass"}
+
+
+def set_memory(user_id, on, goals=None):
+    with _connect() as db:
+        db.execute("UPDATE users SET memory_on = ? WHERE id = ?", (1 if on else 0, user_id))
+        if goals is not None:
+            db.execute("UPDATE users SET goals = ? WHERE id = ?", (goals.strip()[:500], user_id))
+
+
+def add_feedback(user_id, job_id, track, area, text, vote):
+    """One vote per idea and track: voting again replaces it; vote 0 takes it back."""
+    import memory
+    k = memory.idea_key(area, text)
+    with _connect() as db:
+        db.execute("DELETE FROM feedback WHERE user_id = ? AND job_id = ? AND track = ? AND idea_key = ?",
+                   (user_id, job_id, track[:200], k))
+        if vote:
+            db.execute("INSERT INTO feedback (user_id, job_id, track, idea_key, area, text, vote, created) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, job_id, track[:200], k, area[:60], text[:600],
+                                                           1 if vote > 0 else -1, time.time()))
+
+
+def add_correction(user_id, job_id, track, field, value):
+    if field not in CORRECTABLE or not str(value).strip():
+        return "Pick what to correct and give the right value."
+    with _connect() as db:
+        db.execute("INSERT INTO corrections (user_id, job_id, track, field, value, created) VALUES (?, ?, ?, ?, ?, ?)",
+                   (user_id, job_id, track[:200], field, str(value).strip()[:60], time.time()))
+    return None
+
+
+def list_feedback(user_id):
+    with _connect() as db:
+        return [dict(r) for r in db.execute("SELECT * FROM feedback WHERE user_id = ? ORDER BY created DESC", (user_id,))]
+
+
+def list_corrections(user_id):
+    with _connect() as db:
+        return [dict(r) for r in db.execute("SELECT * FROM corrections WHERE user_id = ? ORDER BY created DESC",
+                                            (user_id,))]
+
+
+def delete_memory_item(user_id, table, item_id):
+    if table not in ("feedback", "corrections"):
+        return
+    with _connect() as db:
+        db.execute(f"DELETE FROM {table} WHERE id = ? AND user_id = ?", (item_id, user_id))
+
+
+def forget_everything(user_id):
+    """Every vote, correction and goal gone, and the memory switched off. Saved analyses stay (that's History)."""
+    with _connect() as db:
+        db.execute("DELETE FROM feedback WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM corrections WHERE user_id = ?", (user_id,))
+        db.execute("UPDATE users SET memory_on = 0, goals = '' WHERE id = ?", (user_id,))
 
 
 def mark_intro_seen(user_id):
@@ -158,6 +238,10 @@ def job_summary(results):
             "chords": {c["chord"]: c["seconds"] for c in r.get("chords_used", [])},
             "drums": bool((r.get("drums") or {}).get("present")), "bass": bool((r.get("bass") or {}).get("present")),
             "genre": (r.get("context") or {}).get("genre"),
+            # for the musician's memory
+            "tempo_approximate": bool(r.get("tempo_approximate")),
+            "lufs": ((r.get("sound") or {}).get("streaming") or {}).get("lufs"),
+            "form_name": (r.get("blues_form") or r.get("song_form") or {}).get("name"),
         })
     return {"tracks": tracks}
 

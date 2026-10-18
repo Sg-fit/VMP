@@ -70,7 +70,7 @@ def run_job(job_dir):
         ma.run_analysis(files, d / "output", llm, progress=lambda msg: write_status(d, message=msg),
                         melody_text=read_status(d).get("melody"), context=read_status(d).get("context"),
                         on_analysis_done=analysis_ready if llm else None, cache_dir=cache,
-                        reference=refs[0] if refs else None)
+                        reference=refs[0] if refs else None, memory=st.get("memory"))
         write_status(d, state="done", ai_pending=False, message="Done")
     except Exception as e:
         if read_status(d).get("state") == "done":  # analysis already shown: keep it, just stop waiting for AI

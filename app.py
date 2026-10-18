@@ -41,6 +41,7 @@ from werkzeug.utils import secure_filename
 
 import accounts
 import demos
+import memory
 import musicanalyze as ma
 from job_runner import read_status, write_status
 
@@ -352,6 +353,93 @@ def history():
     return render_template("history.html", items=items, version=ma.CODE_VERSION)
 
 
+MEMORY_SCAN = 15  # most recent saved analyses whose ideas count as "already shown"
+
+
+def user_memory(u):
+    """The signed-in musician's memory (memory.py), or None when not signed in or switched off."""
+    if not u or not u.get("memory_on"):
+        return None
+    tracks, contexts, refs, seen = [], [], [], []
+    for n, it in enumerate(_summaries(accounts.history(u["id"]))):
+        sm = it.get("summary") or {}
+        if sm.get("kind") == "tags":
+            continue
+        tracks += sm.get("tracks") or []
+        st = read_status(DATA_DIR / it["job_id"])
+        c = st.get("context")
+        contexts.append({"keys": c.get("instruments") or [], "genre_key": c.get("genre")} if c else None)
+        if st.get("reference"):
+            refs.append(st["reference"])
+        res = DATA_DIR / it["job_id"] / "output" / "music_results.json"
+        if n < MEMORY_SCAN and res.exists():
+            try:
+                for r in json.loads(res.read_text(encoding="utf-8")):
+                    seen += [memory.idea_key(i.get("area"), i.get("idea")) for i in r.get("ideas") or []]
+            except (OSError, ValueError):
+                pass
+    return memory.build(tracks, contexts, accounts.list_feedback(u["id"]), accounts.list_corrections(u["id"]),
+                        u.get("goals") or "", refs, seen)
+
+
+@app.get("/memory")
+def memory_page():
+    u = _require_user()
+    mem = memory.build([], [], [], [], u.get("goals") or "")
+    if u.get("memory_on"):
+        mem = user_memory(u)
+    return render_template("memory.html", mem=mem, feedback=accounts.list_feedback(u["id"]),
+                           corrections=accounts.list_corrections(u["id"]), fields=accounts.CORRECTABLE,
+                           genres={k: v[0] for k, v in ma.GENRES.items()}, instruments=ma.INSTRUMENTS,
+                           version=ma.CODE_VERSION)
+
+
+@app.post("/memory")
+def memory_update():
+    u = _require_user()
+    accounts.set_memory(u["id"], request.form.get("on") == "1", request.form.get("goals"))
+    return redirect(url_for("memory_page"))
+
+
+@app.post("/memory/forget")
+def memory_forget():
+    u = _require_user()
+    accounts.forget_everything(u["id"])
+    return redirect(url_for("memory_page"))
+
+
+@app.post("/memory/<table>/<int:item_id>/delete")
+def memory_delete(table, item_id):
+    u = _require_user()
+    accounts.delete_memory_item(u["id"], table, item_id)
+    return redirect(url_for("memory_page"))
+
+
+def _teachable(job_id):
+    """Feedback and corrections come only from the signed-in owner of a saved analysis, with the memory on."""
+    u = current_user()
+    if not u or not u.get("memory_on") or accounts.owner_of(job_id) != u["id"]:
+        abort(403)
+    return u
+
+
+@app.post("/jobs/<job_id>/feedback")
+def job_feedback(job_id):
+    u = _teachable(job_id)
+    data = request.get_json(silent=True) or {}
+    accounts.add_feedback(u["id"], job_id, str(data.get("track", ""))[:200], str(data.get("area", ""))[:60],
+                          str(data.get("text", ""))[:600], int(data.get("vote", 0) or 0))
+    return jsonify(ok=True)
+
+
+@app.post("/jobs/<job_id>/correct")
+def job_correct(job_id):
+    u = _teachable(job_id)
+    problem = accounts.add_correction(u["id"], job_id, request.form.get("track", ""), request.form.get("field", ""),
+                                      request.form.get("value", ""))
+    return redirect(url_for("job", job_id=job_id, corrected="0" if problem else "1"))
+
+
 @app.get("/profile")
 def profile():
     u = _require_user()
@@ -413,7 +501,7 @@ def form_page(error=None, code=200):
                            instruments=ma.INSTRUMENTS, genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
                            mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
-                           form=request.form, demos=demos.DEMOS), code
+                           form=request.form, demos=demos.DEMOS, prefill=memory.prefill(user_memory(current_user()))), code
 
 
 @app.get("/")
@@ -504,6 +592,7 @@ def analyze():
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
         write_status(d, state="queued", mode="musician", files=saved, reference=reference,
+                     memory=user_memory(current_user()),  # None unless signed in with the memory switched on
                      use_ai=bool(LLM and request.form.get("ai")),
                      melody=(request.form.get("melody") or "")[:2000],
                      context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
@@ -540,8 +629,11 @@ def job(job_id):
                              r"\1", report_html)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
+    u, owner = current_user(), accounts.owner_of(job_id)
+    teach = bool(u and u.get("memory_on") and owner == u["id"] and s.get("mode") != "tags" and not s.get("demo"))
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
-                           version=ma.CODE_VERSION, saved=accounts.owner_of(job_id) is not None, demos=demos.DEMOS)
+                           version=ma.CODE_VERSION, saved=owner is not None, demos=demos.DEMOS, teach=teach,
+                           fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"))
 
 
 @app.get("/jobs/<job_id>/status")

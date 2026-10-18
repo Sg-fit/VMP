@@ -164,13 +164,17 @@
           <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, for every track you upload</span></legend>
         <div class="chips" role="group" aria-label="Instruments that play">
           {% for key, label in instruments.items() %}
-            <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}"><span>{{ label }}</span></label>
+            <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}" {{ 'checked' if key in prefill.instruments }}><span>{{ label }}</span></label>
           {% endfor %}
         </div>
         <select name="genre" aria-label="Genre">
           <option value="">Genre — not sure / mixed</option>
-          {% for key, label in genres.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+          {% for key, label in genres.items() %}<option value="{{ key }}" {{ 'selected' if key == prefill.genre }}>{{ label }}</option>{% endfor %}
         </select>
+        {% if prefill.instruments or prefill.genre %}
+        <p class="muted small" style="margin:6px 0 0">Ticked from your earlier uploads (your memory is on). Change
+          anything that's different this time. <a href="{{ url_for('memory_page') }}">What we remember</a></p>
+        {% endif %}
         <p class="muted small" style="margin:6px 0 0">Tick the instruments you can hear, or leave it all blank and we'll
           make our best guess.</p>
         <details class="limits">

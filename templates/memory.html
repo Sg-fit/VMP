@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}What we remember · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .mem { max-width: 760px; }
+  .mem h2 { font-size: 1.25rem; margin: 36px 0 10px; }
+  .mem ul.items { list-style: none; padding: 0; margin: 0; }
+  .mem ul.items li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+                     padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .mem ul.items form { margin: 0; }
+  .mem ul.items button, .mem .danger { font: inherit; font-size: .85rem; background: none; border: 1px solid var(--line);
+                                       color: inherit; padding: 3px 10px; cursor: pointer; }
+  .mem .habits { display: grid; grid-template-columns: 11em 1fr; gap: 6px 16px; }
+  .mem .habits dt { color: var(--muted); }
+  .mem .habits dd { margin: 0; }
+  .mem label.switch { display: flex; gap: 10px; align-items: center; font-weight: 600; margin-bottom: 12px; }
+  .mem label.switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="mem">
+<p class="eyebrow">Your memory</p>
+<h1>What we remember</h1>
+<p class="lede">With your memory on, the app learns from your saved analyses, your corrections and the ideas you
+  rate, and uses that on your next uploads. It's all listed here: change or delete anything, or switch it off.</p>
+
+<form method="post" action="{{ url_for('memory_update') }}" class="panel">
+  <label class="switch"><input type="checkbox" name="on" value="1" {{ 'checked' if user.memory_on }}>
+    Remember my music and use it on my next uploads</label>
+  <label class="field" for="goals">Your goals <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, in your own words</span></label>
+  <textarea id="goals" name="goals" rows="2" maxlength="500" placeholder="e.g. I want to write darker songs; I'm learning jazz blues">{{ user.goals }}</textarea>
+  <button class="btn primary" type="submit">Save</button>
+</form>
+
+<h2>How we use it</h2>
+<ul>
+  <li><b>Upload form:</b> your usual instruments and genre are ticked for you. You can change them each time.</li>
+  <li><b>Next to your earlier tracks:</b> each new track is compared with your own saved ones: a first minor key, a
+    faster tempo than ever, chords you haven't used before.</li>
+  <li><b>Close calls only:</b> when a measurement is unsure (say, the beat was hard to find), we tell you what your
+    history suggests. We never change what the audio clearly shows.</li>
+  <li><b>Ideas:</b> ones you marked 👎 are dropped, kinds you liked come first, and ones you've seen before go last.</li>
+  <li><b>AI ideas:</b> the AI gets a short summary of your habits, your goals and what helped you, so it can push you
+    somewhere new. It never sees your audio.</li>
+</ul>
+
+{% if user.memory_on %}
+<h2>Your habits <span class="muted small" style="font-weight:400">from {{ mem.tracks }} saved track{{ 's' if mem.tracks != 1 }}</span></h2>
+{% if mem.tracks %}
+<dl class="habits">
+  {% if mem['keys'] %}<dt>Keys</dt><dd>{{ mem['keys'][:5]|map('first')|join(', ') }}</dd>{% endif %}
+  {% if mem.modes %}<dt>Modes</dt><dd>{{ mem.modes[:4]|map('first')|join(', ') }}</dd>{% endif %}
+  {% if mem.tempo %}<dt>Tempo</dt><dd>{{ mem.tempo.min|round|int }}–{{ mem.tempo.max|round|int }} BPM, typically {{ mem.tempo.median|round|int }}</dd>{% endif %}
+  {% if mem.meters %}<dt>Time signatures</dt><dd>{{ mem.meters|map('first')|join(', ') }}</dd>{% endif %}
+  {% if mem.forms %}<dt>Forms</dt><dd>{{ mem.forms|map('first')|join(', ') }}</dd>{% endif %}
+  {% if mem.chords %}<dt>Chords you lean on</dt><dd>{{ mem.chords[:8]|join(', ') }}</dd>{% endif %}
+  {% if mem.usual_instruments %}<dt>Usual line-up</dt><dd>{% for i in mem.usual_instruments %}{{ instruments.get(i, i) }}{{ ', ' if not loop.last }}{% endfor %}</dd>{% endif %}
+  {% if mem.usual_genre %}<dt>Usual genre</dt><dd>{{ genres.get(mem.usual_genre, mem.usual_genre) }}</dd>{% endif %}
+  {% if mem.lufs_median is not none %}<dt>Typical loudness</dt><dd>{{ mem.lufs_median }} LUFS</dd>{% endif %}
+</dl>
+<p class="muted small">Worked out from your <a href="{{ url_for('history') }}">History</a>. Delete an analysis there and it
+  no longer counts.</p>
+{% else %}
+<p class="muted">Nothing yet. Save an analysis (anything you upload while signed in is saved) and your habits appear here.</p>
+{% endif %}
+{% endif %}
+
+<h2>Your corrections</h2>
+{% if corrections %}
+<ul class="items">
+  {% for c in corrections %}
+  <li><span><b>{{ fields.get(c.field, c.field) }}</b> is {{ c.value }} <span class="muted small">· {{ c.track }} · {{ c.created|datetime(date_only=True) }}</span></span>
+    <form method="post" action="{{ url_for('memory_delete', table='corrections', item_id=c.id) }}"><button type="submit">Delete</button></form></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">None yet. On a result, open “Something wrong?” to correct the tempo, time signature, key, drums or bass.</p>
+{% endif %}
+
+<h2>Ideas you rated</h2>
+{% if feedback %}
+<ul class="items">
+  {% for f in feedback %}
+  <li><span>{{ '👍' if f.vote > 0 else '👎' }} <b>{{ f.area }}:</b> {{ f.text[:140] }}{{ '…' if f.text|length > 140 }}</span>
+    <form method="post" action="{{ url_for('memory_delete', table='feedback', item_id=f.id) }}"><button type="submit">Delete</button></form></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">None yet. Use the 👍 and 👎 next to each idea on your results.</p>
+{% endif %}
+
+<form method="post" action="{{ url_for('memory_forget') }}" style="margin-top:40px"
+      onsubmit="return confirm('Delete every correction, rating and goal, and switch the memory off? Your saved analyses stay in History.')">
+  <button class="danger" type="submit">Forget everything</button>
+  <span class="muted small">Deletes your corrections, ratings and goals and switches the memory off. Your saved analyses stay in History.</span>
+</form>
+</div>
+{% endblock %}

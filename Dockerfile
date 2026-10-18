@@ -34,7 +34,7 @@ RUN if [ "$WITH_STYLE_MODEL" = "1" ]; then \
     fi
 ENV MUSIC_ESSENTIA_PYTHON=/opt/essentia/bin/python
 
-COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py ./
+COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py memory.py ./
 COPY templates ./templates
 
 RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data

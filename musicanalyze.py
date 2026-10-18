@@ -2521,6 +2521,10 @@ def ai_summary(r):
                      + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in c["rows"]) + ".")
         if c["ideas"]:
             lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in c["ideas"]) + ".")
+    if r.get("memory_profile"):
+        lines.append(r["memory_profile"])
+    if r.get("past"):
+        lines.append("Compared with their own saved tracks: " + " ".join(r["past"]))
     return "\n".join(lines)
 
 
@@ -3241,6 +3245,7 @@ def track_report(r):
     L.append("```")
 
     # Ideas
+    L += past_report(r)
     L += comparison_report(r)
     L += ["", "### 💡 Ideas to try", "", "_We worked these out from the analysis itself, no AI involved. Try "
           "them out and keep whatever works for you._", ""]
@@ -3593,6 +3598,22 @@ def reference_report(r):
     return L
 
 
+def past_report(r):
+    """What the musician's memory adds: this track next to their own saved ones, and close calls it settles."""
+    if "memory_tracks" not in r:
+        return []
+    L = ["", "### 🪞 Next to your earlier tracks", ""]
+    if r["memory_tracks"] < 2:
+        return L + [f"_Your memory is on. Once you've saved two or more analyses, we'll compare each new track with "
+                    "your own earlier ones here._"]
+    L += [f"_Compared with the {r['memory_tracks']} tracks in your history (see “What we remember” on your profile)._",
+          ""]
+    L += [f"- {x}" for x in r.get("past") or []] or ["- Nothing stands out: this one sits right among your others."]
+    L += [f"- **Close call:** {x}" for x in r.get("close_calls") or []]
+    L += ["", "_The ideas below are ordered by what you've found useful before; ones you've already seen come last._"]
+    return L
+
+
 def comparison_report(r):
     c = r.get("comparison")
     if not c:
@@ -3705,7 +3726,7 @@ def _write_outputs(results, out):
 
 
 def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analysis_done=None,
-                 cache_dir=DEFAULT_CACHE_DIR, context=None, reference=None):
+                 cache_dir=DEFAULT_CACHE_DIR, context=None, reference=None, memory=None):
     """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
 
     Built to keep the musician waiting as little as possible:
@@ -3739,6 +3760,13 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
                 r["analyzer_version"] = CODE_VERSION
                 if ref and "error" not in ref:
                     r["comparison"] = compare_tracks(r, ref)
+                if memory:  # a signed-in musician who switched their memory on (memory.py)
+                    import memory as mem
+                    r["past"] = mem.compare_with_past(r, memory, fmt_time)
+                    r["close_calls"] = mem.close_call_notes(r, memory)
+                    r["ideas"] = mem.rank_ideas(r["ideas"], memory)
+                    r["memory_profile"] = mem.ai_profile(memory)
+                    r["memory_tracks"] = memory.get("tracks", 0)
                 r["midi"] = export_midis(r, out / "midi")
                 try:
                     r["sheets"] = export_sheets(r, out / "sheets")
