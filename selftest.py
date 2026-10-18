@@ -1047,6 +1047,38 @@ def precision_checks(tmp):
     check("precision", "known chords are clear (no '?' on a clean recording)",
           all((c.get("clarity") or 0) >= ma.UNCLEAR_CHORD for c in tl), str([(c["chord"], c["clarity"]) for c in tl][:6]))
 
+    # Loudness to the published standards (EBU test signals), and what a mono phone file reports
+    sr48 = 48000
+    tone = lambda db, secs=20: (10 ** (db / 20)) * np.sin(2 * np.pi * 1000 * np.arange(sr48 * secs) / sr48)
+    st_ = lambda x: np.vstack([x, x])
+    lufs = ma.integrated_lufs(st_(tone(-23)), sr48)
+    lra = ma.loudness_range(st_(np.concatenate([tone(-20), tone(-30)])), sr48)
+    tp = ma.true_peak_db(st_(tone(-23)), sr48)
+    inter = np.sin(2 * np.pi * (sr48 / 4) * np.arange(sr48) / sr48 + np.pi / 4) * 0.99  # samples sit 3 dB below its peak
+    check("precision", "loudness: EBU tone -23.0 LUFS, loudness range 10 LU, true peak of a tone and between samples",
+          abs(lufs + 23) < 0.1 and abs(lra - 10) < 0.2 and abs(tp + 23) < 0.1
+          and abs(ma.true_peak_db(inter[None, :], sr48) - 20 * np.log10(0.99)) < 0.2,
+          f"{lufs:.2f} LUFS, LRA {lra:.2f}, TP {tp:.2f}, inter-sample {ma.true_peak_db(inter[None, :], sr48):.2f}")
+    noise = np.random.default_rng(1).standard_normal(sr48 * 3)
+    check("precision", "stereo correlation: mono +1, flipped channel -1, unrelated channels ~0",
+          ma.stereo_correlation(st_(noise)) > 0.99 and ma.stereo_correlation(np.vstack([noise, -noise])) < -0.99
+          and abs(ma.stereo_correlation(np.vstack([noise, np.random.default_rng(2).standard_normal(sr48 * 3)]))) < 0.05)
+    s_ = ma.analyze(pops[100])["sound"].get("streaming") or {}
+    check("precision", "the analysis reports streaming loudness (a mono file measured on both speakers)",
+          s_.get("mono_file") is True and -40 < (s_.get("lufs") or 0) < 0 and s_.get("stereo_correlation") is None, str(s_))
+
+    # Capo: open shapes where they exist, nothing where they don't
+    cap = lambda chords, key: ma.guitar_capo({"chords_used": [{"chord": c, "seconds": 10} for c in chords],
+                                              "key_index": ma.KEY_NAMES.index(key)})
+    g1, g2, g3 = cap(["A", "E", "F#m", "D"], "A major"), cap(["G", "C", "D", "Em"], "G major"), cap(["Bb", "Eb", "F", "Gm"], "Bb major")
+    check("precision", "capo: A-E-F#m-D -> capo 2 (G D Em C shapes); G-C-D-Em needs none; Bb-Eb-F-Gm -> capo 3",
+          g1["capo"] == 2 and [s["shape"] for s in g1["shapes"]] == ["G", "D", "Em", "C"] and g2["capo"] == 0
+          and g3["capo"] == 3, f"{g1 and g1['capo']} / {g2 and g2['capo']} / {g3 and g3['capo']}")
+    check("precision", "capo: nothing suggested for power chords only, or a riff that's mostly power chords",
+          cap(["E5", "A5", "D5"], "E major") is None and ma.guitar_capo(
+              {"chords_used": [{"chord": "D5", "seconds": 60}, {"chord": "G5", "seconds": 30}, {"chord": "Am7", "seconds": 5}],
+               "key_index": ma.KEY_NAMES.index("D major")}) is None)
+
     # Half/double bar length: needs to beat the detected one by more than chance
     on, off = (0.77, 60, "on"), (0.79, 24, "off")
     check("precision", "a half/double-speed form reading needs more than a lucky point or two",

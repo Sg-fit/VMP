@@ -570,6 +570,9 @@ def sound_features(y, sr, rms_db, duration):
         "avg_loudness_db": round(float(np.mean(audible)), 1),
         "dynamic_range_db": round(float(np.percentile(audible, 95) - np.percentile(audible, 5)), 1),
         "energy_curve": [round(float(x), 2) for x in curve / (curve.max() + 1e-9)],
+        # the same, finer, for the timeline picture (loudness in dB above the quietest audible level, 0-1)
+        "energy_line": [round(float(x), 3) for x in np.clip(
+            (np.array([c.mean() for c in np.array_split(rms_db, 160)]) - (rms_db.max() - 40)) / 40, 0, 1)],
         "energy_flat": bool(np.std(curve / (curve.max() + 1e-9)) < 0.08),
         "biggest_build": {"time": fmt_time(rise_t), "db": round(float(rise_db), 1)} if rise_t and rise_db > 3 else None,
         "quietest_moment": fmt_time(quiet_t) if quiet_t is not None else None,
@@ -577,6 +580,144 @@ def sound_features(y, sr, rms_db, duration):
 
 
 # ---------------------------------------------------------------- main analysis
+
+def load_audio_channels(path):
+    """All channels at the file's own sample rate, as (channels, samples) float32 - for loudness, which has to be
+    measured on what listeners actually hear, not on the mono 22 kHz copy the analysis uses."""
+    import librosa
+    try:
+        y, sr = librosa.load(str(path), sr=None, mono=False)
+        return np.atleast_2d(y).astype(np.float32), int(sr)
+    except Exception:
+        import av
+        with av.open(str(path)) as container:
+            stream = container.streams.audio[0]
+            sr = stream.rate
+            resampler = av.AudioResampler(format="fltp", layout=stream.layout.name, rate=sr)
+            chunks = [out.to_ndarray() for frame in container.decode(audio=0) for out in resampler.resample(frame)]
+            chunks += [out.to_ndarray() for out in resampler.resample(None)]
+        if not chunks:
+            raise ValueError("no audio found in file")
+        return np.concatenate(chunks, axis=1).astype(np.float32), int(sr)
+
+
+def _biquad(kind, G, Q, fc, sr):
+    """The two filters of ITU-R BS.1770 'K-weighting', designed for any sample rate."""
+    A, w0 = 10 ** (G / 40), 2 * np.pi * fc / sr
+    alpha, c = np.sin(w0) / (2 * Q), np.cos(w0)
+    if kind == "shelf":
+        b = [A * ((A + 1) + (A - 1) * c + 2 * np.sqrt(A) * alpha), -2 * A * ((A - 1) + (A + 1) * c),
+             A * ((A + 1) + (A - 1) * c - 2 * np.sqrt(A) * alpha)]
+        a = [(A + 1) - (A - 1) * c + 2 * np.sqrt(A) * alpha, 2 * ((A - 1) - (A + 1) * c),
+             (A + 1) - (A - 1) * c - 2 * np.sqrt(A) * alpha]
+    else:  # high-pass
+        b = [(1 + c) / 2, -(1 + c), (1 + c) / 2]
+        a = [1 + alpha, -2 * c, 1 - alpha]
+    return np.array(b) / a[0], np.array(a) / a[0]
+
+
+def _kweighted_cumsum(ch, sr):
+    """Running sum of the K-weighted power of all channels (every channel weight is 1.0 for mono and stereo)."""
+    from scipy.signal import lfilter
+    z = np.zeros(ch.shape[1])
+    for x in ch:
+        for kind, G, Q, fc in (("shelf", 4.0, 1 / np.sqrt(2), 1500.0), ("highpass", 0.0, 0.5, 38.0)):
+            b, a = _biquad(kind, G, Q, fc, sr)
+            x = lfilter(b, a, x)
+        z += x ** 2
+    return np.concatenate([[0.0], np.cumsum(z)])
+
+
+def _window_power(csum, sr, length, step=0.1):
+    win, hop = int(length * sr), int(step * sr)
+    if len(csum) - 1 < win:
+        return np.array([])
+    starts = np.arange(0, len(csum) - 1 - win + 1, hop)
+    return (csum[starts + win] - csum[starts]) / win
+
+
+def integrated_lufs(ch, sr, csum=None):
+    """Integrated loudness (LUFS) per ITU-R BS.1770-4 / EBU R128: K-weighting, 400 ms blocks every 100 ms,
+    an absolute gate at -70 LUFS and a relative gate 10 LU below the gated mean. None for silence."""
+    power = _window_power(_kweighted_cumsum(ch, sr) if csum is None else csum, sr, 0.4)
+    loud = -0.691 + 10 * np.log10(power + 1e-12)
+    gated = power[loud > -70]
+    if not len(gated):
+        return None
+    rel = -0.691 + 10 * np.log10(gated.mean()) - 10
+    return float(-0.691 + 10 * np.log10(power[(loud > -70) & (loud > rel)].mean()))
+
+
+def loudness_range(ch, sr, csum=None):
+    """Loudness range (LU) per EBU Tech 3342: short-term loudness (3 s windows, 10 per second), an absolute gate
+    at -70 LUFS and a relative gate 20 LU below their mean, then the spread from the 10th to the 95th
+    percentile - how far the level moves across the track, ignoring the quietest and loudest moments."""
+    power = _window_power(_kweighted_cumsum(ch, sr) if csum is None else csum, sr, 3.0)
+    loud = -0.691 + 10 * np.log10(power + 1e-12)
+    gated = power[loud > -70]
+    if len(gated) < 2:
+        return None
+    rel = -0.691 + 10 * np.log10(gated.mean()) - 20
+    keep = loud[(loud > -70) & (loud > rel)]
+    return float(np.percentile(keep, 95) - np.percentile(keep, 10)) if len(keep) >= 2 else None
+
+
+def stereo_correlation(ch):
+    """Correlation of left and right (+1 = mono, 0 = unrelated, below 0 = out of phase: parts cancel when the mix
+    is played in mono, on a phone speaker or a club PA). None for a mono file."""
+    if ch.shape[0] < 2:
+        return None
+    left, right = ch[0].astype(np.float64), ch[1].astype(np.float64)
+    den = np.sqrt(np.sum(left ** 2) * np.sum(right ** 2))
+    return float(np.sum(left * right) / den) if den > 0 else None
+
+
+def true_peak_db(ch, sr):
+    """Peak level between the samples too (what a DAC or an mp3/AAC encoder reconstructs): 4x oversampling below
+    96 kHz, as BS.1770 recommends. In dBTP (dB relative to digital full scale)."""
+    from scipy.signal import resample_poly
+    up = 4 if sr < 96000 else 2
+    peak, chunk, pad = 0.0, sr * 10, 512
+    for x in ch:
+        for i in range(0, len(x), chunk):  # in pieces to keep memory flat
+            # Pad each piece and keep only its middle: the oversampling filter rings where a piece is cut off,
+            # which read a steady tone 0.5 dB too high.
+            a = max(0, i - pad)
+            seg = resample_poly(x[a: i + chunk + pad], up, 1)
+            mid = seg[(i - a) * up: (i - a + min(chunk, len(x) - i)) * up]
+            if len(mid):
+                peak = max(peak, float(np.max(np.abs(mid))))
+    return float(20 * np.log10(peak + 1e-12))
+
+
+SPOTIFY_TARGET_LUFS = -14.0  # Spotify's normal playback level (support.spotify.com, "Loudness normalization")
+
+
+def streaming_loudness(path):
+    """Integrated loudness and true peak as streaming services measure them, and what Spotify's normalisation
+    would do to the track: turn louder masters down to -14 LUFS; turn softer ones up, but only as far as leaves
+    the true peak at -1 dBTP (their published rule). A mono file is measured as it plays: on both speakers."""
+    ch, sr = load_audio_channels(path)
+    corr = stereo_correlation(ch)
+    mono = ch.shape[0] == 1
+    if mono:
+        ch = np.vstack([ch, ch])
+    ch = ch[:2]  # BS.1770 weights for surround channels differ; music uploads are mono or stereo
+    csum = _kweighted_cumsum(ch, sr)
+    lufs = integrated_lufs(ch, sr, csum)
+    if lufs is None:
+        return None
+    lra = loudness_range(ch, sr, csum)
+    tp = true_peak_db(ch, sr)
+    if lufs > SPOTIFY_TARGET_LUFS:
+        gain = SPOTIFY_TARGET_LUFS - lufs
+    else:
+        gain = max(0.0, min(SPOTIFY_TARGET_LUFS - lufs, -1.0 - tp))
+    return {"lufs": round(lufs, 1), "true_peak_db": round(tp, 1), "mono_file": mono,
+            "loudness_range_lu": None if lra is None else round(lra, 1),
+            "stereo_correlation": None if corr is None else round(corr, 2),
+            "spotify_gain_db": round(gain, 1), "spotify_plays_at": round(lufs + gain, 1)}
+
 
 def load_audio(path):
     """Load mono audio at SR. libsndfile handles mp3/wav/ogg/flac; m4a/aac go through PyAV (ffmpeg)."""
@@ -1248,11 +1389,16 @@ def _analyze_audio(path, light=False):
         top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
         result["top_line"] = top_line_summary(top, grid, chords, main_key)
     result["light"] = light
+    if not light:  # loudness as streaming services measure it (all channels, the file's own sample rate)
+        try:
+            result["sound"]["streaming"] = streaming_loudness(path)
+        except Exception as e:  # a bonus measurement: never lose the analysis over it
+            result["sound"]["streaming"] = {"error": str(e)[:200]}
     return result, {"chroma": chroma.astype(np.float32), "bounds": np.asarray(bounds)}
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-18b"
+ANALYSIS_VERSION = "2026-10-20a"
 
 
 def _cache_key(path, light=False):
@@ -1445,6 +1591,7 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
             result["melody"]["check"] = check_melody(extras["chroma"], extras["bounds"], pcs, main_key)
     result["references"] = shared_dna(result)
     result["ideas"] = rule_based_ideas(result)
+    result["guitar"] = guitar_capo(result)
     if result.get("blues_form"):
         result["blues_variations"] = blues_variations(result)
     genre = (context or {}).get("genre")
@@ -1633,6 +1780,44 @@ def _same_cycle(a, b):
 def flat5(fifth):
     """The blue note a half step below the 5th, spelled as a flattened 5th (Ab in D, not G#)."""
     return fifth[:-1] if fifth.endswith("#") else fifth + "b"
+
+
+# Standard open-position guitar shapes (root pitch class, quality) -> fingering, low E string first (x = not played).
+OPEN_SHAPES = {
+    (0, ""): ("C", "x32010"), (9, ""): ("A", "x02220"), (7, ""): ("G", "320003"), (4, ""): ("E", "022100"),
+    (2, ""): ("D", "xx0232"), (9, "m"): ("Am", "x02210"), (4, "m"): ("Em", "022000"), (2, "m"): ("Dm", "xx0231"),
+    (9, "7"): ("A7", "x02020"), (11, "7"): ("B7", "x21202"), (0, "7"): ("C7", "x32310"), (2, "7"): ("D7", "xx0212"),
+    (4, "7"): ("E7", "020100"), (7, "7"): ("G7", "320001"), (9, "m7"): ("Am7", "x02010"), (4, "m7"): ("Em7", "022030"),
+    (2, "m7"): ("Dm7", "xx0211"),
+}
+MAX_CAPO = 7  # beyond the 7th fret the neck is too cramped for open shapes to be the easy option
+
+
+def guitar_capo(r):
+    """Where to put a capo so the song's chords become open shapes (as Moises' and musicanalyzer.net's capo modes
+    do). For each capo fret, the share of chord time (power chords left out: they're movable shapes that work
+    anywhere) whose shape is an open chord. A capo is suggested only if it beats playing without one by a
+    quarter of the song and covers at least three quarters of it. Returns None when there's nothing to say."""
+    parsed = [(parse_chord(c["chord"]), c["seconds"]) for c in r.get("chords_used") or []]
+    parsed = [((p[0], p[1]), t) for p, t in parsed if p]
+    chords = [(rq, t) for rq, t in parsed if rq[1] != "5"]
+    total = sum(t for _, t in chords)
+    # A song played mostly in power chords (blues and rock riffs) gains nothing from a capo: say nothing.
+    if not chords or total <= 0 or total < 0.5 * sum(t for _, t in parsed):
+        return None
+
+    def at(capo):
+        shapes = [(OPEN_SHAPES.get(((root - capo) % 12, q)), root, q, t) for (root, q), t in chords]
+        return sum(x[3] for x in shapes if x[0]) / total, shapes
+    cover = {k: at(k) for k in range(MAX_CAPO + 1)}
+    best = max(range(MAX_CAPO + 1), key=lambda k: (round(cover[k][0], 2), -k))
+    capo = best if best and cover[best][0] >= max(0.75, cover[0][0] + 0.25) else 0
+    share, shapes = cover[capo]
+    if share < 0.75:
+        return None  # mostly barre chords whatever you do: nothing helpful to suggest
+    k = r["key_index"]
+    return {"capo": capo, "open_share_pct": round(100 * share),
+            "shapes": [{"sounds": spell(root, k) + q, "shape": s[0], "fingering": s[1]} for s, root, q, _ in shapes if s]}
 
 
 def rule_based_ideas(r):
@@ -2539,6 +2724,10 @@ GUIDE = {
                        "chord: just the root and 5th, neither major nor minor, the bread and butter of rock and "
                        "blues guitar.",
         "Slash chord": "A/E means an A chord with E as the lowest (bass) note.",
+        "Capo": "A clamp across the guitar neck that raises every string by the fret it sits on, so easy open "
+                "chord shapes sound higher. Fingerings are written from the low E string to the high E string: "
+                "a number is the fret to press, 0 an open string, x a string you don't play. Chords played as "
+                "power chords (C5, D5) aren't counted: that shape moves anywhere on the neck.",
         "Chord root": "The note a chord is named after, like D in D7. Bass lines often play it.",
         "Roman numerals": "Chords named by where they sit in the key. I is the home chord, and IV and V are built on "
                           "the 4th and 5th notes. Upper case is major, lower case minor, so 'i - iv - V' describes "
@@ -2621,6 +2810,17 @@ GUIDE = {
         "Tone": "Dark and warm, balanced, or bright, going by the brightness in Hz. Clean or noisy tells you how "
                 "pitched or how noise-like the sound is.",
         "dBFS": "Loudness measured against the digital maximum (0 dBFS). The more negative, the quieter.",
+        "LUFS": "Loudness as ears hear it (ITU-R BS.1770, the standard streaming services use): low bass counts for "
+                "less, the 2-4 kHz range for more, and silent moments are left out. Spotify plays music at about "
+                "-14 LUFS, turning louder tracks down.",
+        "True peak": "The highest level the waveform reaches, including between the samples, where a converter or an "
+                     "mp3/AAC encoder can overshoot. Above 0 dBTP the sound clips; Spotify asks for -1 dBTP or lower.",
+        "Loudness range": "How much the level moves between the quieter and louder passages, in LU (EBU Tech 3342: "
+                          "the spread from the 10th to the 95th percentile of 3-second loudness). Small means even and "
+                          "compressed, large means dynamic.",
+        "Stereo correlation": "How similar the left and right channels are: +1 is mono, values between 0 and +1 are "
+                              "normal for a stereo mix (lower = wider), and below 0 means parts are out of phase and "
+                              "cancel on a mono speaker.",
         "Dynamic range": "The gap between the loud and quiet parts, in dB. Bigger means more contrast.",
         "Frequency balance": "How the energy spreads across the range: sub (felt more than heard), bass, low-mids "
                              "(body), high-mids (presence) and air (sparkle).",
@@ -2750,6 +2950,13 @@ def track_report(r):
         L.append(f"- **{tip('Tuning')}:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
                  f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz). We've allowed for that in everything below")
     L.append(f"- **{tip('Chords used most', 'Chord names')}:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
+    g = r.get("guitar")
+    named = (r.get("context") or {}).get("keys") or []
+    if g and (not named or "guitar" in named):
+        shapes = " · ".join(f"{s['shape']} `{s['fingering']}`" + (f" (sounds {s['sounds']})" if g["capo"] else "")
+                            for s in g["shapes"])
+        where = f"capo on fret {g['capo']}, then play these open shapes" if g["capo"] else "all open shapes, no capo needed"
+        L.append(f"- **{tip('For guitar', 'Capo')}:** {where} ({g['open_share_pct']}% of the chords): {shapes}")
     if r["harmonic_rhythm_beats"]:
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     elif r.get("harmonic_rhythm_sec"):
@@ -2800,6 +3007,7 @@ def track_report(r):
 
     # Structure
     L += ["", "### Structure", "", "_The sections in order, and what changes from one to the next._", "",
+          *([timeline_svg(r), ""] if timeline_svg(r) else []),
           f"| {tip('Section', 'Form')} | Time | Length | {tip('Energy', 'Section energy')} | Key | "
           f"{tip('Main chords', 'Chord names')} | {tip('Drums', 'Instrument columns')} | {tip('Bass', 'Instrument columns')} |",
           "|---------|------|--------|--------|-----|-------------|-------|------|"]
@@ -2822,8 +3030,7 @@ def track_report(r):
           + (f", {rh['groove']} ({rh['syncopation_pct']}% {tip('off-beat', 'Syncopation')})" if "groove" in rh else ""),
           f"- **{tip('Percussive', 'Percussive')} vs tonal:** {rh['percussive_pct']}% percussive energy",
           f"- **{tip('Tone')}:** {s['tone']} ({tip(str(s['brightness_hz']) + ' Hz', 'Brightness')} brightness), {s['texture']}",
-          f"- **Loudness:** avg {s['avg_loudness_db']} {tip('dBFS')}, {tip('dynamic range', 'Dynamic range')} "
-          f"{s['dynamic_range_db']} dB",
+          *loudness_lines(s),
           f"- **{tip('Energy arc', 'Energy')}:** `{sparkline(s['energy_curve'])}`"
           + (f" — biggest build into **{s['biggest_build']['time']}**" if s["biggest_build"] else "")
           + (f", quietest around **{s['quietest_moment']}**" if s["quietest_moment"] else ""),
@@ -3052,6 +3259,87 @@ def bass_rhythm_report(r):
               f"(X = a note starts there in at least half the bars, x = in a quarter to half of them; "
               f"{tip('how to read', 'Rhythm grid')}):", "",
               "```", "         " + counts, ("Low part " if word != "bass" else "Bass     ") + " ".join(rh.get("usual_positions", "")), "```", ""]
+    return L
+
+
+SECTION_HUES = [210, 35, 140, 330, 265, 90, 5, 180, 50, 300]  # one colour per section letter
+
+
+def timeline_svg(r):
+    """The whole track at a glance: its loudness over time, with the sections as coloured blocks underneath
+    (a repeated letter keeps its colour) and a time axis. Plain SVG, so it shows on the web page and in most
+    Markdown viewers; text uses the page's own colour, so it reads in light and dark mode."""
+    line, secs, dur = (r.get("sound") or {}).get("energy_line"), r.get("sections") or [], r.get("duration_sec") or 0
+    if not line or not secs or dur <= 0:
+        return ""
+    W, H, top, band = 720, 112, 6, 22
+    curve_h = H - band - 30
+    x = lambda t: 4 + (W - 8) * t / dur
+    pts = [(4 + (W - 8) * (i + 0.5) / len(line), top + curve_h * (1 - v)) for i, v in enumerate(line)]
+    area = f"M4,{top + curve_h} " + " ".join(f"L{a:.1f},{b:.1f}" for a, b in pts) + f" L{W - 4},{top + curve_h} Z"
+    hue = {}
+    for s in secs:
+        hue.setdefault(s["label"], SECTION_HUES[len(hue) % len(SECTION_HUES)])
+    y0 = top + curve_h + 4
+    blocks = "".join(
+        f'<rect x="{x(s["start"]):.1f}" y="{y0}" width="{max(1.0, x(s["end"]) - x(s["start"]) - 1):.1f}" height="{band}" '
+        f'fill="hsl({hue[s["label"]]},70%,55%)" fill-opacity="0.45"><title>{html.escape(s["label"])} '
+        f'{fmt_time(s["start"])}-{fmt_time(s["end"])}, {s["energy"]} energy</title></rect>'
+        + (f'<text x="{(x(s["start"]) + x(s["end"])) / 2:.1f}" y="{y0 + 15}" text-anchor="middle" font-size="12" '
+           f'font-weight="700" fill="currentColor">{html.escape(s["label"])}</text>' if x(s["end"]) - x(s["start"]) > 14 else "")
+        for s in secs)
+    step = next(st for st in (10, 15, 30, 60, 120, 300, 600) if dur / st <= 10)
+    ticks = "".join(f'<text x="{x(t):.1f}" y="{H - 4}" text-anchor="middle" font-size="10" fill="currentColor" '
+                    f'fill-opacity="0.7">{fmt_time(t)}</text>' for t in range(0, int(dur) + 1, step))
+    return (f'<svg class="timeline" viewBox="0 0 {W} {H}" width="100%" role="img" '
+            f'aria-label="Loudness over time with the sections {" ".join(s["label"] for s in secs)}" '
+            f'style="max-width:{W}px;display:block;margin:4px 0 12px">'
+            f'<path d="{area}" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-opacity="0.55" '
+            f'stroke-width="1"/>{blocks}{ticks}</svg>')
+
+
+def loudness_lines(s):
+    """Loudness as streaming services measure it, and what that means on Spotify (its published rule)."""
+    st = s.get("streaming") or {}
+    if not st or "error" in st:
+        return [f"- **Loudness:** average {s['avg_loudness_db']} {tip('dBFS')}, {tip('dynamic range', 'Dynamic range')} "
+                f"{s['dynamic_range_db']} dB"]
+    parts = [f"{tip(str(st['lufs']) + ' LUFS', 'LUFS')} integrated", f"{tip('true peak', 'True peak')} {st['true_peak_db']} dBTP"]
+    if st.get("loudness_range_lu") is not None:
+        parts.append(f"{tip('loudness range', 'Loudness range')} {st['loudness_range_lu']} LU")
+    if st.get("stereo_correlation") is not None:
+        parts.append(f"{tip('stereo correlation', 'Stereo correlation')} {st['stereo_correlation']}")
+    elif st.get("mono_file"):
+        parts.append("a mono file (measured as it plays, on both speakers)")
+    L = [f"- **Loudness:** " + " · ".join(parts)]
+    gain, tp, lufs = st["spotify_gain_db"], st["true_peak_db"], st["lufs"]
+    if gain < -0.4:
+        spot = (f"Spotify turns it down {abs(gain)} dB to its usual {SPOTIFY_TARGET_LUFS:g} LUFS, so making it any "
+                "louder gains nothing there.")
+    elif lufs < SPOTIFY_TARGET_LUFS - 0.4 and gain < SPOTIFY_TARGET_LUFS - lufs - 0.4:
+        lift = (f"Spotify would lift it only {gain} dB" if gain >= 0.1 else "Spotify won't turn it up at all")
+        spot = (f"{lift}: it keeps the true peak at or below -1 dBTP, and this track's peaks reach {tp} dBTP. So it "
+                f"plays at {st['spotify_plays_at']} LUFS, quieter than most tracks around it. A limiter on the master "
+                "would let it come up further.")
+    elif gain > 0.4:
+        spot = f"Spotify turns it up {gain} dB to its usual {SPOTIFY_TARGET_LUFS:g} LUFS."
+    else:
+        spot = "That's Spotify's own playback level, so it plays as it is."
+    L.append(f"- **On Spotify:** {spot}")
+    if tp > 0:
+        L.append(f"- **Clipping:** the peaks go {tp} dB above digital full scale, so this file distorts once it's "
+                 "converted or played back. Record a little further from the source or with lower input gain, or put "
+                 "a limiter on the master.")
+    elif tp > -1 or (lufs > SPOTIFY_TARGET_LUFS and tp > -2):
+        limit = -2 if lufs > SPOTIFY_TARGET_LUFS else -1
+        why = (f"the {limit} dBTP Spotify recommends for masters louder than {SPOTIFY_TARGET_LUFS:g} LUFS" if limit == -2
+               else f"the {limit} dBTP Spotify recommends")
+        L.append(f"- **Peaks:** at {tp} dBTP they're above {why}, so converting to streaming formats can add a little "
+                 f"distortion. A true-peak limiter set to {limit} dBTP fixes it.")
+    corr = st.get("stereo_correlation")
+    if corr is not None and corr < 0:
+        L.append(f"- **Phase:** left and right are partly out of phase (correlation {corr}), so parts of the mix "
+                 "cancel out on a mono speaker such as a phone. Check for a flipped channel or a very wide stereo effect.")
     return L
 
 
