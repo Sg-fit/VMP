@@ -1170,6 +1170,45 @@ def comparison_checks(tmp):
           [t["file"] for t in accounts.job_summary(results)["tracks"]] == ["cmp_mine.wav"])
 
 
+def memory_checks():
+    """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
+    notes, feedback reorders ideas - on made-up histories where the right answer is known."""
+    import memory
+    print("\n== A musician's memory ==")
+    past = [{"key": "G major", "mode": "Ionian (major)", "meter": "4/4", "tempo_bpm": b, "duration_sec": 180,
+             "chords": {"G": 60, "C": 40, "D": 30}, "energy": 6} for b in (90, 100, 110)]
+    ctx = [{"keys": ["guitar"], "genre_key": "rock"}, {"keys": ["guitar"], "genre_key": "rock"}, {"keys": ["guitar", "voice"]}]
+    fb = [{"area": "harmony", "text": "Borrow from G minor: try a minor iv", "vote": 1},
+          {"area": "drums", "text": "The kick stays on the main beats. Add one push", "vote": -1}]
+    mem = memory.build(past, ctx, fb, [], goals="darker songs")
+    check("memory", "habits: the usual line-up and genre (ticked in most saved analyses), tempo range",
+          mem["usual_instruments"] == ["guitar"] and mem["usual_genre"] == "rock" and mem["tempo"]["min"] == 90
+          and mem["tempo"]["max"] == 110, f"{mem['usual_instruments']} {mem['usual_genre']} {mem['tempo']}")
+    new = {"key": "A minor", "mode": "Aeolian (natural minor)", "mode_confidence": "high", "tempo_bpm": 140,
+           "meter": {"label": "3/4", "confidence": "detected"}, "duration_sec": 170,
+           "chords_used": [{"chord": "Am", "seconds": 40}, {"chord": "G", "seconds": 20}], "sound": {}}
+    notes = " ".join(memory.compare_with_past(new, mem))
+    same = {"key": "G major", "mode": "Ionian (major)", "tempo_bpm": 100, "meter": {"label": "4/4", "confidence": "detected"},
+            "duration_sec": 180, "chords_used": [{"chord": "G", "seconds": 40}], "sound": {}}
+    check("memory", "a new track's firsts are named: minor key, faster than ever, 3/4, new chords",
+          all(x in notes for x in ("first saved track in a minor key", "Faster than anything", "first track in 3/4", "Am")),
+          notes)
+    check("memory", "a track like your others gets no comparison, and with one past track there's no 'usual' yet",
+          memory.compare_with_past(same, mem) == [] and
+          memory.compare_with_past(new, memory.build(past[:1], ctx[:1], [], [])) == [])
+    vague = dict(same, tempo_bpm=50, tempo_approximate=True)
+    check("memory", "close call: an uncertain tempo gets a note pointing at your usual range; a clear one doesn't",
+          "about 100 BPM" in " ".join(memory.close_call_notes(vague, mem))
+          and memory.close_call_notes(dict(same, tempo_bpm=50), mem) == [])
+    ideas = [{"area": "drums", "idea": "The kick stays on the main beats. Add one push - a kick on the 'a' of 2"},
+             {"area": "sound", "idea": "Very little high-end air"},
+             {"area": "harmony", "idea": "Borrow from A minor: try a minor iv - Dm"}]
+    ranked = [i["area"] for i in memory.rank_ideas(ideas, mem)]
+    check("memory", "ideas: a disliked one is dropped, a liked kind comes first", ranked == ["harmony", "sound"], str(ranked))
+    check("memory", "the AI gets the musician's habits and goals", "darker songs" in memory.ai_profile(mem)
+          and "G major" in memory.ai_profile(mem))
+
+
 def tag_checks(tmp, online=False):
     """"Find music like this": parsing song names, weighting, the light analysis, the style model, and that a tag
     job does none of the musician's work."""
@@ -1207,6 +1246,41 @@ def tag_checks(tmp, online=False):
     check("tags", "tag search links use each site's tag address",
           discover.links("Trip Hop")["Bandcamp"] == "https://bandcamp.com/tag/trip-hop"
           and discover.links("Trip Hop")["Last.fm"] == "https://www.last.fm/tag/trip%20hop/artists")
+
+    # Lesser-known artists, on canned MusicBrainz / ListenBrainz answers (known right result)
+    fake_artists = [  # name, mbid, tags, listeners
+        ("Massive Attack", "m1", {"trip hop": 20, "downtempo": 10}, 326000),   # already in the list: left out
+        ("Hugo Kant", "a1", {"trip hop": 3, "downtempo": 2, "nu jazz": 1}, 4500),
+        ("Bows", "a2", {"trip hop": 1}, 1800),
+        ("Moby", "a3", {"trip hop": 5, "downtempo": 4}, 310000),              # too popular
+        ("Bedroom Demo", "a4", {"trip hop": 1, "downtempo": 1}, 3),           # hardly any listeners yet
+        ("Nobody Knows", "a5", {"trip hop": 1, "downtempo": 1}, None),        # no listening data
+    ]
+    saved_get = discover._get
+
+    def fake_get(url, host_gap=0.0, ua=None, timeout=20, retries=2, data=None):
+        if "musicbrainz.org/ws/2/artist?" in url:
+            return json.dumps({"artists": [{"id": i, "name": n, "tags": [{"name": t, "count": c} for t, c in tg.items()]}
+                                           for n, i, tg, _ in fake_artists]})
+        if "listenbrainz" in url:
+            ids = json.loads(data)["artist_mbids"]
+            pop = {i: u for _, i, _, u in fake_artists}
+            return json.dumps([{"artist_mbid": i, "total_user_count": pop.get(i)} for i in ids])
+        raise OSError("unexpected " + url)
+    discover._get = fake_get
+    try:
+        agg_ = {"style": [{"tag": "trip hop", "score": 0.6}, {"tag": "downtempo", "score": 0.5}], "mood": [], "sound": []}
+        got, searched = discover.lesser_known(agg_, {"Massive Attack": "m1"}, discover.Cache(None))
+        none_, _ = discover.lesser_known({"style": [], "mood": [], "sound": []}, {}, discover.Cache(None))
+    finally:
+        discover._get = saved_get
+    check("tags", "lesser-known artists: your own artists, the famous and the barely-played are left out; "
+          "more shared tags rank higher", [a["name"] for a in got] == ["Hugo Kant", "Bows"]
+          and searched[:2] == ["trip hop", "downtempo"], str([(a["name"], a["listeners"]) for a in got]))
+    check("tags", "nothing specific to search for -> no artist search", none_ == [])
+    check("tags", "a description is read as tags of its own",
+          discover.parse_description("Melancholic, trip hop; female vocals and lo-fi") ==
+          ["melancholic", "trip hop", "female vocals", "lo-fi"])
 
     # The light analysis: what tags need, quicker, same verdicts on drums
     blues = write(Path(tmp) / "Test Artist - Tag Blues.wav", guitar_blues())
@@ -1273,6 +1347,14 @@ def tag_checks(tmp, online=False):
             (check if "trip hop" in got else warn)("tags", "MusicBrainz lookup by name works", ", ".join(got))
         except Exception as e:
             warn("tags", "MusicBrainz lookup by name works", str(e)[:200])
+        try:
+            agg_ = {"style": [{"tag": "trip hop", "score": 0.6}, {"tag": "downtempo", "score": 0.5}], "mood": [], "sound": []}
+            got, _ = discover.lesser_known(agg_, {"Massive Attack": None}, discover.Cache(None))
+            ok_ = got and all(discover.MIN_LISTENERS <= a["listeners"] <= discover.MAX_LISTENERS for a in got)
+            (check if ok_ else warn)("tags", "lesser-known artists found live (MusicBrainz + ListenBrainz)",
+                                     ", ".join(f"{a['name']} ({a['listeners']})" for a in got[:5]))
+        except Exception as e:
+            warn("tags", "lesser-known artists found live (MusicBrainz + ListenBrainz)", str(e)[:200])
 
 
 # ---------------------------------------------------------------- main

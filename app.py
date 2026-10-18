@@ -455,12 +455,14 @@ def analyze():
     tags_mode = request.form.get("mode") == "tags"
     playlist = (request.form.get("playlist") or "").strip()[:500]
     songs = (request.form.get("songs") or "")[:8000]
+    description = (request.form.get("description") or "").strip()[:300]
     if tags_mode and playlist and not re.match(r"^(https?://|spotify:)", playlist):
         return form_page("That playlist link doesn't look right. It should start with https://, like a link "
                          "copied from Spotify or YouTube.", 400)
-    if not uploads and not (tags_mode and (playlist or songs.strip())):
+    if not uploads and not (tags_mode and (playlist or songs.strip() or description)):
         return form_page("Choose at least one audio file to get started." if not tags_mode else
-                         "Add a few songs first: upload them, paste a playlist link, or type their names.", 400)
+                         "Add a few songs first (upload them, paste a playlist link or type their names), or "
+                         "describe what you're after.", 400)
     if len(uploads) > MAX_FILES:
         return form_page(f"That's more than {MAX_FILES} files. Upload up to {MAX_FILES} at a time.", 400)
 
@@ -481,7 +483,7 @@ def analyze():
             name, n = f"{stem}_{n}{ext}", n + 1
         f.save(d / "input" / name)
         saved.append(name)
-    if not saved and uploads and not (tags_mode and (playlist or songs.strip())):
+    if not saved and uploads and not (tags_mode and (playlist or songs.strip() or description)):
         shutil.rmtree(d, ignore_errors=True)
         return form_page("We can't read any of those files. Try mp3, wav, m4a, flac, ogg or aac.", 400)
     reference = None
@@ -497,7 +499,8 @@ def analyze():
 
     ahead = job_queue.qsize()
     if tags_mode:  # finding music: none of the musician's options apply
-        write_status(d, state="queued", mode="tags", files=saved, playlist=playlist, songs=songs, created=time.time(),
+        write_status(d, state="queued", mode="tags", files=saved, playlist=playlist, songs=songs,
+                     description=description, created=time.time(),
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
         write_status(d, state="queued", mode="musician", files=saved, reference=reference,

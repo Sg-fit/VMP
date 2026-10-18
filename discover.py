@@ -60,7 +60,7 @@ def offline():
     return os.environ.get("MUSIC_OFFLINE") == "1"
 
 
-def _get(url, host_gap=0.0, ua=USER_AGENT, timeout=20, retries=2):
+def _get(url, host_gap=0.0, ua=USER_AGENT, timeout=20, retries=2, data=None):
     """GET url -> text. host_gap: minimum seconds between calls to the same host (MusicBrainz asks for 1).
     A busy server (503/429) is retried after a pause."""
     import urllib.error
@@ -72,7 +72,10 @@ def _get(url, host_gap=0.0, ua=USER_AGENT, timeout=20, retries=2):
         if wait > 0:
             time.sleep(wait)
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept-Language": "en"})
+            headers = {"User-Agent": ua, "Accept-Language": "en"}
+            if data is not None:  # a JSON query sent as POST (ListenBrainz popularity)
+                headers["Content-Type"] = "application/json"
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
@@ -266,6 +269,7 @@ def musicbrainz(song, cache):
         # official genres first; free-form tags fill in descriptors ("melancholic", "female vocalists")
         tags = {**_ranked(a.get("tags", []), hit.get("artist")), **_ranked(a.get("genres", []), hit.get("artist"))}
     song["found_artist"] = hit.get("artist")
+    song["artist_id"] = hit.get("artist_id")
     return tags
 
 
@@ -459,7 +463,92 @@ def search_plan(agg, known_artists, n=8):
             "combos": combos[:6], "skip_artists": sorted(known_artists)}
 
 
-def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, cache_dir=None, context=None):
+# Lesser-known artists: real acts (some listeners) that are clearly less played than what the list already holds.
+MIN_LISTENERS = 20                # fewer than this on ListenBrainz and there's little sign anyone plays them yet
+MAX_LISTENERS = 10000             # the ceiling when we don't know how popular the list's own artists are
+OWN_SHARE = 0.25                  # otherwise: under a quarter of the list's typical (median) artist
+
+
+def artists_with_tags(tags, cache):
+    """MusicBrainz artists carrying all of `tags` (one search; 1 request a second, as MusicBrainz asks)."""
+    query = " AND ".join(f'tag:"{t.replace(chr(34), "")}"' for t in tags)
+
+    def fetch():
+        data = json.loads(_get("https://musicbrainz.org/ws/2/artist?fmt=json&limit=100&query=" + urllib.parse.quote(query),
+                               host_gap=1.1))
+        clean = lambda s: s.strip().strip("\"'").strip().lower()  # some listeners type tags in quotes
+        return [{"id": a["id"], "name": a["name"], "tags": {clean(t["name"]): t.get("count", 1) for t in a.get("tags", [])}}
+                for a in data.get("artists", [])]
+    return cache.get(f"mb:artists:{query}", fetch, days=7) or []
+
+
+def listener_counts(mbids, cache):
+    """Distinct listeners per artist from ListenBrainz (public, no key). {mbid: count or None}."""
+    out = {}
+    todo = [m for m in dict.fromkeys(mbids) if m]
+    for i in range(0, len(todo), 100):
+        part = todo[i:i + 100]
+
+        def fetch(part=part):
+            rows = json.loads(_get("https://api.listenbrainz.org/1/popularity/artist", host_gap=0.5,
+                                   data=json.dumps({"artist_mbids": part}).encode()))
+            return {r["artist_mbid"]: r.get("total_user_count") for r in rows}
+        out.update(cache.get("lb:pop:" + hashlib.sha1("|".join(part).encode()).hexdigest(), fetch, days=7) or {})
+    return out
+
+
+def lesser_known(agg, known, cache, extra_tags=(), n=12):
+    """Artists with the list's sound that fewer people listen to. Searched by the list's most specific tags (pairs
+    first: two tags together narrow the field), minus the artists already in the list, kept only between
+    MIN_LISTENERS and a ceiling below the list's own artists, and ranked by how many of the list's tags they carry.
+    known: {name: mbid or None}. Returns (artists, the tags searched)."""
+    weight = {key(t["tag"]): t["score"] for cat in ("style", "mood", "sound") for t in agg.get(cat, [])}
+    for t in extra_tags:
+        weight[key(t)] = max(weight.get(key(t), 0), 1.0)
+    seeds = list(dict.fromkeys(list(extra_tags) + [t["tag"] for t in agg.get("style", []) if t["score"] >= 0.08]))[:3]
+    if not seeds:
+        return [], []
+    queries = [seeds[i:j] for i in range(len(seeds)) for j in range(i + 2, len(seeds) + 1) if j - i == 2] or [seeds[:1]]
+    queries += [[seeds[0]]]
+    found = {}
+    for q in queries:
+        for a in artists_with_tags(q, cache):
+            found.setdefault(a["id"], a)
+    known_keys = {key(name) for name in known}
+    cands = [a for a in found.values() if key(a["name"]) not in known_keys and a["id"] not in set(known.values())]
+    counts = listener_counts([a["id"] for a in cands] + [m for m in known.values() if m], cache)
+    own = sorted(c for m in known.values() if m and (c := counts.get(m)))
+    ceiling = min(MAX_LISTENERS, OWN_SHARE * own[len(own) // 2]) if own else MAX_LISTENERS
+    out = []
+    for a in cands:
+        c = counts.get(a["id"])
+        if c is None or not MIN_LISTENERS <= c <= ceiling:
+            continue
+        shared = list({key(t): t for t in a["tags"] if key(t) in weight}.values())  # 'trip-hop' = 'trip hop'
+        if not shared:
+            continue
+        out.append({"name": a["name"], "mbid": a["id"], "listeners": c, "shared_tags": shared[:5],
+                    "match": round(sum(weight[key(t)] for t in shared), 3)})
+    # Among equally good matches, the ones more people already enjoy first: all of them are well below the
+    # list's own artists anyway, and a few hundred listeners says more about a record than a handful.
+    out.sort(key=lambda x: (-x["match"], -x["listeners"]))
+    q = urllib.parse.quote
+    for x in out[:n]:
+        x["links"] = {"MusicBrainz": f"https://musicbrainz.org/artist/{x['mbid']}",
+                      "Bandcamp": f"https://bandcamp.com/search?q={q(x['name'])}",
+                      "YouTube": f"https://www.youtube.com/results?search_query={q(x['name'])}"}
+    return out[:n], seeds
+
+
+def parse_description(text):
+    """'melancholic, fingerpicked blues; lo-fi' -> ['melancholic', 'fingerpicked blues', 'lo-fi']: what the
+    listener asks for, used as tags of their own."""
+    parts = re.split(r"[,;\n]+|\band\b", (text or "").lower())
+    return list(dict.fromkeys(p.strip(" .") for p in parts if 2 <= len(p.strip(" .")) <= 40))[:6]
+
+
+def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, cache_dir=None, context=None,
+             description=None):
     """The tag job. Writes tags_report.md and tags.json into out_dir; returns the report text."""
     import musicanalyze as ma
     import tagger
@@ -527,6 +616,7 @@ def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, c
                 froms += song.get("sources", [])
         songs.append({"name": _display(song, f.name), "weight": AUDIO_WEIGHT, "tags": tags, "from": froms,
                       "artist": song.get("found_artist") or song.get("artist"), "audio": True,
+                      "artist_id": song.get("artist_id"),
                       "measured": {"tempo_bpm": r.get("tempo_bpm"),
                                    "mood": (r.get("feel") or {}).get("mood"),
                                    "styles": [s for s, _ in (m or {}).get("styles", [])[:3]]}})
@@ -537,7 +627,7 @@ def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, c
         crowd = lookup(s, cache)
         songs.append({"name": _display(s), "weight": NAME_WEIGHT, "tags": name_tags(crowd),
                       "from": s.get("sources", []), "artist": s.get("found_artist") or s.get("artist"),
-                      "audio": False, "found": bool(crowd)})
+                      "artist_id": s.get("artist_id"), "audio": False, "found": bool(crowd)})
     if named and offline():
         notes.append("Looking songs up by name is switched off on this server, so we could only use the songs "
                      "you uploaded.")
@@ -549,8 +639,22 @@ def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, c
 
     usable = [s for s in songs if s["audio"] or s.get("found")]
     agg = aggregate(usable)
-    plan = search_plan(agg, {s["artist"] for s in songs if s.get("artist") and (s["audio"] or s.get("found"))})
+    asked = parse_description(description)
+    if asked:  # the listener's own words: shown as theirs, searched first
+        agg["asked"] = [{"tag": t, "score": 1.0, "songs": 0, "from": ["you"]} for t in asked]
+    known = {s["artist"]: s.get("artist_id") for s in songs if s.get("artist") and (s["audio"] or s.get("found"))}
+    plan = search_plan(agg, set(known))
+    for t in reversed(asked):  # your words lead the searches too
+        plan["styles"].insert(0, {"tag": t, "score": 1.0, "songs": 0, "from": ["you"], "links": links(t)})
+    artists, searched = [], []
+    if not offline() and (agg.get("style") or asked):
+        progress("Looking for lesser-known artists with this sound…")
+        try:
+            artists, searched = lesser_known(agg, known, cache, extra_tags=asked)
+        except (OSError, ValueError, KeyError) as e:
+            notes.append(f"We couldn't look for lesser-known artists this time ({str(e)[:120]}).")
     data = {"list_name": list_name, "songs": songs, "tags": agg, "search": plan, "notes": notes,
+            "lesser_known": artists, "searched_tags": searched,
             "weights": {"audio": AUDIO_WEIGHT, "name_only": NAME_WEIGHT},
             "model": tagger.backend(), "credit": tagger.CREDIT if model else None}
     (out_dir / "tags.json").write_text(json.dumps(data, indent=2, default=list), encoding="utf-8")
@@ -602,6 +706,8 @@ def tag_report(d):
                  "spelled the way Spotify spells them.")
         return "\n".join(L)
     L += ["## Your tags", ""]
+    if t.get("asked"):
+        L.append("- **You asked for:** " + ", ".join(x["tag"] for x in t["asked"]))
     for cat, label, n in (("style", "Styles", 8), ("mood", "Mood", 8), ("sound", "Sound", 8), ("rhythm", "Rhythm", 8),
                           ("instruments", "Instruments heard", 6),
                           ("genre", "Broad genres", 5)):
@@ -610,6 +716,22 @@ def tag_report(d):
                 if cat == "genre" else ""
             L.append(f"- **{label}**{note}: {_fmt(t.get(cat, []), n)}")
     L.append("")
+    lk = d.get("lesser_known") or []
+    if lk:
+        L += ["## Lesser-known artists with this sound", "",
+              f"_Artists carrying your top tags (**{', '.join(d.get('searched_tags') or [])}**, searched in pairs) on "
+              "MusicBrainz that far fewer people play than the artists already in your list (listener counts from "
+              "ListenBrainz, the open listening database). Ranked by how many of your tags they share. Artists "
+              "already in your list are left out._", "",
+              "| Artist | Listeners | Shares your tags | Listen |", "|---|---|---|---|"]
+        for a in lk:
+            L.append(f"| **{a['name'].replace('|', '/')}** | {a['listeners']:,} | {', '.join(a['shared_tags'])} | "
+                     + " · ".join(f"[{site}]({url})" for site, url in a["links"].items()) + " |")
+        L.append("")
+    elif d.get("searched_tags"):
+        L += ["## Lesser-known artists with this sound", "",
+              f"We searched for artists tagged {', '.join(d['searched_tags'])} but none were both less played than "
+              "your list's artists and listened to by at least a few people. The tag searches below go wider.", ""]
     p = d["search"]
     if p["styles"] or p["moods"]:
         L += ["## Search with these", "",

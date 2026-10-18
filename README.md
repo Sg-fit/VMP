@@ -40,6 +40,12 @@ then search with those words to reach artists the big sites' recommendations rar
 - **Songs from a link or a list are looked up by name** (weight 0.4) on MusicBrainz (and Last.fm when
   `LASTFM_API_KEY` is set). Those are listeners' tags, mostly for the artist, so they count for less. Only the names
   are read from a playlist page, never the audio.
+- **Lesser-known artists with this sound:** artists carrying the list's most specific tags (MusicBrainz, searched
+  in pairs) that far fewer people play than the list's own artists: between 20 listeners and a quarter of the
+  list's typical artist (at most 10,000), counted by ListenBrainz, the open listening database (no key needed).
+  Ranked by how many of the list's tags they share; artists already in the list are left out.
+- **Describe what you're after** (optional): a few comma-separated words ("melancholic, trip hop") become tags of
+  their own and lead the searches; works with no songs at all.
 - **Output:** each tag's share of the list, broad genres kept apart (shown, never searched), and links to the tag
   pages on Bandcamp, Last.fm, MusicBrainz and RYM plus two-tag YouTube/Spotify searches. Artists already in
   the list are named so you can skip them.

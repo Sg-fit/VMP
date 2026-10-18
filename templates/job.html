@@ -142,7 +142,7 @@
   <div>
     <p class="eyebrow">Find music like this</p>
     <h1>Your tags</h1>
-    <div class="muted">{% if s.list_name %}{{ s.list_name }} · {% endif %}{{ s.songs_count or 0 }} song{{ 's' if s.songs_count != 1 }}{% if s.files %}, {{ s.files|length }} listened to{% endif %}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
+    <div class="muted">{% if s.list_name %}{{ s.list_name }} · {% endif %}{% if s.songs_count %}{{ s.songs_count }} song{{ 's' if s.songs_count != 1 }}{% if s.files %}, {{ s.files|length }} listened to{% endif %}{% elif s.description %}from your description: “{{ s.description }}”{% else %}0 songs{% endif %}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
     <div class="toolbar">
       <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='tags_report.md') }}"
          title="The tags and search links as a text file.">Tags (.md)</a>

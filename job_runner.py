@@ -57,7 +57,8 @@ def run_job(job_dir):
             # Finding music: tags only. None of the musician's extras (AI, MIDI, sheet music, ideas).
             import discover
             data, _ = discover.run_tags(files, d / "output", song_text=st.get("songs"), playlist_url=st.get("playlist"),
-                                        progress=lambda msg: write_status(d, message=msg), cache_dir=cache)
+                                        progress=lambda msg: write_status(d, message=msg), cache_dir=cache,
+                                        description=st.get("description"))
             write_status(d, state="done", ai_pending=False, message="Done", list_name=data.get("list_name"),
                          songs_count=len(data.get("songs") or []))
             return

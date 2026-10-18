@@ -127,6 +127,14 @@
         <label class="field" for="songs" style="margin-top:14px">Song names <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, one per line</span></label>
         <textarea id="songs" name="songs" rows="4" maxlength="8000"
           placeholder="Massive Attack - Teardrop&#10;Khruangbin - Maria También">{{ form.get('songs', '') }}</textarea>
+        <label class="field" for="description" style="margin-top:14px"><abbr title="A few words, separated by commas,
+          for the sound you're after. Each phrase is used as a tag of its own: it leads the searches and the
+          lesser-known artists we look for. Works on its own too, with no songs at all.">Describe what you're
+          after</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+        <input class="text" id="description" name="description" maxlength="300" value="{{ form.get('description', '') }}"
+               placeholder="melancholic, trip hop, female vocals">
+        <p class="muted small" style="margin:0 0 6px">We'll also find lesser-known artists with this sound: ones far fewer
+          people play than the artists you already know.</p>
         <details class="limits">
           <summary>How we come up with the tags</summary>
           <ul>
@@ -275,10 +283,11 @@
   setMode();
   form.addEventListener('submit', ev => {
     const tags = form.classList.contains('tags');
-    const named = document.getElementById('playlist').value.trim() || document.getElementById('songs').value.trim();
+    const named = document.getElementById('playlist').value.trim() || document.getElementById('songs').value.trim()
+                  || document.getElementById('description').value.trim();
     if (!input.files.length && !(tags && named)) {
       ev.preventDefault();
-      alert(tags ? 'Add some songs: upload them, paste a playlist link, or type their names.'
+      alert(tags ? 'Add some songs (upload them, paste a playlist link or type their names), or describe what you\'re after.'
                  : 'Please choose at least one audio file.');
       return;
     }
