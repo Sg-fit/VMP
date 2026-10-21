@@ -501,3 +501,116 @@ def example_overlay(width=520, height=150):
              _text(width - pad, height - 3, "example · energy over time", size=9, anchor="end", opacity=0.55)]
     return _svg(width, height, "".join(parts), "Example: your track's energy against a song you admire",
                 max_w=width)
+
+
+# ---------------------------------------------------------------- over time (the history page)
+def _date_ticks(t0, t1, x, n=5):
+    from datetime import datetime
+    span = max(1.0, t1 - t0)
+    fmt = "%d %b" if span < 200 * 86400 else "%b %Y"
+    return [(x(t0 + span * k / (n - 1)), datetime.fromtimestamp(t0 + span * k / (n - 1)).strftime(fmt)) for k in range(n)]
+
+
+def _running_median(points, k=5):
+    """The median of each point with its neighbours (k at a time): the trend without one odd track pulling it."""
+    vals = [v for _, v, _ in points]
+    out = []
+    for i in range(len(points)):
+        win = sorted(vals[max(0, i - k // 2):i + k // 2 + 1])
+        out.append((points[i][0], win[len(win) // 2]))
+    return out
+
+
+def time_series(points, t0, t1, unit="", label="Over time", lo=None, hi=None, width=460, height=170, decimals=0):
+    """Each track as a dot at the date it was saved; a line through the running median shows the trend.
+    One series: no legend (the title names it)."""
+    if not points:
+        return ""
+    points = sorted(points)
+    vals = [v for _, v, _ in points]
+    lo = min(vals) if lo is None else lo
+    hi = max(vals) if hi is None else hi
+    if hi - lo < 1e-9:
+        lo, hi = lo - 1, hi + 1
+    pad = (hi - lo) * 0.08
+    lo, hi = lo - pad, hi + pad
+    left, right, top, bottom = 40, 10, 8, 22
+    t1 = max(t1, points[-1][0])
+    t0 = min(t0, points[0][0])
+    x = lambda t: left + (width - left - right) * (t - t0) / max(1.0, t1 - t0)
+    y = lambda v: top + (height - top - bottom) * (1 - (v - lo) / (hi - lo))
+    parts = []
+    for k in range(3):
+        v = lo + pad + (hi - lo - 2 * pad) * k / 2
+        parts.append(f'<line x1="{left}" y1="{y(v):.1f}" x2="{width - right}" y2="{y(v):.1f}" stroke="currentColor" '
+                     f'stroke-opacity="0.1"/>')
+        parts.append(_text(left - 6, y(v) + 3, f"{v:.{decimals}f}", size=9, anchor="end", opacity=0.6))
+    if len(points) >= 3:
+        trend = _running_median(points)
+        d = " ".join(f"{'M' if i == 0 else 'L'}{x(t):.1f},{y(v):.1f}" for i, (t, v) in enumerate(trend))
+        parts.append(f'<path d="{d}" fill="none" stroke="currentColor" stroke-opacity="0.55" stroke-width="2" '
+                     f'stroke-linejoin="round" stroke-linecap="round"><title>trend (running median)</title></path>')
+    for t, v, tip in points:
+        parts.append(f'<circle cx="{x(t):.1f}" cy="{y(v):.1f}" r="4.5" style="fill:{C1}" stroke="var(--surface, #fff)" '
+                     f'stroke-width="2"><title>{esc(tip)}</title></circle>')
+    for tx, lab in _date_ticks(t0, t1, x):
+        parts.append(_text(tx, height - 4, lab, size=9, anchor="middle", opacity=0.6))
+    return _svg(width, height, "".join(parts), label, max_w=width)
+
+
+def activity_columns(buckets, width=460, height=150, label="Tracks analysed over time"):
+    """Tracks analysed per period, as columns (empty periods stay visible as gaps)."""
+    if not buckets:
+        return ""
+    left, right, top, bottom = 26, 6, 14, 22
+    top_n = max(1, max(b[2] for b in buckets))
+    n = len(buckets)
+    slot = (width - left - right) / n
+    bw = min(24.0, max(2.0, slot - 2))
+    ph = height - top - bottom
+    parts = [f'<line x1="{left}" y1="{top + ph}" x2="{width - right}" y2="{top + ph}" stroke="currentColor" '
+             f'stroke-opacity="0.3"/>', _text(left - 6, top + 4, top_n, size=9, anchor="end", opacity=0.6),
+             _text(left - 6, top + ph + 3, 0, size=9, anchor="end", opacity=0.6)]
+    for i, (_, lab, c, *_) in enumerate(buckets):
+        if not c:
+            continue
+        h = ph * c / top_n
+        cx = left + slot * i + (slot - bw) / 2
+        r = min(4.0, bw / 2, h)
+        d = (f"M{cx:.1f},{top + ph:.1f} v{-(h - r):.1f} a{r},{r} 0 0 1 {r},{-r} h{bw - 2 * r:.1f} "
+             f"a{r},{r} 0 0 1 {r},{r} v{h - r:.1f} z")
+        parts.append(f'<path d="{d}" style="fill:{C1}"><title>{esc(lab)}: {c} track{"s" if c != 1 else ""}</title></path>')
+        if bw >= 14:
+            parts.append(_text(cx + bw / 2, top + ph - h - 3, c, size=9, anchor="middle", opacity=0.75))
+    step = max(1, n // 5)
+    for i in range(0, n, step):
+        short = buckets[i][3] if len(buckets[i]) > 3 else buckets[i][1]
+        parts.append(_text(left + slot * (i + 0.5), height - 4, short, size=9, anchor="middle", opacity=0.6))
+    return _svg(width, height, "".join(parts), label, max_w=width)
+
+
+def key_timeline(points, t0, t1, width=460, height=170):
+    """Each track's key over time: up the side, its place on the Camelot wheel (1-12; neighbours are a step apart),
+    minor (A) and major (B) in two colours with a legend."""
+    if not points:
+        return ""
+    left, right, top, bottom = 30, 10, 22, 22
+    t1 = max(t1, max(p[0] for p in points))
+    t0 = min(t0, min(p[0] for p in points))
+    x = lambda t: left + (width - left - right) * (t - t0) / max(1.0, t1 - t0)
+    y = lambda n: top + (height - top - bottom) * (n - 1) / 11
+    parts = []
+    for n in (1, 4, 7, 10, 12):
+        parts.append(f'<line x1="{left}" y1="{y(n):.1f}" x2="{width - right}" y2="{y(n):.1f}" stroke="currentColor" '
+                     f'stroke-opacity="0.08"/>')
+        parts.append(_text(left - 6, y(n) + 3, n, size=9, anchor="end", opacity=0.6))
+    cols = {"A": C2, "B": C1}
+    for t, n, letter, tip in sorted(points):
+        parts.append(f'<circle cx="{x(t):.1f}" cy="{y(n):.1f}" r="4.5" style="fill:{cols[letter]}" '
+                     f'stroke="var(--surface, #fff)" stroke-width="2"><title>{esc(tip)}</title></circle>')
+    for i, (letter, word) in enumerate((("A", "minor (A)"), ("B", "major (B)"))):
+        parts.append(f'<circle cx="{left + 6 + 100 * i}" cy="8" r="4.5" style="fill:{cols[letter]}"/>')
+        parts.append(_text(left + 15 + 100 * i, 12, word, size=10, opacity=0.85))
+    for tx, lab in _date_ticks(t0, t1, x):
+        parts.append(_text(tx, height - 4, lab, size=9, anchor="middle", opacity=0.6))
+    return _svg(width, height, "".join(parts), "Keys over time on the Camelot wheel", max_w=width)

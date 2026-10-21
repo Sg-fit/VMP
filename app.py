@@ -42,6 +42,7 @@ from werkzeug.utils import secure_filename
 import accounts
 import charts
 import demos
+import trends
 import memory
 import musicanalyze as ma
 from job_runner import read_status, write_status
@@ -368,7 +369,9 @@ def history():
     items = _summaries(accounts.history(u["id"]))
     for it in items:
         it["state"] = read_status(DATA_DIR / it["job_id"]).get("state", "missing")
-    return render_template("history.html", items=items, version=ma.CODE_VERSION)
+    view = trends.overview(items, request.args.get("range", trends.DEFAULT_FRAME))
+    view["tiles"] = trends.tiles(view)
+    return render_template("history.html", items=items, v=view, version=ma.CODE_VERSION)
 
 
 MEMORY_SCAN = 15  # most recent saved analyses whose ideas count as "already shown"

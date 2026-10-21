@@ -44,6 +44,16 @@ range), never a changed result; ideas you disliked are dropped, liked kinds come
 last; the AI gets a short profile of your habits and goals. Everything is listed on that page, deletable one by one
 or all at once ("Forget everything"); anonymous use is unaffected. Logic and rules: `memory.py`.
 
+**History over time** (signed-in accounts, `/history`; logic in `trends.py`): pick a time frame (7 days, 30 days,
+3 months, 12 months, all time) and get summary tiles (tracks, minutes, typical tempo, energy, mood, loudness, share
+in minor keys, most used key), each compared with the previous period of the same length ("▲ up from 102"); **what
+changed** within the frame (your later tracks against your earlier ones: "your tempos have gone up: 113 BPM typical
+lately, against 95 before"), called a change only when it's big enough to hear (4% tempo, 1 energy point, 1 LU, 10
+positivity points, a quarter of tracks moving to minor) and only with two or more tracks on each side; **trend
+charts** (tracks per day/week/month with empty periods visible, tempo, energy, mood and loudness with a running
+median, keys on the Camelot wheel over time); and every saved analysis on a **timeline** grouped by day, week or
+month.
+
 **Demo reports** (`/demo/blues`, `/demo/band`, `/demo/electronic`, linked from the home page) show a finished report
 before anyone uploads: a solo guitar blues, a band song compared with a reference, and a house track compared with
 two club tracks it admires. They're made

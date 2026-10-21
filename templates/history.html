@@ -2,17 +2,54 @@
 {% block title %}History · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
-  .hist { list-style: none; margin: 32px 0 0; padding: 0; border-top: 2px solid var(--ink); }
-  .hist > li { padding: 18px 0; border-bottom: 1px solid var(--line); display: grid;
-               grid-template-columns: minmax(0, 1fr) auto; gap: 8px 20px; align-items: start; }
-  .hist .title { font-size: 1.2rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); text-decoration: none;
-                 overflow-wrap: anywhere; }
-  .hist .title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
-  .hist .when { font-size: .8rem; color: var(--muted); margin-top: 2px; }
-  .tracks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-  .trk .spk { display: inline-block; width: 90px; vertical-align: middle; margin-right: 10px; }
-  .trk { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .88rem; color: var(--muted); }
+  .frames { display: flex; flex-wrap: wrap; width: max-content; max-width: 100%; border: 1px solid var(--ink);
+            margin: 28px 0 0; }
+  .frames a { padding: 8px 14px; font-size: .88rem; font-weight: 600; text-decoration: none; color: var(--ink); }
+  .frames a + a { border-left: 1px solid var(--ink); }
+  .frames a[aria-current="page"] { background: var(--ink); color: var(--bg); }
+  .frames a:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-top: 2px solid var(--ink);
+           margin: 24px 0 0; }
+  .tile { padding: 14px 14px 16px 0; border-bottom: 1px solid var(--line); }
+  .tile .lab { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .tile .val { display: block; font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 700; line-height: 1.1;
+               letter-spacing: -.02em; margin: 4px 0 2px; overflow-wrap: anywhere; }
+  .tile .sub { font-size: .8rem; color: var(--muted); }
+  .tile .note { font-size: .82rem; margin-top: 4px; }
+
+  .changed { margin: 28px 0 0; }
+  .changed h2, .trends h2, .tl-head { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+                                      display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .changed h2::before, .trends h2::before, .tl-head::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+  .changed ul { margin: 0; padding-left: 18px; } .changed li { margin: 4px 0; }
+
+  .trends { margin: 36px 0 0; }
+  .trends .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px 36px; }
+  .trends figure { padding-top: 10px; border-top: 1px solid var(--line); }
+  .trends figure b { display: block; font-size: .95rem; margin-bottom: 6px; }
+
+  /* the timeline: a line down the left, a dot per saved analysis, grouped by day, week or month */
+  .tl-head { margin: 48px 0 0; }
+  .tl { list-style: none; margin: 0; padding: 0 0 0 26px; position: relative; }
+  .tl::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .tl .group { font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+               margin: 26px 0 8px; position: relative; }
+  .tl .group::before { content: ""; position: absolute; left: -26px; top: 2px; width: 14px; height: 14px;
+                       background: var(--bg); border: 2px solid var(--ink); }
+  .tl .entry { position: relative; padding: 12px 0 14px; border-bottom: 1px solid var(--line); display: grid;
+               grid-template-columns: minmax(0, 1fr) auto; gap: 6px 20px; align-items: start; }
+  .tl .entry::before { content: ""; position: absolute; left: -24px; top: 18px; width: 10px; height: 10px;
+                       background: var(--accent); border-radius: 50%; box-shadow: 0 0 0 3px var(--bg); }
+  .tl .entry.tags::before { background: var(--c1, #2a78d6); border-radius: 0; }
+  .tl .title { font-size: 1.1rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); text-decoration: none;
+               overflow-wrap: anywhere; }
+  .tl .title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+  .tl .when { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+  .tracks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+  .trk { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: .88rem; color: var(--muted); }
   .trk b { color: var(--ink); font-weight: 600; margin-right: 4px; overflow-wrap: anywhere; }
+  .trk .spk { display: inline-block; width: 90px; }
   .tag { font-size: .7rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px;
          border: 1px solid var(--line); color: var(--muted); }
   .tag.live { border-color: var(--accent); color: var(--ink); }
@@ -28,31 +65,73 @@
   details.rename input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
                          border-radius: 0; width: min(100%, 360px); margin: 8px 6px 0 0; }
   .empty { margin-top: 32px; }
-  @media (max-width: 600px) { .hist > li { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) { .tl .entry { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 {% block content %}
 <p class="eyebrow">Saved analyses</p>
 <h1>History</h1>
-<p class="lede">Everything you analyse while signed in is kept here until you delete it. Open one to read the full
-  report, play the MIDI or download the sheet music again.</p>
+<p class="lede">Your saved work over time: a summary for the period you pick, what changed, the trends, and every
+  analysis on a timeline. Open one to read its report again.</p>
 <a class="btn primary" href="{{ url_for('index') }}">New analysis →</a>
 <a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
 
 {% if items %}
-<p class="muted small" style="margin-top:28px">Each line is one track:
-  <abbr title="{{ glossary['Length'] }}">length</abbr> ·
-  <abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">tempo and meter</abbr> ·
-  <abbr title="{{ glossary['Key'] }} {{ glossary['Camelot'] }}">key (Camelot code)</abbr> ·
-  <abbr title="{{ glossary['Mode'] }}">mode</abbr> ·
-  <abbr title="{{ glossary['Energy level'] }} {{ glossary['Mood'] }}">energy and mood</abbr> ·
-  <abbr title="{{ glossary['Form'] }}">form</abbr>.</p>
-<ul class="hist">
-  {% for it in items %}
-  <li>
+<nav class="frames" aria-label="Time frame">
+  {% for key, label in v.frames.items() %}
+    <a href="{{ url_for('history', range=key) }}" {% if key == v.frame %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+
+{% if v['items'] %}
+<div class="tiles">
+  {% for t in v.tiles %}
+  <div class="tile"><span class="lab">{{ t.label }}</span><span class="val">{{ t.value }}</span>
+    {% if t.sub %}<div class="sub">{{ t.sub }}</div>{% endif %}
+    {% if t.note %}<div class="note">{{ t.note }}</div>{% endif %}</div>
+  {% endfor %}
+</div>
+
+<section class="changed" aria-labelledby="changed-h">
+  <h2 id="changed-h">What changed {{ 'in the last ' ~ v.frame_label if v.frame != 'all' else 'over time' }}</h2>
+  {% if v.changes %}
+    <ul>{% for c in v.changes %}<li>{{ c.text }}</li>{% endfor %}</ul>
+    <p class="muted small" style="margin:6px 0 0">Your later tracks in this period against your earlier ones. We only
+      call it a change when it's big enough to hear (about 4% in tempo, 1 point of energy, 1 LU of loudness).</p>
+  {% else %}
+    <p class="muted">Nothing has changed enough to hear{% if v.summary.tracks < 4 %}, or there aren't enough tracks
+      in this period to tell (we need two before and two after){% endif %}.</p>
+  {% endif %}
+</section>
+
+<section class="trends" aria-labelledby="trends-h">
+  <h2 id="trends-h">Trends</h2>
+  <div class="grid">
+    {% if v.activity %}<figure><b>Tracks analysed, per {{ v.bucket }}</b>{{ charts.activity_columns(v.activity)|safe }}
+      <figcaption>Gaps are {{ v.bucket }}s with nothing saved.</figcaption></figure>{% endif %}
+    {% if v.series.tempo %}<figure><b>Tempo</b>{{ charts.time_series(v.series.tempo, v.t0, v.t1, " BPM", "Tempo over time")|safe }}
+      <figcaption>Each dot is a track; the line follows the running median, so one odd track doesn't swing it.</figcaption></figure>{% endif %}
+    {% if v.series.energy %}<figure><b>Energy</b>{{ charts.time_series(v.series.energy, v.t0, v.t1, "/10", "Energy over time", lo=1, hi=10)|safe }}
+      <figcaption>1 is calm, 10 is full-on.</figcaption></figure>{% endif %}
+    {% if v.series.valence %}<figure><b>Mood</b>{{ charts.time_series(v.series.valence, v.t0, v.t1, "", "Mood (positivity) over time", lo=0, hi=100)|safe }}
+      <figcaption>Positivity: low is dark or tense, high is bright or happy.</figcaption></figure>{% endif %}
+    {% if v.series.lufs %}<figure><b>Loudness</b>{{ charts.time_series(v.series.lufs, v.t0, v.t1, " LUFS", "Loudness over time", decimals=0)|safe }}
+      <figcaption>Integrated loudness in LUFS. Spotify plays everything at about -14.</figcaption></figure>{% endif %}
+    {% if v.series['keys'] %}<figure><b>Keys</b>{{ charts.key_timeline(v.series['keys'], v.t0, v.t1)|safe }}
+      <figcaption>Up the side: the key's number on the Camelot wheel, where neighbours mix smoothly.</figcaption></figure>{% endif %}
+  </div>
+</section>
+
+<h2 class="tl-head">Timeline</h2>
+<ol class="tl">
+  {% for g in v.groups %}
+  <li class="group">{{ g.label }}</li>
+  {% for it in g['items'] %}
+  <li class="entry{{ ' tags' if it.summary and it.summary.kind == 'tags' }}">
     <div>
       <a class="title" href="{{ url_for('job', job_id=it.job_id) }}">{{ it.title }}</a>
       <div class="when">{{ it.created|datetime }}
+        {% if it.summary and it.summary.kind == 'tags' %} · <span class="tag">tag list</span>{% endif %}
         {% if it.state in ('queued', 'running') %} · <span class="tag live">analysing</span>
         {% elif it.state == 'error' %} · <span class="tag">failed</span>{% endif %}</div>
     </div>
@@ -80,8 +159,7 @@
           <span>{{ t.duration }}</span>
           {% if t.tempo_bpm %}<span>{{ t.tempo_bpm|round|int }} BPM {{ t.meter or '' }}</span>{% endif %}
           <span>{{ t.key }} ({{ t.camelot }})</span>
-          <span>{{ t.mode }}</span>
-          {% if t.energy %}<span>energy {{ t.energy }}/10 · {{ t.mood }}</span>{% endif %}
+          {% if t.energy %}<span>{{ charts.mini_meter(t.energy)|safe }}energy {{ t.energy }}/10 · {{ t.mood }}</span>{% endif %}
           {% if t.form %}<span>form {{ t.form }}</span>{% endif %}
           {% endif %}
         </div>
@@ -90,7 +168,12 @@
     {% endif %}
   </li>
   {% endfor %}
-</ul>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="empty muted">Nothing saved in the last {{ v.frame_label }}. <a href="{{ url_for('history', range='all') }}">See all
+  time</a>.</p>
+{% endif %}
 {% else %}
 <p class="empty muted">Nothing saved yet. Analyse a track while signed in, or open a result and press “Save to history”.</p>
 {% endif %}

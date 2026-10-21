@@ -934,6 +934,10 @@ def account_checks(base, job):
     check("web", "a saved analysis appears in History with its key and tempo",
           "short_phone_clip" in hist and key in hist and tempo in hist, hist[-300:])
     check("web", "the profile sums up the saved music", key in prof and "Your music is" in prof)
+    week = alice.get(base + "/history?range=7d", timeout=10).text
+    check("web", "History is a timeline with a time frame, summary tiles and trends",
+          all(x in week for x in ('class="tl"', 'aria-current="page">7 days', 'class="tiles"', "What changed", "Trends"))
+          and "short_phone_clip" in week)
     check("web", "the profile shows the music as pictures (keys on the wheel, tempos, the mood map)",
           'class="pics"' in prof and "Your keys on the Camelot wheel" in prof)
     check("web", "a saved analysis is private: others get 404",
@@ -1586,6 +1590,67 @@ def chart_checks(tmp):
           "missing: " + ", ".join(missing))
 
 
+def trend_checks():
+    """The history over time: changes are named only when they're big enough and there are enough tracks on each
+    side, the time frames split where they should, and quiet periods stay visible."""
+    import random
+    import xml.etree.ElementTree as ET
+    import charts
+    import trends
+    print("\n== History over time ==")
+    now = 1_800_000_000.0
+    day = 86400
+
+    def item(i, days_ago, **t):
+        base = {"file": f"t{i}.wav", "duration_sec": 150, "tempo_bpm": 100, "key": "C major", "camelot": "8B",
+                "energy": 5, "valence": 50, "lufs": -20.0}
+        return {"job_id": f"{i:032x}", "title": f"t{i}", "created": now - days_ago * day,
+                "summary": {"tracks": [{**base, **t}]}}
+    rising = [item(i, 200 - 20 * i, tempo_bpm=90 + 4 * i, energy=3 + i // 2, valence=70 - 4 * i, lufs=-24 + i,
+                   key="A minor" if i >= 5 else "C major", camelot="8A" if i >= 5 else "8B") for i in range(10)]
+    got = {(c["measure"], c["direction"]) for c in trends.changes(rising)}
+    want = {("tempo", "up"), ("energy", "up"), ("valence", "down"), ("lufs", "up"), ("minor_share", "up")}
+    check("trends", "a history that speeds up, gets louder, darker and more minor is described that way",
+          want <= got, str(sorted(got)))
+    rnd = random.Random(1)
+    flat = [item(i, 200 - 20 * i, tempo_bpm=100 + rnd.uniform(-1.5, 1.5), energy=5, valence=50 + rnd.uniform(-4, 4),
+                 lufs=-20 + rnd.uniform(-0.4, 0.4)) for i in range(10)]
+    check("trends", "a steady history with small wobbles reports no changes", not trends.changes(flat),
+          str([c["text"] for c in trends.changes(flat)]))
+    check("trends", "three tracks are too few to call a change (two before and two after needed)",
+          not trends.changes(rising[:3]))
+    frame_items = [item(1, 10), item(2, 40), item(3, 70)]
+    cur, prev = trends.split_frame(frame_items, "30d", now)
+    check("trends", "the 30-day frame holds the last 30 days; the comparison is the 30 days before",
+          [it["title"] for it in cur] == ["t1"] and [it["title"] for it in prev] == ["t2"])
+    tags = {"job_id": "f" * 32, "title": "list", "created": now - 5 * day, "summary": {"kind": "tags", "songs": 9}}
+    s = trends.summarise(frame_items + [tags])
+    check("trends", "tag lists are counted, but never as tracks", s["tracks"] == 3 and s["tag_lists"] == 1
+          and s["analyses"] == 3)
+    act, kind = trends.activity([item(1, 1), item(2, 60)], "90d", now)
+    check("trends", "activity per week covers the whole frame, empty weeks included",
+          kind == "week" and len(act) >= 12 and sum(a[2] for a in act) == 2 and sum(1 for a in act if a[2] == 0) >= 10)
+    g = trends.groups([item(1, 1), item(2, 1.2), item(3, 3)], "7d")
+    check("trends", "the timeline groups by day for a week, newest first",
+          [len(x["items"]) for x in g] == [2, 1] or [len(x["items"]) for x in g] == [1, 1, 1])
+    v = trends.overview(rising, "all", now)
+    v["tiles"] = trends.tiles(v)
+    svgs = [charts.activity_columns(v["activity"]), charts.time_series(v["series"]["tempo"], v["t0"], v["t1"]),
+            charts.key_timeline(v["series"]["keys"], v["t0"], v["t1"])]
+    ok = all(s_ for s_ in svgs)
+    for s_ in svgs:
+        try:
+            ET.fromstring(s_)
+        except ET.ParseError:
+            ok = False
+    check("trends", "the trend charts are drawn and well-formed", ok)
+    v2 = trends.overview(rising, "90d", now)
+    v2["tiles"] = trends.tiles(v2)
+    tempo_tile = next((t for t in v2["tiles"] if t["label"] == "Typical tempo"), {})
+    check("trends", "each tile says how it compares with the previous period, in words and an arrow",
+          tempo_tile.get("note", "").startswith("▲ up from"), str(tempo_tile))
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -1819,6 +1884,10 @@ def main():
             chart_checks(tmp)
         except Exception:
             check("charts", "chart checks ran", False, traceback.format_exc(limit=3))
+        try:
+            trend_checks()
+        except Exception:
+            check("trends", "trend checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:
