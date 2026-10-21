@@ -40,6 +40,7 @@ def _private_numba_cache():
 
 _private_numba_cache()
 
+import electronic
 import inspiration
 import instruments
 import notation
@@ -497,6 +498,99 @@ def detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, key_changes
     return out
 
 
+SPLIT_MIN_SEC = 8.0   # the drums stopping (or starting) for at least this long is a section change of its own
+REFINE_SEC = 4.0      # a boundary may move this far to the sharpest change in level nearby
+REFINE_GAIN_DB = 1.5  # ...when the change there is clearly sharper than where the boundary was
+REFINE_MIN_DB = 6.0   # ...and is a real level event: 6 dB summed over drums, low end and harmony (a part coming in)
+MIN_SECTION_SEC = 4.0
+
+
+def refine_sections(sections, curves, fps, btimes, duration, rms_db, drums=True, key_changes=()):
+    """Sections come from how the harmony and timbre repeat, which can miss what dance music is built from: the
+    drums dropping out for a breakdown while the chords carry on, and changes that land a bar either side of
+    where the clustering put them. So: split a section where the drums stop or start for SPLIT_MIN_SEC or more,
+    then move each boundary to the sharpest change in level (drums, low end, harmony) within REFINE_SEC, snapped
+    to a beat. A boundary on a key change stays (detect_structure snapped it there: key changes are more precise).
+    curves: per-frame power of the drums, the low end and the harmony."""
+    if len(sections) < 1 or duration < 4 * SPLIT_MIN_SEC:
+        return sections
+    win = max(1, int(0.5 * fps))
+    smooth = [np.convolve(c, np.ones(win) / win, mode="same") for c in curves]
+    db = [10 * np.log10(c + 1e-12) for c in smooth]
+    cuts = [x["start"] for x in sections[1:]]
+    drum_cuts = set()
+    if drums:
+        d = smooth[0]
+        on = d >= 0.1 * np.percentile(d, 90)  # within 10 dB of the drums' usual level
+        runs, start = [], 0
+        for i in range(1, len(on) + 1):
+            if i == len(on) or on[i] != on[start]:
+                runs.append([start, i, bool(on[start])])
+                start = i
+        merged = []
+        for r in runs:  # runs shorter than SPLIT_MIN_SEC belong to their neighbours
+            if merged and (r[1] - r[0] < SPLIT_MIN_SEC * fps or r[2] == merged[-1][2]):
+                merged[-1][1] = r[1]
+            else:
+                merged.append(r)
+        if merged and merged[0][1] - merged[0][0] < SPLIT_MIN_SEC * fps and len(merged) > 1:
+            merged[1][0] = merged[0][0]
+            merged = merged[1:]
+        for a, b in zip(merged, merged[1:]):
+            t = a[1] / fps
+            if a[2] != b[2] and not any(abs(t - c) < REFINE_SEC for c in cuts):
+                cuts.append(t)
+                drum_cuts.add(t)
+        cuts.sort()
+
+    def novelty(i):
+        w = int(2 * fps)
+        if i - w < 0 or i + w > len(db[0]):
+            return 0.0
+        return float(sum(abs(c[i:i + w].mean() - c[i - w:i].mean()) for c in db))
+    moved = []
+    for ci, t in enumerate(cuts):
+        i = int(t * fps)
+        lo, hi = max(0, int((t - REFINE_SEC) * fps)), min(len(db[0]), int((t + REFINE_SEC) * fps))
+        cand = range(lo, hi, max(1, int(fps / 20)))
+        best = max(cand, key=novelty, default=i)
+        from_drums = t in drum_cuts
+        on_key_change = any(abs(t - k) < 0.5 for k in key_changes)
+        if not on_key_change and novelty(best) >= max(novelty(i) + REFINE_GAIN_DB, REFINE_MIN_DB):
+            t = best / fps
+        if not on_key_change:
+            t = float(btimes[int(np.argmin(np.abs(btimes - t)))]) if len(btimes) else t
+        # a split made because the drums stopped must still leave SPLIT_MIN_SEC either side once it has moved
+        least = SPLIT_MIN_SEC if from_drums else MIN_SECTION_SEC
+        nxt = cuts[ci + 1] if ci + 1 < len(cuts) else duration
+        if least <= t <= duration - least and (not moved or t - moved[-1] >= least) \
+                and (not from_drums or nxt - t >= least):
+            moved.append(t)
+    # rebuild the sections on the new boundaries; each piece keeps the letter of the old section it mostly
+    # overlaps, and a piece split off from a longer one gets a letter of its own
+    bounds = [0.0] + moved + [duration]
+    out, used = [], {x["label"] for x in sections}
+    owner = []
+    for s_, e_ in zip(bounds[:-1], bounds[1:]):
+        best = max(sections, key=lambda x: min(e_, x["end"]) - max(s_, x["start"]))
+        owner.append(best)
+    for k, ((s_, e_), sec) in enumerate(zip(zip(bounds[:-1], bounds[1:]), owner)):
+        label = sec["label"]
+        same = [j for j, o in enumerate(owner) if o is sec]
+        if len(same) > 1 and k != max(same, key=lambda j: bounds[j + 1] - bounds[j]):
+            label = next(c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if c not in used)
+            used.add(label)
+        a, b = int(s_ * fps), max(int(e_ * fps), int(s_ * fps) + 1)
+        out.append({"label": label, "start": round(s_, 1), "end": round(e_, 1),
+                    "energy_db": round(float(np.mean(rms_db[a:b])), 1)})
+    order = list(dict.fromkeys(x["label"] for x in out))  # letters in order of appearance again
+    avg = float(np.mean([x["energy_db"] for x in out]))
+    for x in out:
+        x["label"] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[order.index(x["label"])]
+        x["energy"] = "high" if x["energy_db"] > avg + 2 else "low" if x["energy_db"] < avg - 3 else "medium"
+    return out
+
+
 def rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr):
     import librosa
     env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP)
@@ -535,6 +629,9 @@ def rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr):
     return out
 
 
+OCTAVE_CENTRES = (31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000)
+
+
 def sound_features(y, sr, rms_db, duration):
     import librosa
     S = np.abs(librosa.stft(y, hop_length=HOP)) ** 2
@@ -547,6 +644,11 @@ def sound_features(y, sr, rms_db, duration):
     # Brightness from the magnitude spectrum (S is power): the power-weighted centre sits at 400-500 Hz for almost
     # any music, so every track read "dark/warm". This is also the measure the per-section mood table uses.
     centroid = float(np.mean(librosa.feature.spectral_centroid(S=np.sqrt(S), sr=sr)))
+    # The tonal balance in octaves (the shape reference plugins draw), each band's share of the total in dB: a
+    # level-independent picture, so two tracks of different loudness can be laid over each other.
+    octaves = {f"{c:g}": round(float(10 * np.log10(S[(freqs >= c / 2 ** 0.5) & (freqs < c * 2 ** 0.5)].sum() / total
+                                                    + 1e-9)), 1)
+               for c in OCTAVE_CENTRES if c * 2 ** 0.5 <= sr / 2 * 1.05}
     flatness = float(np.mean(librosa.feature.spectral_flatness(S=S)))
 
     # Energy arc, one value per second.
@@ -564,6 +666,7 @@ def sound_features(y, sr, rms_db, duration):
     audible = rms_db[rms_db > rms_db.max() - 60]
     return {
         "frequency_balance_pct": bands,
+        "octave_db": octaves,
         "brightness_hz": round(centroid),
         "tone": "dark/warm" if centroid < 1500 else "balanced" if centroid < 3000 else "bright",
         "texture": "tonal / clean" if flatness < 0.02 else "mixed" if flatness < 0.1 else "noisy / textural",
@@ -699,6 +802,7 @@ def streaming_loudness(path):
     the true peak at -1 dBTP (their published rule). A mono file is measured as it plays: on both speakers."""
     ch, sr = load_audio_channels(path)
     corr = stereo_correlation(ch)
+    widths = electronic.band_widths(ch, sr)
     mono = ch.shape[0] == 1
     if mono:
         ch = np.vstack([ch, ch])
@@ -715,7 +819,8 @@ def streaming_loudness(path):
         gain = max(0.0, min(SPOTIFY_TARGET_LUFS - lufs, -1.0 - tp))
     return {"lufs": round(lufs, 1), "true_peak_db": round(tp, 1), "mono_file": mono,
             "loudness_range_lu": None if lra is None else round(lra, 1),
-            "stereo_correlation": None if corr is None else round(corr, 2),
+            "stereo_correlation": None if corr is None else round(corr, 2), "band_widths": widths,
+            "plr_db": round(tp - lufs, 1),  # peak-to-loudness ratio: low = heavily limited, high = punchy/dynamic
             "spotify_gain_db": round(gain, 1), "spotify_plays_at": round(lufs + gain, 1)}
 
 
@@ -1177,6 +1282,11 @@ def _analyze_audio(path, light=False):
             beat_frames = np.concatenate([np.linspace(a, b, raised, endpoint=False) for a, b in
                                           zip(beat_frames[:-1], beat_frames[1:])] + [beat_frames[-1:]]).round().astype(int)
             tempo *= raised
+    # Drums? (noisy hits, not a guitar's pick attacks) - and if so, make sure the beats sit on the kicks.
+    are_drums, hit_noise = instruments.hits_are_drums(y_perc, sr)
+    on_kicks = instruments.onto_kicks(y_perc, sr, beat_frames, HOP) if clear_beat and are_drums else None
+    if on_kicks is not None:
+        beat_frames = on_kicks
     tracked_frames = beat_frames  # beats actually heard (the meter is judged on these only)
     if clear_beat:
         # The tracker often stops at the last clear hit; keep counting beats to the end so a final
@@ -1313,6 +1423,12 @@ def _analyze_audio(path, light=False):
     low_band = spec[(spec_f >= 40) & (spec_f < 200)].sum(axis=0)
     mid_band = spec[(spec_f >= 200) & (spec_f < 2000)].sum(axis=0)
     sections = detect_structure(chroma, mfcc, rms_db, bounds, btimes, duration, [e for _, e, _ in ksec[:-1]])
+    if clear_beat:
+        m = min(len(drum_rms), len(low_band), len(mid_band), len(rms_db))
+        sections = refine_sections(sections, [drum_rms[:m] ** 2, low_band[:m], mid_band[:m]], sr / HOP, btimes,
+                                   duration, rms_db, drums=are_drums
+                                   and float(np.sum(y_perc ** 2)) >= 0.03 * float(np.sum(y ** 2)),
+                                   key_changes=[e for _, e, _ in ksec[:-1]])
     for sec in sections:
         top = Counter()
         for c in chords:
@@ -1324,9 +1440,12 @@ def _analyze_audio(path, light=False):
         sec["drums_level"] = float(np.mean(drum_rms[a:b] ** 2)) if a < len(drum_rms) else 0.0
         sec["bass_low_db"] = float(10 * np.log10(np.mean(low_band[a:b]) + 1e-12))
         sec["bass_ratio_db"] = float(10 * np.log10(np.mean(low_band[a:b]) / (np.mean(mid_band[a:b]) + 1e-12) + 1e-12))
+        # loudness as power (a mean of dB values lets the gaps between kicks drag a beat-only intro far down),
+        # and how much harmony (chords, pads, leads: 200 Hz-2 kHz of the drumless audio) plays
+        sec["loudness_db"] = round(float(10 * np.log10(np.mean(10 ** (rms_db[a:b] / 10)) + 1e-12)), 1)
+        sec["harmony_db"] = round(float(10 * np.log10(np.mean(mid_band[a:b]) + 1e-12)), 1)
     loudest_drums = max((sec["drums_level"] for sec in sections), default=0.0)
     # Drums = enough percussive sound AND noisy hits (a guitar's pick attacks are percussive but pitched).
-    are_drums, hit_noise = instruments.hits_are_drums(y_perc, sr)
     drums_anywhere = are_drums and float(np.sum(y_perc ** 2)) >= 0.03 * float(np.sum(y ** 2))
     if not drums_anywhere:
         loudest_drums = 0.0  # no real drums anywhere (same rule as instruments.drum_analysis)
@@ -1422,6 +1541,8 @@ def _analyze_audio(path, light=False):
         top, grid = instruments.top_line(y_harm, sr, btimes, tuning)
         result["top_line"] = top_line_summary(top, grid, chords, main_key)
     result["light"] = light
+    if clear_beat and not light:  # sidechain pumping, judged on the beats actually heard
+        result["pump"] = electronic.pump(y_harm, sr, librosa.frames_to_time(tracked_frames, sr=sr, hop_length=HOP))
     if not light:  # loudness as streaming services measure it (all channels, the file's own sample rate)
         try:
             result["sound"]["streaming"] = streaming_loudness(path)
@@ -1431,7 +1552,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-20a"
+ANALYSIS_VERSION = "2026-10-21a"
 
 
 def _cache_key(path, light=False):
@@ -1444,8 +1565,131 @@ def _cache_key(path, light=False):
 
 
 # What the musician can tell us when uploading (all optional): which instruments play, and the genre.
-INSTRUMENTS = {"drums": "drums / percussion", "bass": "bass", "guitar": "guitar", "keys": "piano / keys",
-               "voice": "voice", "strings": "strings", "winds": "wind / brass", "synth": "synth / electronic"}
+# The analysis reasons about eight families (drums, bass, guitar, keys, synth, voice, strings, winds); each
+# instrument the musician can pick belongs to one, and adds what's specific to it.
+# key -> (label, family, General MIDI program for its MIDI files, lowest usual note as MIDI; None = no pitch)
+INSTRUMENT_INFO = {
+    "drums": ("drum kit", "drums", None, None),
+    "drum_machine": ("drum machine / 808 kit", "drums", None, None),
+    "percussion": ("hand percussion", "drums", None, None),
+    "bass": ("bass guitar", "bass", 33, 23),                     # B0, a 5-string
+    "upright_bass": ("double bass", "bass", 32, 28),             # E1
+    "synth_bass": ("synth bass / 808", "bass", 38, 0),           # no limit
+    "acoustic_guitar": ("acoustic guitar", "guitar", 25, 40),    # E2 (drop D reaches D2)
+    "electric_guitar": ("electric guitar", "guitar", 27, 40),
+    "classical_guitar": ("classical guitar", "guitar", 24, 40),
+    "ukulele": ("ukulele", "guitar", 24, 60),                    # C4 (re-entrant gCEA)
+    "banjo": ("banjo", "guitar", 105, 50),                       # D3 (open G)
+    "mandolin": ("mandolin", "guitar", 25, 55),                  # G3
+    "guitar": ("guitar (other)", "guitar", 25, 40),
+    "piano": ("piano", "keys", 0, 21),                           # A0
+    "electric_piano": ("electric piano / Rhodes", "keys", 4, 28),  # E1 (73-key Rhodes)
+    "organ": ("organ", "keys", 16, 24),                          # C1 (pedals)
+    "accordion": ("accordion", "keys", 21, 28),
+    "mallets": ("vibraphone / mallets", "keys", 11, 53),         # F3
+    "keys": ("keys (other)", "keys", 0, 21),
+    "synth_pad": ("synth pads", "synth", 89, 0),
+    "synth_lead": ("lead synth", "synth", 81, 0),
+    "sampler": ("samples / vocal chops", "synth", 54, 0),
+    "synth": ("synth (other)", "synth", 81, 0),
+    "voice": ("lead vocals", "voice", 53, 38),                   # D2, a low bass voice
+    "backing_vocals": ("backing vocals / choir", "voice", 52, 36),
+    "violin": ("violin", "strings", 40, 55),                     # G3
+    "viola": ("viola", "strings", 41, 48),                       # C3
+    "cello": ("cello", "strings", 42, 36),                       # C2
+    "strings": ("string section", "strings", 48, 28),            # with double basses
+    "harp": ("harp", "strings", 46, 23),
+    "flute": ("flute", "winds", 73, 60),                         # C4
+    "clarinet": ("clarinet", "winds", 71, 50),                   # D3 (sounding)
+    "saxophone": ("saxophone", "winds", 65, 44),                 # Ab2, a tenor's low Bb
+    "trumpet": ("trumpet", "winds", 56, 54),                     # F#3
+    "trombone": ("trombone", "winds", 57, 40),                   # E2
+    "harmonica": ("harmonica", "winds", 22, 60),
+    "winds": ("wind / brass (other)", "winds", 71, 34),
+}
+INSTRUMENTS = {k: v[0] for k, v in INSTRUMENT_INFO.items()}
+FAMILY_LABEL = {"drums": "drums / percussion", "bass": "bass", "guitar": "guitar", "keys": "piano / keys",
+                "voice": "voice", "strings": "strings", "winds": "wind / brass", "synth": "synth / electronic"}
+INSTRUMENT_GROUPS = [  # how the upload form lays them out
+    ("Drums & percussion", ["drums", "drum_machine", "percussion"]),
+    ("Bass", ["bass", "upright_bass", "synth_bass"]),
+    ("Guitars & plucked", ["acoustic_guitar", "electric_guitar", "classical_guitar", "ukulele", "banjo", "mandolin",
+                           "guitar"]),
+    ("Keys", ["piano", "electric_piano", "organ", "accordion", "mallets", "keys"]),
+    ("Synths & samples", ["synth_pad", "synth_lead", "sampler", "synth"]),
+    ("Voice", ["voice", "backing_vocals"]),
+    ("Strings", ["violin", "viola", "cello", "strings", "harp"]),
+    ("Wind & brass", ["flute", "clarinet", "saxophone", "trumpet", "trombone", "harmonica", "winds"]),
+]
+GUITARS = {"acoustic_guitar", "electric_guitar", "classical_guitar", "guitar"}  # six strings: capo shapes, guitar clef
+
+
+# What the trained instrument model (tagger.py: MTG-Jamendo's 40 instrument classes) can name -> our instruments.
+HEARD_MAP = {
+    "accordion": "accordion", "acousticbassguitar": "bass", "acousticguitar": "acoustic_guitar", "bass": "bass",
+    "beat": "drum_machine", "bell": "mallets", "bongo": "percussion", "brass": "winds", "cello": "cello",
+    "clarinet": "clarinet", "classicalguitar": "classical_guitar", "computer": "synth", "doublebass": "upright_bass",
+    "drummachine": "drum_machine", "drums": "drums", "electricguitar": "electric_guitar",
+    "electricpiano": "electric_piano", "flute": "flute", "guitar": "guitar", "harmonica": "harmonica", "harp": "harp",
+    "horn": "winds", "keyboard": "keys", "oboe": "winds", "orchestra": "strings", "organ": "organ", "pad": "synth_pad",
+    "percussion": "percussion", "piano": "piano", "pipeorgan": "organ", "rhodes": "electric_piano",
+    "sampler": "sampler", "saxophone": "saxophone", "strings": "strings", "synthesizer": "synth",
+    "trombone": "trombone", "trumpet": "trumpet", "viola": "viola", "violin": "violin", "voice": "voice",
+}
+HEARD_NAME = {"brass": "brass", "horn": "French horn", "oboe": "oboe", "orchestra": "orchestra", "pipeorgan": "pipe organ",
+              "computer": "electronics", "synthesizer": "synthesizer", "keyboard": "keyboard", "beat": "programmed beat",
+              "bell": "bells", "bongo": "bongos", "guitar": "guitar", "acousticbassguitar": "acoustic bass",
+              "rhodes": "Rhodes", "voice": "voice", "drums": "drums", "bass": "bass"}
+HEARD_SHOW = 0.15     # the model's score above which we list an instrument as heard
+HEARD_SURE = 0.5      # ...and above which it's sure enough to mention one the musician didn't tick
+HEARD_FEATURE = 0.4   # a reference "features" an instrument at this score; yours "hardly has it" below HEARD_SHOW
+HEARD_MAX = 6
+
+
+def hear_instruments(paths, progress=lambda m: None):
+    """Which instruments a trained model hears in each file: {path: {"instruments": [...], "voice": p, ...}}, or
+    {} when the model isn't installed here (it's optional) or fails. Its scores are a separate opinion from our
+    own measurements: they're shown and compared, never used to overrule what the analysis or the musician says."""
+    import tagger
+    if os.environ.get("MUSIC_HEAR", "1") == "0" or not tagger.available() or not paths:
+        return {}
+    progress("Listening for which instruments play…")
+    try:
+        found = tagger.predict([str(p) for p in paths], load_audio)
+    except Exception as e:  # a bonus: never lose the analysis over it
+        progress(f"  ! instrument model skipped ({str(e)[:120]})")
+        return {}
+    out = {}
+    for path, summary in found.items():
+        scores = summary.get("instrument_scores") or dict(summary.get("instruments") or [])
+        best = {}
+        for cls, p in scores.items():
+            key = HEARD_MAP.get(cls)
+            if key and p >= HEARD_SHOW and p > best.get(key, (None, 0))[1]:
+                best[key] = (HEARD_NAME.get(cls) or INSTRUMENTS[key].split(" / ")[0], p)
+        heard = sorted(({"key": k, "name": n, "p": round(p, 2)} for k, (n, p) in best.items()), key=lambda x: -x["p"])
+        out[path] = {"instruments": heard[:HEARD_MAX], "model": tagger.backend(),
+                     **{k: summary.get(k) for k in ("voice", "electronic", "acoustic") if summary.get(k) is not None}}
+    return out
+
+
+def heard_notes(r):
+    """What the model hears that the musician didn't tick (sure ones only) - a suggestion, never a change."""
+    h, ctx = r.get("heard") or {}, r.get("context") or {}
+    told = set(ctx.get("keys") or [])
+    if not h.get("instruments") or not told:
+        return []
+    return [x for x in h["instruments"] if x["p"] >= HEARD_SURE and family(x["key"]) not in told]
+
+
+def family(key):
+    return INSTRUMENT_INFO[key][1] if key in INSTRUMENT_INFO else key
+
+
+def named_instrument(result, fam):
+    """What to call the family's instrument: the one the musician picked, if they picked exactly one in it."""
+    picked = [k for k in (result.get("context") or {}).get("chosen") or [] if family(k) == fam]
+    return INSTRUMENTS[picked[0]] if len(picked) == 1 else FAMILY_LABEL.get(fam, fam)
 # label, usual tempo range (BPM) or None when the genre spans everything, one genre-specific idea
 GENRES = {
     "pop": ("Pop", (90, 130), "Pop listeners expect the hook early and a lift into the chorus: check that the chorus "
@@ -1464,8 +1708,25 @@ GENRES = {
                                      "and build the beat around it."),
     "electronic": ("Electronic / dance", (115, 135), "Dance tracks move in 8- and 16-bar phrases: plan a breakdown and "
                                                      "a build (riser, snare roll) into the drop."),
+    "house": ("House", (118, 130), "House lives on the kick on every beat and the off-beat hi-hat: keep the groove "
+                                   "constant and make the changes with filters, a breakdown and sidechained pads."),
+    "techno": ("Techno", (125, 150), "Techno develops by subtraction and slow change: let one loop run for 16-32 bars "
+                                     "and evolve it with a filter, a delay send or one new percussion part at a time."),
+    "trance": ("Trance", (130, 145), "Trance builds on a long breakdown with the lead melody alone, then a riser and "
+                                     "snare roll into a drop that brings back the full chord progression."),
+    "dubstep": ("Dubstep / bass music", (135, 150), "Bass music runs at about 140 BPM with the snare on beat 3 "
+                                                    "(half-time); the drop is carried by the bass sound itself, so "
+                                                    "give it one phrase to answer another."),
+    "ukg": ("UK garage / 2-step", (128, 138), "2-step skips the kick on beats 2 and 4 and swings the hats: try "
+                                              "shuffling your 16ths and chopping the vocal or chords into stabs."),
     "dnb": ("Drum & bass", (160, 180), "Drum & bass sits around 170–175 BPM; a half-time section is a classic way to "
                                        "create contrast."),
+    "trap": ("Trap", (130, 160), "Trap is counted at about 140 with a half-time snare on beat 3; the energy comes "
+                                 "from hi-hat rolls (triplets, 32nds) and 808 slides between notes."),
+    "synthwave": ("Synthwave / synth-pop", (80, 118), "Synthwave leans on gated-reverb snares, arpeggiated synths "
+                                                      "on 16ths and a I–bVI–bVII move in a minor key."),
+    "lofi": ("Lo-fi / chillhop", (60, 95), "Lo-fi's charm is imperfection: swing the drums, detune or wobble the keys "
+                                           "slightly and roll off the highs."),
     "metal": ("Metal", None, "Power chords and the Aeolian/Phrygian modes are the language: try palm-muted root notes "
                              "locked to the kick, and a flat-2nd note for menace."),
     "classical": ("Classical / film", None, "Develop the main motif instead of repeating it: sequence it, invert it, "
@@ -1490,10 +1751,14 @@ def apply_context(result, ctx):
     phone recording, or count a beat twice; the musician can. Their answers decide those questions."""
     if not ctx:
         return
-    inst, genre = set(ctx.get("instruments") or []), ctx.get("genre")
-    result["context"] = {"instruments": [INSTRUMENTS[i] for i in ctx.get("instruments") or []],
-                         "keys": list(ctx.get("instruments") or []),
-                         "genre": GENRES[genre][0] if genre else None, "notes": []}
+    chosen = [i for i in ctx.get("instruments") or [] if i in INSTRUMENT_INFO]
+    fams = list(dict.fromkeys(family(i) for i in chosen))
+    inst, genre = set(fams), ctx.get("genre")
+    result["context"] = {"instruments": [INSTRUMENTS[i] for i in chosen],
+                         "keys": fams,      # the families: what the analysis reasons with
+                         "chosen": chosen,  # the instruments themselves
+
+                         "genre": GENRES[genre][0] if genre else None, "genre_key": genre, "notes": []}
     notes = result["context"]["notes"]
     if inst:
         drums = result.get("drums") or {}
@@ -1526,6 +1791,9 @@ def apply_context(result, ctx):
         if result["bass"].get("low_part_only"):
             result["low_part_instrument"] = next((i for i in ("guitar", "keys", "strings", "synth", "winds", "voice")
                                                   if i in inst), None)
+            picked = [k for k in chosen if family(k) == result["low_part_instrument"]]
+            if len(picked) == 1:  # the instrument itself: its own lowest note, MIDI sound and name
+                result["low_part_specific"] = picked[0]
     if genre and GENRES[genre][1] and result.get("tempo_bpm"):
         lo, hi = GENRES[genre][1]
         bpm = result["tempo_bpm"]
@@ -1551,12 +1819,21 @@ INSTRUMENT_LOW = {
 }
 
 
+def low_part_range(result):
+    """(lowest usual note, how to name the low part) for the instrument playing it: the one the musician picked,
+    else its family, else (not told) a guitar."""
+    spec = result.get("low_part_specific")
+    if spec in INSTRUMENT_INFO and INSTRUMENT_INFO[spec][3] is not None:
+        return INSTRUMENT_INFO[spec][3], f"the {INSTRUMENTS[spec].split(' / ')[0]}'s lowest notes"
+    return INSTRUMENT_LOW.get(result.get("low_part_instrument"), INSTRUMENT_LOW[None])
+
+
 def finish_low_part(result):
     """When the low notes are the main instrument's own (no separate bass) and nothing sounds below 80 Hz, notes
     below that instrument's range are octave errors and are moved up. Notes it can really play stay as heard."""
     if not (result["bass"].get("low_part_only") and result.get("low_end_missing")):
         return
-    lowest = INSTRUMENT_LOW.get(result.get("low_part_instrument"), INSTRUMENT_LOW[None])[0]
+    lowest = low_part_range(result)[0]
     up = lambda n: n + 12 * ((lowest - n + 11) // 12) if n < lowest else n
     notes = result.get("bass_transcription", [])
     result["octave_raised"] = sum(n["midi"] < lowest for n in notes)
@@ -1630,6 +1907,9 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
     genre = (context or {}).get("genre")
     if genre:
         result["ideas"].append({"area": GENRES[genre][0].lower(), "idea": GENRES[genre][2]})
+    # The producer's view (electronic.py) is worked out after the cache too: it depends on what the musician told us
+    result["producer"] = electronic.producer_view(result)
+    result["ideas"] += electronic.producer_ideas(result, result["producer"])
     return result
 
 
@@ -1865,6 +2145,46 @@ LRA_DIFF_LU = 3 * LOUDNESS_JND_LU  # loudness range: three just-noticeable steps
 HARMONIC_RATIO = 1.5      # chords changing half as often again (or more) is a different harmonic pace
 
 
+PUMP_DIFF_DB = electronic.PUMP_DB  # a difference in ducking depth you can hear
+PLR_DIFF_DB = 3.0          # peak-to-loudness ratio: 3 dB more or less limiting is a clearly different density
+DROP_DIFF_DB = electronic.DROP_DB
+MAX_REFERENCES = 3
+AREA_GROUPS = {"tempo": "tempo & groove", "rhythm": "tempo & groove", "key": "key & harmony",
+               "harmony": "key & harmony", "arrangement": "arrangement & energy", "sound": "sound & mix",
+               "production": "sound & mix"}
+# What it means when every song you admire differs from yours the same way (keys of compare_tracks' notes).
+CONSENSUS = {
+    "tempo_faster": "move faster than yours: pace may be part of what draws you to them.",
+    "tempo_slower": "move slower than yours: they take more time, and give each beat more room.",
+    "peak_sooner": "reach full energy sooner than yours: they get to the point faster.",
+    "peak_later": "take longer to reach full energy: a slower build.",
+    "contrast_more": "move between quiet and loud far more than yours: a real breakdown and a bigger return.",
+    "contrast_less": "hold one level more than yours does.",
+    "sync_more": "put more of their hits between the beats: more syncopation.",
+    "sync_less": "sit more squarely on the beat than yours.",
+    "drums_have": "have drums, and yours doesn't.",
+    "bass_have": "have a separate bass line, and yours doesn't.",
+    "chords_faster": "change chords more often than yours.",
+    "chords_slower": "hold their chords longer than yours.",
+    "louder": "are mastered louder than yours.",
+    "more_even": "keep a more even level (less loudness range) than yours.",
+    "wider": "are noticeably wider in stereo than yours.",
+    "brighter": "are clearly brighter than yours.",
+    "darker": "are darker and warmer than yours.",
+    "pump_more": "pump with the kick (sidechain) more than yours.",
+    "pump_less": "pump less than yours: their pads and synths hold steadier.",
+    "drop_harder": "land their drop harder than yours: more contrast going into it.",
+    "more_limited": "are more heavily limited than yours: denser and louder, with flatter peaks.",
+    "more_punch": "keep more punch in their peaks than yours: less limiting.",
+    "low_mono": "keep the low end in mono, and yours is wide.",
+    "four_floor": "put the kick on every beat (four-on-the-floor), and yours doesn't.",
+    "breakdown_have": "have a breakdown (the drums drop out), and yours doesn't.",
+}
+for _b in ("sub (<60 Hz)", "bass (60–250)", "low-mid (250–2k)", "high-mid (2k–6k)", "air (>6k)"):
+    CONSENSUS[f"band_more_{_b}"] = f"put more energy into the {_b} range than yours."
+    CONSENSUS[f"band_less_{_b}"] = f"put less energy into the {_b} range than yours."
+
+
 def _first_peak(r):
     """When the track first gets within 10 points of its highest section energy (arousal 0-100)."""
     secs = (r.get("feel") or {}).get("sections") or []
@@ -1887,10 +2207,16 @@ def _key_relation(a, b):
     return f"{min((key_tonic(a) - key_tonic(b)) % 12, (key_tonic(b) - key_tonic(a)) % 12)} semitones apart"
 
 
+def _producer(r):
+    """The producer's view for a result, worked out on the spot for results saved before it existed."""
+    return r.get("producer") if "producer" in r else electronic.producer_view(r)
+
+
 def compare_tracks(mine, ref):
     """Your track next to a reference you admire: the same measurements side by side, and - only where the gap is
-    big enough to hear (the constants above) - what they do differently and what you could try. Comparing a
-    track with itself reports no differences."""
+    big enough to hear (the constants above) - what they do differently and what you could try. Each note has a
+    key (what differs, which way) so notes from several references can be matched up. Comparing a track with
+    itself reports no differences."""
     rows, notes = [], []
     phone = lambda r: (r["sound"]["frequency_balance_pct"]["sub (<60 Hz)"] < 1
                        and r["sound"]["frequency_balance_pct"]["air (>6k)"] < 1)
@@ -1909,20 +2235,20 @@ def compare_tracks(mine, ref):
             notes.append(("tempo", f"Theirs moves about {abs(1 / ratio - 1):.0%} {faster}: {tr:.0f} BPM against your "
                           f"{tm * factor:.0f}{felt}. Try yours {'faster' if ratio < 1 else 'slower'}, around "
                           f"{tr / factor:.0f} BPM as you count it, and see whether the feel you're after is partly "
-                          "its pace."))
+                          "its pace.", "tempo_faster" if ratio < 1 else "tempo_slower"))
         elif factor != 1:
             notes.append(("tempo", f"Same pulse, but theirs is felt at {'double' if factor == 2 else 'half'} your "
-                          "counted speed: the drums or strumming mark different beats."))
+                          "counted speed: the drums or strumming mark different beats.", "tempo_felt"))
     # Key, mode, metre
-    rows.append(("Key", mine["key"], ref["key"]))
+    rows.append(("Key", f"{mine['key']} ({mine['camelot']})", f"{ref['key']} ({ref['camelot']})"))
     rows.append(("Mode", mine["mode"], ref["mode"]))
     rel = _key_relation(mine["key_index"], ref["key_index"])
     if rel != "the same key":
         notes.append(("key", f"Your keys are {rel}. To borrow their sound directly, or to play the two back to back, "
-                      f"try yours in {ref['key']}."))
+                      f"try yours in {ref['key']}.", "key_other"))
     if mine["mode"] != ref["mode"] and ref.get("mode_confidence") != "low":
         notes.append(("harmony", f"They lean on {ref['mode']}, you on {mine['mode']}: {MODE_INFO.get(ref['mode'], '')} "
-                      "One borrowed colour note can bring that flavour into a section of yours."))
+                      "One borrowed colour note can bring that flavour into a section of yours.", f"mode_{ref['mode']}"))
     mm, mr = (mine.get("meter") or {}).get("label"), (ref.get("meter") or {}).get("label")
     rows.append(("Time signature", mm or "-", mr or "-"))
     # Shape: length, sections, how soon it gets going, how much it moves
@@ -1933,74 +2259,142 @@ def compare_tracks(mine, ref):
         rows.append(("First reaches full energy", fmt_time(pm), fmt_time(pr)))
         if pm - pr > 20 and pm > 1.5 * max(pr, 1):
             notes.append(("arrangement", f"They reach full energy by {fmt_time(pr)}, you by {fmt_time(pm)}. A shorter "
-                          "intro, or bringing your loudest section's idea in earlier, gets the listener there sooner."))
+                          "intro, or bringing your loudest section's idea in earlier, gets the listener there sooner.",
+                          "peak_sooner"))
         elif pr - pm > 20 and pr > 1.5 * max(pm, 1):
             notes.append(("arrangement", f"They take until {fmt_time(pr)} to reach full energy, you get there by "
-                          f"{fmt_time(pm)}: a slower build leaves you more room to grow later."))
+                          f"{fmt_time(pm)}: a slower build leaves you more room to grow later.", "peak_later"))
     fm, fr = mine.get("feel") or {}, ref.get("feel") or {}
     if fm and fr:
         rows.append(("Energy · mood", f"{fm['energy']}/10 · {fm['mood']}", f"{fr['energy']}/10 · {fr['mood']}"))
         if fr["contrast"] - fm["contrast"] > CONTRAST_DIFF:
             notes.append(("arrangement", f"Their sections differ much more in energy (theirs {fr['arc']}; yours "
-                          f"{fm['arc']}). A real breakdown, or a fuller last section, would give yours that shape."))
+                          f"{fm['arc']}). A real breakdown, or a fuller last section, would give yours that shape.",
+                          "contrast_more"))
         elif fm["contrast"] - fr["contrast"] > CONTRAST_DIFF:
             notes.append(("arrangement", "Yours moves between quiet and loud far more than theirs: theirs holds one "
-                          "level, which is part of its steady, hypnotic feel."))
+                          "level, which is part of its steady, hypnotic feel.", "contrast_less"))
+    # Dance arrangement (when either is a dance track): where the first drop lands, how hard, a breakdown
+    dm_, dr_ = (_producer(mine) or {}).get("map"), (_producer(ref) or {}).get("map")
+    if dm_ or dr_:
+        drop = lambda m: (f"{fmt_time(m['first_drop_sec'])} (bar {m['first_drop_bar']})"
+                          if m and m.get("first_drop_sec") is not None else "from the start" if m else "-")
+        imp = lambda m: f"+{m['impact_db']} dB" if m and m.get("impact_db") is not None else "-"
+        rows += [("First drop", drop(dm_), drop(dr_)), ("Drop lands", imp(dm_), imp(dr_))]
+        if dm_ and dr_ and dm_.get("impact_db") is not None and dr_.get("impact_db") is not None \
+                and dr_["impact_db"] - dm_["impact_db"] >= DROP_DIFF_DB:
+            notes.append(("arrangement", f"Their drop lands {dr_['impact_db']} dB above what leads into it, yours "
+                          f"{dm_['impact_db']} dB. Thin out your breakdown, or cut the kick and low end in the bar "
+                          "before the drop, so it has further to jump.", "drop_harder"))
+        if dm_ and dr_ and dr_["has_breakdown"] and not dm_["has_breakdown"]:
+            notes.append(("arrangement", "Theirs has a breakdown (the drums drop out, then build back) and yours keeps "
+                          "the drums going throughout. Even 8 bars without the kick resets the listener's ear.",
+                          "breakdown_have"))
     # Groove
     sm, sr_ = mine["rhythm"].get("syncopation_pct"), ref["rhythm"].get("syncopation_pct")
     if sm is not None and sr_ is not None:
         rows.append(("Off-beat hits", f"{sm}%", f"{sr_}%"))
         if sr_ - sm > SYNC_DIFF_PCT:
             notes.append(("rhythm", f"{sr_}% of their strong hits fall between the beats against your {sm}%. Anticipate a "
-                          "few chord changes by an 8th note, or push the kick or strum off the beat."))
+                          "few chord changes by an 8th note, or push the kick or strum off the beat.", "sync_more"))
         elif sm - sr_ > SYNC_DIFF_PCT:
             notes.append(("rhythm", f"Yours is more syncopated ({sm}% off-beat against their {sr_}%); theirs gets its "
-                          "drive from sitting squarely on the beat."))
+                          "drive from sitting squarely on the beat.", "sync_less"))
     dm, dr = bool((mine.get("drums") or {}).get("present")), bool((ref.get("drums") or {}).get("present"))
     bm, br = bool((mine.get("bass") or {}).get("present")), bool((ref.get("bass") or {}).get("present"))
     rows.append(("Drums · bass", f"{'yes' if dm else 'no'} · {'yes' if bm else 'no'}", f"{'yes' if dr else 'no'} · {'yes' if br else 'no'}"))
     if dr and not dm:
         notes.append(("arrangement", "Theirs has drums and yours doesn't. Even a simple kick-and-snare pattern, or a "
-                      "percussive strum, would bring in some of that push."))
+                      "percussive strum, would bring in some of that push.", "drums_have"))
     if br and not bm:
         notes.append(("arrangement", "Theirs has a separate bass line. A bass following your chord roots would add "
-                      "the weight theirs has."))
+                      "the weight theirs has.", "bass_have"))
+    if dm and dr:
+        km, kr = (mine["drums"].get("traits") or []), (ref["drums"].get("traits") or [])
+        rows.append(("Drum pattern", ", ".join(km) or "-", ", ".join(kr) or "-"))
+        if "four-on-the-floor" in kr and "four-on-the-floor" not in km:
+            notes.append(("rhythm", "Their kick lands on every beat (four-on-the-floor), the engine of house and "
+                          "techno; yours doesn't. Try a kick on all four beats for a section and hear how it drives.",
+                          "four_floor"))
+    pmp, prp = (mine.get("pump") or {}), (ref.get("pump") or {})
+    if pmp and prp:
+        pump_txt = lambda p: f"{p['depth_db']} dB ({p['kind']})" if p.get("kind") else "none"
+        rows.append(("Sidechain pump", pump_txt(pmp), pump_txt(prp)))
+        if prp["depth_db"] - pmp["depth_db"] >= PUMP_DIFF_DB:
+            yours = "barely move" if not pmp.get("kind") else f"duck {pmp['depth_db']} dB"
+            notes.append(("production", f"Their pads and synths duck about {prp['depth_db']} dB after every kick and "
+                          f"swell back (sidechain pumping); yours {yours}. A compressor on the pads keyed from the "
+                          "kick, with the release timed to the beat, gets you that breathing groove.", "pump_more"))
+        elif pmp["depth_db"] - prp["depth_db"] >= PUMP_DIFF_DB:
+            notes.append(("production", f"Yours pumps harder ({pmp['depth_db']} dB against their "
+                          f"{prp['depth_db'] or 'none'}): theirs holds steadier under the kick.", "pump_less"))
+    # Instruments (the model's opinion, when it's installed): what they feature that yours hardly has
+    him, hir = (mine.get("heard") or {}).get("instruments"), (ref.get("heard") or {}).get("instruments")
+    if him is not None and hir is not None and (him or hir):
+        top3 = lambda xs: ", ".join(x["name"] for x in xs[:3]) or "nothing clear"
+        rows.append(("Instruments heard", top3(him), top3(hir)))
+        have = {x["key"] for x in him}  # everything in yours at HEARD_SHOW or more
+        # drums and bass: our own measurement compares those (above), more reliably than the model
+        for x in [x for x in hir if x["p"] >= HEARD_FEATURE and x["key"] not in have
+                  and family(x["key"]) not in ("drums", "bass")][:2]:
+            notes.append(("arrangement", f"Theirs features {x['name']} (the instrument model is {round(100 * x['p'])}% "
+                          "sure); in yours it hardly registers. A part on it, or a sound in the same register and "
+                          "colour, could bring in some of what you like about theirs.", f"inst_{x['key']}"))
     # Harmony: how often the chords change
     hm, hr = mine.get("harmonic_rhythm_beats"), ref.get("harmonic_rhythm_beats")
     if hm and hr:
         rows.append(("A chord change every", f"{hm} beats", f"{hr} beats"))
         if hm / hr >= HARMONIC_RATIO:
             notes.append(("harmony", f"Their chords change about every {hr} beats, yours every {hm}: more movement "
-                          "under the melody. Try splitting some of your long chords in two."))
+                          "under the melody. Try splitting some of your long chords in two.", "chords_faster"))
         elif hr / hm >= HARMONIC_RATIO:
             notes.append(("harmony", f"Their chords sit longer (every {hr} beats against your {hm}), which gives the "
-                          "melody room. Holding one of your chords twice as long is worth a try."))
-    # Sound: loudness, tone, width, frequency balance
+                          "melody room. Holding one of your chords twice as long is worth a try.", "chords_slower"))
+    # Sound: loudness, punch, tone, width, frequency balance
     lm, lr = (mine["sound"].get("streaming") or {}), (ref["sound"].get("streaming") or {})
     if lm.get("lufs") is not None and lr.get("lufs") is not None:
         rows.append(("Loudness", f"{lm['lufs']} LUFS", f"{lr['lufs']} LUFS"))
         if lr["lufs"] - lm["lufs"] > LOUDNESS_JND_LU:
             notes.append(("sound", f"Theirs is mastered {lr['lufs'] - lm['lufs']:.1f} LU louder. On Spotify both are "
                           f"levelled to about {SPOTIFY_TARGET_LUFS:g} LUFS, so match the mix first; loudness comes last, "
-                          "from a limiter on the master."))
+                          "from a limiter on the master.", "louder"))
+        if lm.get("plr_db") is not None and lr.get("plr_db") is not None:
+            rows.append(("Peak-to-loudness (punch)", f"{lm['plr_db']} dB", f"{lr['plr_db']} dB"))
+            if lm["plr_db"] - lr["plr_db"] >= PLR_DIFF_DB:
+                notes.append(("production", f"Theirs is more heavily limited (peak-to-loudness {lr['plr_db']} dB against "
+                              f"your {lm['plr_db']}): a denser, flatter, louder master. If that's the sound you want, "
+                              "a compressor on the mix bus and a limiter on the master get you there; the cost is punch.",
+                              "more_limited"))
+            elif lr["plr_db"] - lm["plr_db"] >= PLR_DIFF_DB:
+                notes.append(("production", f"Theirs keeps more of its peaks (peak-to-loudness {lr['plr_db']} dB against "
+                              f"your {lm['plr_db']}): it hits harder at the same loudness. Ease off the limiter, or "
+                              "compress less.", "more_punch"))
         if lm.get("loudness_range_lu") is not None and lr.get("loudness_range_lu") is not None:
             rows.append(("Loudness range", f"{lm['loudness_range_lu']} LU", f"{lr['loudness_range_lu']} LU"))
             if lm["loudness_range_lu"] - lr["loudness_range_lu"] > LRA_DIFF_LU:
                 notes.append(("sound", f"Your level moves more ({lm['loudness_range_lu']} LU against their "
-                              f"{lr['loudness_range_lu']}): theirs is more even, usually from compression."))
+                              f"{lr['loudness_range_lu']}): theirs is more even, usually from compression.", "more_even"))
         cm, cr = lm.get("stereo_correlation"), lr.get("stereo_correlation")
         if cm is not None and cr is not None:
             rows.append(("Stereo correlation", f"{cm}", f"{cr}"))
             if cm - cr > WIDTH_DIFF:
                 notes.append(("sound", "Theirs is noticeably wider: instruments panned apart, or stereo reverb and "
-                              "doubled parts on the sides."))
+                              "doubled parts on the sides.", "wider"))
+        wm, wr = lm.get("band_widths") or {}, lr.get("band_widths") or {}
+        if wm.get("low") is not None and wr.get("low") is not None:
+            wide = lambda st: "wide" if electronic.low_end_wide(st) else "mono"
+            rows.append((f"Low end (below {electronic.LOW_END_HZ} Hz)", wide(lm), wide(lr)))
+            if electronic.low_end_wide(lm) and not electronic.low_end_wide(lr):
+                notes.append(("production", f"Their low end is mono and yours is wide (correlation {wm['low']} against "
+                              f"their {wr['low']}). Mono the bass and kick below about {electronic.LOW_END_HZ} Hz and "
+                              "keep the width higher up.", "low_mono"))
     bm_, br_ = mine["sound"]["brightness_hz"], ref["sound"]["brightness_hz"]
     rows.append(("Brightness", f"{bm_} Hz", f"{br_} Hz"))
     if br_ / max(bm_, 1) >= BRIGHTNESS_RATIO:
         notes.append(("sound", "Theirs is clearly brighter: more cymbals, string noise or upper harmonics. A high "
-                      "shelf, a brighter instrument or a high part would close the gap."))
+                      "shelf, a brighter instrument or a high part would close the gap.", "brighter"))
     elif bm_ / max(br_, 1) >= BRIGHTNESS_RATIO:
-        notes.append(("sound", "Yours is clearly brighter than theirs; theirs sits darker and warmer."))
+        notes.append(("sound", "Yours is clearly brighter than theirs; theirs sits darker and warmer.", "darker"))
     fbm, fbr = mine["sound"]["frequency_balance_pct"], ref["sound"]["frequency_balance_pct"]
     gaps = [(band, 10 * np.log10((fbr[band] + 0.1) / (fbm[band] + 0.1))) for band in fbm]
     big = [(band, d) for band, d in gaps if abs(d) >= BAND_DIFF_DB]
@@ -2010,9 +2404,35 @@ def compare_tracks(mine, ref):
         caveat = (" Part of this is the recording: a phone microphone loses the lowest and highest ranges."
                   if phone(mine) and not phone(ref) and band in ("sub (<60 Hz)", "air (>6k)") else "")
         notes.append(("sound", f"Theirs puts {abs(d):.0f} dB {more} energy into the {band} range than yours."
-                      + caveat))
+                      + caveat, f"band_{more}_{band}"))
     return {"reference": ref["file"], "rows": [{"aspect": a, "yours": y, "theirs": t} for a, y, t in rows],
-            "ideas": [{"area": a, "idea": i} for a, i in notes]}
+            "ideas": [{"area": a, "idea": i, "key": k} for a, i, k in notes]}
+
+
+def compare_all(mine, refs):
+    """Your track next to every reference: one comparison each, then what they have in common - a difference that
+    every song you admire shares is a stronger lead than one song's quirk - and where you're already close."""
+    refs = [x for x in refs if x and "error" not in x]
+    each = [compare_tracks(mine, x) for x in refs]
+    if not each:
+        return None
+    shared = []
+    if len(each) >= 2:
+        common = set.intersection(*[{i["key"] for i in c["ideas"]} for c in each])
+        for key in dict.fromkeys(i["key"] for i in each[0]["ideas"]):  # in the order the first comparison lists
+            phrase = CONSENSUS.get(key) or (f"feature {INSTRUMENTS.get(key[5:], key[5:])}, which hardly registers in "
+                                            "yours." if key.startswith("inst_") else None)
+            if key in common and phrase:
+                area = next(i["area"] for i in each[0]["ideas"] if i["key"] == key)
+                who = "Both songs you admire" if len(each) == 2 else f"All {len(each)} songs you admire"
+                shared.append({"area": area, "key": key, "idea": f"{who} {phrase}"})
+    groups = list(dict.fromkeys(AREA_GROUPS.values()))
+    differs = {g: sum(1 for c in each if any(AREA_GROUPS.get(i["area"]) == g for i in c["ideas"])) for g in groups}
+    curves = [{"file": x["file"], "duration_sec": x.get("duration_sec"),
+               "sound": {k: (x.get("sound") or {}).get(k) for k in ("energy_line", "octave_db")}} for x in refs]
+    return {"references": [c["reference"] for c in each], "each": each, "shared": shared, "curves": curves,
+            "close": [g for g in groups if not differs[g]],
+            "different": [{"area": g, "references": n} for g, n in differs.items() if n]}
 
 
 def rule_based_ideas(r):
@@ -2332,7 +2752,8 @@ def export_sheets(r, out_dir):
     stem = re.sub(r"[^\w.\-]+", "_", Path(r["file"]).stem)
     k = r["key_index"]
     word, tag = low_part(r)
-    guitar = r.get("low_part_instrument") == "guitar"
+    # six-string guitars (and the banjo) are written an octave above how they sound, in treble clef
+    guitar = r.get("low_part_instrument") == "guitar" and r.get("low_part_specific", "guitar") in GUITARS | {"banjo"}
     # Bass and guitar are both written an octave above how they sound; a guitar in treble clef.
     xml = notation.to_musicxml(sheet, f"{Path(r['file']).stem} — {word}",
                                "Guitar (low part)" if guitar else word.capitalize(), key_fifths(k), r["tempo_bpm"],
@@ -2363,7 +2784,13 @@ def export_midis(r, out_dir):
     line = r.get("bass_transcription") or []
     word, tag = low_part(r)
     # General MIDI sound: bass (finger) for a bass; otherwise the instrument the musician named
-    program = {"guitar": 25, "keys": 0, "strings": 42, "synth": 81, "winds": 71}.get(r.get("low_part_instrument"), 33)
+    spec = r.get("low_part_specific")
+    basses = [k for k in (r.get("context") or {}).get("chosen") or [] if family(k) == "bass"]
+    if not spec and (r.get("bass") or {}).get("present") and len(basses) == 1:
+        spec = basses[0]  # a double bass or a synth bass sounds like one in the MIDI file
+    program = (INSTRUMENT_INFO[spec][2] if spec in INSTRUMENT_INFO else
+               {"guitar": 25, "keys": 0, "strings": 42, "synth": 81, "winds": 71, "voice": 53}.get(
+                   r.get("low_part_instrument"), 33))
     if line:
         fname = f"{stem}_{tag}_transcription.mid"
         write_notes_midi(out_dir / fname, [(n["start"], n["end"], n["midi"], n["velocity"]) for n in line],
@@ -2515,12 +2942,31 @@ def ai_summary(r):
     if known:
         lines.append("Already compared with: " + "; ".join(known) + ".")
     lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
-    c = r.get("comparison")
-    if c:
-        lines.append(f"The musician admires a reference track ({c['reference']}). Side by side, yours vs theirs: "
-                     + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in c["rows"]) + ".")
-        if c["ideas"]:
-            lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in c["ideas"]) + ".")
+    c = _norm_comparison(r.get("comparison"))
+    for e in (c or {}).get("each", []):
+        lines.append(f"The musician admires {e['reference']}. Side by side, yours vs theirs: "
+                     + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in e["rows"]) + ".")
+        if e["ideas"]:
+            lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in e["ideas"]) + ".")
+    if (c or {}).get("shared"):
+        lines.append("What every song they admire shares that theirs doesn't: " + " ".join(i["idea"] for i in c["shared"])
+                     + " Help them get closer to this, in their own way.")
+    h = r.get("heard") or {}
+    if h.get("instruments"):
+        lines.append("A trained model hears: " + ", ".join(f"{x['name']} ({x['p']:.0%})" for x in h["instruments"])
+                     + ". Suggest ideas for these instruments, and for ones that would contrast with them.")
+    v = r.get("producer") or {}
+    if v:
+        bits = [f"sidechain pump {v['pump']['depth_db']} dB" if (v.get("pump") or {}).get("kind") else "no sidechain pump"]
+        if v.get("plr_db") is not None:
+            bits.append(f"peak-to-loudness {v['plr_db']} dB")
+        if v.get("low_end_wide"):
+            bits.append("wide (not mono) low end")
+        m = v.get("map")
+        if m:
+            bits.append("dance arrangement " + ", ".join(f"{x['role']} {fmt_time(x['start'])} {x['bars']} bars"
+                                                         for x in m["sections"]))
+        lines.append("Producer's view: " + "; ".join(bits) + ".")
     if r.get("memory_profile"):
         lines.append(r["memory_profile"])
     if r.get("past"):
@@ -3030,6 +3476,23 @@ GUIDE = {
         "Frequency balance": "How the energy spreads across the range: sub (felt more than heard), bass, low-mids "
                              "(body), high-mids (presence) and air (sparkle).",
     },
+    "Instruments we hear": {
+        "Instruments we hear": "A trained model's opinion of which instruments play (Essentia's instrument model, "
+                               "MTG-UPF, 40 instruments), with how sure it is. It's a second opinion next to our own "
+                               "measurements and what you tick: shown and compared, never used to change a result.",
+    },
+    "Producer's view": {
+        "Sidechain": "Pumping: the pads, chords and synths duck right after each kick and swell back before the next, "
+                     "usually from a compressor triggered by the kick. Gentle is 3-6 dB, heavy (the obvious French-house "
+                     "'breathing') more than 6.",
+        "Drop": "In dance music, the moment the full beat and bass come back in after a breakdown or build. We map each "
+                "section's role (intro, build, drop, breakdown, outro), its length in bars, and how far the drop jumps "
+                "in level above what leads into it.",
+        "Mono low end": "Club systems and phone speakers play the bass in mono, so a wide or out-of-phase low end "
+                        "partly cancels on them. Correlation below 120 Hz near +1 is mono and safe; below 0.6 is wide.",
+        "PLR": "Peak-to-loudness ratio: true peak minus loudness (LUFS). Below about 8 dB a master is heavily limited "
+               "(dense, loud, little punch); 8-11 is typical of modern club and pop masters; above that it's dynamic.",
+    },
     "Melody": {
         "Scale degree": "A note's place in the key: 1 is the home note, 5 the fifth above it, b6 a flattened sixth, "
                         "and so on. Degrees describe a melody whatever key it's in.",
@@ -3130,6 +3593,20 @@ def track_report(r):
     L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
           f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
+    h = r.get("heard") or {}
+    if h.get("instruments"):
+        heard = " · ".join(f"{x['name']} {round(100 * x['p'])}%" for x in h["instruments"])
+        L += [f"_{tip('Instruments we hear', 'Instruments we hear')}: {heard}._"]
+        extra = heard_notes(r)
+        if extra:
+            L += [f"- _We also hear {', '.join(x['name'] for x in extra)}, which you didn't tick. If "
+                  f"{'it is' if len(extra) == 1 else 'they are'} there, tick {'it' if len(extra) == 1 else 'them'} next "
+                  "time and we'll use it (nothing here was changed on the model's say-so)._"]
+        elif not ctx:
+            L += ["- _Tick the right ones when you upload and we'll use them: they settle the drums, the bass and "
+                  "whose melody it is._"]
+        L.append("")
+    L += comparison_report(r)  # what the musician came for, when they brought songs they admire
 
     # Harmony
     conf = r["key_confidence"]
@@ -3156,8 +3633,8 @@ def track_report(r):
                  f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz). We've allowed for that in everything below")
     L.append(f"- **{tip('Chords used most', 'Chord names')}:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
     g = r.get("guitar")
-    named = (r.get("context") or {}).get("keys") or []
-    if g and (not named or "guitar" in named):
+    chosen = (r.get("context") or {}).get("chosen") or (r.get("context") or {}).get("keys") or []
+    if g and (not chosen or any(c in GUITARS for c in chosen)):  # capo shapes are a six-string guitar's
         shapes = " · ".join(f"{s['shape']} `{s['fingering']}`" + (f" (sounds {s['sounds']})" if g["capo"] else "")
                             for s in g["shapes"])
         where = f"capo on fret {g['capo']}, then play these open shapes" if g["capo"] else "all open shapes, no capo needed"
@@ -3204,7 +3681,7 @@ def track_report(r):
                      f"in {lp['key']}) "
                      f"· {', '.join(lp['where'])} · ×{lp['repeats']}")
     if r["chord_timeline"]:
-        L += ["", "<details><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
+        L += ["", "<details markdown=\"1\"><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
               f"_{GLOSSARY['Chord timeline']} {GLOSSARY['Chord names']}_", "",
               " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" + ("?" if (c.get("clarity") or 9) < UNCLEAR_CHORD else "")
                          for c in r["chord_timeline"]), "",
@@ -3243,10 +3720,10 @@ def track_report(r):
     for name, pct in s["frequency_balance_pct"].items():
         L.append(f"{name:<18} {bar(pct):<20} {pct:>5}%")
     L.append("```")
+    L += producer_report(r)
 
     # Ideas
     L += past_report(r)
-    L += comparison_report(r)
     L += ["", "### 💡 Ideas to try", "", "_We worked these out from the analysis itself, no AI involved. Try "
           "them out and keep whatever works for you._", ""]
     for i in r["ideas"]:
@@ -3328,7 +3805,8 @@ def melody_report(r):
         if lead == "voice":
             verdict += ". With a singer in the track, this is most likely the vocal melody"
         elif lead and not t["follows_chords"]:
-            verdict += f". It's most likely the {INSTRUMENTS[lead]} line, since that's the only lead instrument you named"
+            verdict += (f". It's most likely the {named_instrument(r, lead)} line, since that's the only lead "
+                        "instrument you named")
         L += [f"**{tip('Top line', 'Top line')} (automatic):** range {t['range']} · main notes {main} · "
               f"repeating 4-note figures: {motif} · {verdict}."]
         if not m:
@@ -3368,9 +3846,11 @@ def dna_report(r):
 def instruments_report(r):
     d, b = r.get("drums") or {}, r.get("bass") or {}
     solo = b.get("low_part_only")
-    named = [i for i in ((r.get("context") or {}).get("keys") or [])  # its low part is written out below
-             if i not in ("drums", "bass") and not (solo and i == r.get("low_part_instrument") and len(
-                 [j for j in (r.get("context") or {}).get("keys") or [] if j not in ("drums", "bass")]) == 1)]
+    ctx = r.get("context") or {}
+    chosen = ctx.get("chosen") or ctx.get("keys") or []  # results saved before single instruments only had families
+    melodic = [i for i in chosen if family(i) not in ("drums", "bass")]
+    named = [i for i in melodic  # the solo instrument's low part is written out below, so it isn't "other"
+             if not (solo and family(i) == r.get("low_part_instrument") and len(melodic) == 1)]
     if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named:
         return []
     how = ("with Demucs, an AI model built for the job" if r.get("separation") == "demucs" else
@@ -3407,7 +3887,7 @@ def instruments_report(r):
     elif solo:
         L += ["**🎸 Bass** — we don't think there's a separate bass. There are no drums, and nothing below "
               "100 Hz, where a bass guitar sits. The low notes are "
-              f"{INSTRUMENT_LOW.get(r.get('low_part_instrument'), INSTRUMENT_LOW[None])[1]} (like a guitarist's "
+              f"{low_part_range(r)[1]} (like a guitarist's "
               "thumb or a pianist's left hand), and we've analysed them below as the lowest part. If there is a "
               "bass, tick it when you upload.", ""]
     if solo:
@@ -3415,14 +3895,14 @@ def instruments_report(r):
         if r.get("octave_raised"):
             inst = r.get("low_part_instrument")
             L += [f"_Nothing below 80 Hz reached the microphone, so we moved {r['octave_raised']} note(s) below the "
-                  + (f"{INSTRUMENTS[inst]}'s range" if inst else "range of a guitar (the most likely instrument)")
+                  + (f"{named_instrument(r, inst)}'s range" if inst else "range of a guitar (the most likely instrument)")
                   + " up an octave. Notes that low are almost always a pitch-tracking slip."
                   + ("" if inst else " If your instrument really goes that low (piano, cello), tick it when you upload.") + "_", ""]
         elif r.get("low_end_missing"):
             L += ["_Nothing below 80 Hz reached the microphone, so we've shown the lowest notes as we heard them. "
                   "Check their octave by ear._", ""]
     if named:
-        L += [f"**Other instruments you named** — {', '.join(INSTRUMENTS[i] for i in named)}. We don't write these "
+        L += [f"**Other instruments you named** — {', '.join(INSTRUMENTS.get(i, i) for i in named)}. We don't write these "
               "out one by one. We transcribe the drums (as a grid) and the lowest part (the bass, or the main "
               "instrument's own low notes), and what everyone else plays together shows up under Harmony (the "
               "chords) and Melody (the top line).", ""]
@@ -3582,13 +4062,13 @@ def feel_report(r):
 
 def reference_report(r):
     """The reference song, briefly: the facts the comparison rests on, its shape and its loudness."""
-    L = [f"## 🎯 Your reference: {r['file']}", ""]
+    L = [f"## 🎯 Reference: {r['file']}", ""]
     if "error" in r:
         return L + [f"⚠️ We couldn't analyse the reference ({r['error']}), so there's no comparison this time. "
                     "Try exporting it again as mp3 or wav.", ""]
     tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
-    L += ["_The song you're measuring yourself against. We analysed it the same way as yours; the comparison is in "
-          "each of your tracks above._", "",
+    L += ["_A song you're measuring yourself against. We analysed it the same way as yours; the comparison is at "
+          "the top of each of your tracks._", "",
           f"**{r['duration']}** · **{tempo}** · **{r['key']}** · {mode_tip(r['mode'])} · form "
           f"**{' '.join(s['label'] for s in r['sections'])}**", ""]
     svg = timeline_svg(r)
@@ -3614,21 +4094,179 @@ def past_report(r):
     return L
 
 
+REF_HUES = [28, 200, 290]  # one colour per reference in the overlays (yours is drawn in the text colour)
+
+
+def _overlay_svg(series, xs_label, y_label, aria, W=720, H=150, x_ticks=None):
+    """Lines laid over each other: series = [(name, [(x 0-1, y 0-1)], style)], style "mine" or a hue."""
+    top, bottom, left = 14 * len(series) + 10, 26, 18  # room for the legend above, and for the edge labels
+    ph = H - top - bottom
+    paths = []
+    for name, pts, style in series:
+        d = " ".join(f"{'M' if i == 0 else 'L'}{left + (W - 2 * left) * x:.1f},{top + ph * (1 - y):.1f}"
+                     for i, (x, y) in enumerate(pts))
+        stroke = ('stroke="currentColor" stroke-width="2.2"' if style == "mine" else
+                  f'stroke="hsl({style},75%,50%)" stroke-width="1.6" stroke-dasharray="5 3"')
+        paths.append(f'<path d="{d}" fill="none" {stroke}><title>{html.escape(name)}</title></path>')
+    ticks = "".join(f'<text x="{left + (W - 2 * left) * x:.1f}" y="{H - 8}" text-anchor="middle" font-size="10" '
+                    f'fill="currentColor" fill-opacity="0.7">{html.escape(t)}</text>' for x, t in (x_ticks or []))
+    legend = "".join(
+        f'<text x="{W - 6}" y="{12 + 14 * i}" text-anchor="end" font-size="11" '
+        + ('font-weight="700" fill="currentColor"' if style == "mine" else f'fill="hsl({style},75%,45%)"')
+        + f'>{"━" if style == "mine" else "╍"} {html.escape(name[:40])}</text>'
+        for i, (name, _, style) in enumerate(series))
+    return (f'<svg class="overlay" viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="{html.escape(aria)}" '
+            f'style="max-width:{W}px;display:block;margin:4px 0 4px">{"".join(paths)}{ticks}{legend}</svg>'
+            f'\n\n<span class="muted small">{html.escape(y_label)}</span>')
+
+
+def energy_overlay_svg(mine, refs):
+    """The shape of each song: loudness over time (0-1 over 40 dB), on one time axis."""
+    tracks = [(f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
+                                                         for i, r in enumerate(refs)]
+    tracks = [t for t in tracks if (t[1].get("sound") or {}).get("energy_line") and t[1].get("duration_sec")]
+    if len(tracks) < 2:
+        return ""
+    longest = max(t[1]["duration_sec"] for t in tracks)
+    series = []
+    for name, r, style in tracks:
+        line, dur = r["sound"]["energy_line"], r["duration_sec"]
+        series.append((name, [((i + 0.5) / len(line) * dur / longest, v) for i, v in enumerate(line)], style))
+    step = next(st for st in (10, 15, 30, 60, 120, 300, 600) if longest / st <= 10)
+    ticks = [(t / longest, fmt_time(t)) for t in range(0, int(longest) + 1, step)]
+    return _overlay_svg(series, "", "Loudness over time on one clock: higher is louder, and the length shows too.",
+                        "Loudness over time of your track and the songs you admire", x_ticks=ticks)
+
+
+def tonal_overlay_svg(mine, refs):
+    """Tonal balance in octaves, each song's own share per octave (so loudness doesn't matter)."""
+    tracks = [(f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
+                                                         for i, r in enumerate(refs)]
+    tracks = [t for t in tracks if (t[1].get("sound") or {}).get("octave_db")]
+    if len(tracks) < 2:
+        return ""
+    bands = list(tracks[0][1]["sound"]["octave_db"])
+    if any(list(t[1]["sound"]["octave_db"]) != bands for t in tracks):
+        return ""
+    lo = min(min(t[1]["sound"]["octave_db"].values()) for t in tracks)
+    lo = max(lo, -60.0)
+    span = -lo or 1.0
+    xs = [i / (len(bands) - 1) for i in range(len(bands))]
+    series = [(name, [(x, max(0.0, (r["sound"]["octave_db"][b] - lo) / span)) for x, b in zip(xs, bands)], style)
+              for name, r, style in tracks]
+    names = {b: (f"{float(b) / 1000:g}k" if float(b) >= 1000 else b) for b in bands}
+    return _overlay_svg(series, "", "Tonal balance by octave (Hz): each song's own share of its energy, so how loud "
+                        "it is doesn't matter. Where the lines part, one puts more into that range.",
+                        "Tonal balance of your track and the songs you admire",
+                        x_ticks=[(x, names[b]) for x, b in zip(xs, bands)])
+
+
+def _norm_comparison(c):
+    """Results saved before several references were possible held one comparison; read both the same way."""
+    if c and "each" not in c:
+        c = {"references": [c["reference"]], "each": [c], "shared": [], "close": [], "different": []}
+    return c
+
+
 def comparison_report(r):
-    c = r.get("comparison")
+    """Your track next to the songs you admire: where you stand, what they all share, the overlays, and each
+    reference in detail. Comes first in the track's report: it's what you came to find out."""
+    c = _norm_comparison(r.get("comparison"))
     if not c:
         return []
-    L = ["", f"### 🎯 Next to your reference", "",
-         f"_Your track beside **{c['reference']}**, measured the same way. We only point out differences big enough "
-         "to hear; a song you admire is a guide, not a target._", "",
-         "| | Yours | Theirs |", "|---|---|---|"]
-    L += [f"| {x['aspect']} | {x['yours']} | {x['theirs']} |" for x in c["rows"]]
-    L.append("")
-    if c["ideas"]:
-        L += ["**What they do differently, and what you could try**", ""]
-        L += [f"- **{i['area']}:** {i['idea']}" for i in c["ideas"]]
-    else:
-        L.append("Nothing we measure differs enough to hear: in tempo, shape, groove and sound you're already close.")
+    n = len(c["each"])
+    names = ", ".join(f"**{x}**" for x in c["references"])
+    L = [f"### 🎯 Next to the {'songs' if n > 1 else 'song'} you admire", "",
+         f"_Your track beside {names}, measured the same way. We only point out differences big enough to hear; a song "
+         "you admire is a guide, not a target._", ""]
+    if c.get("close") or c.get("different"):
+        stand = []
+        if c["close"]:
+            stand.append("**Already close:** " + ", ".join(c["close"]))
+        if c["different"]:
+            stand.append("**Where you differ:** " + ", ".join(
+                d["area"] + (f" ({d['references']} of {n})" if n > 1 else "") for d in c["different"]))
+        L += [" · ".join(stand), ""]
+    if c.get("shared"):
+        L += [f"**What {'both' if n == 2 else f'all {n}'} have in common that yours doesn't**, the strongest leads:", ""]
+        L += [f"- **{i['area']}:** {i['idea']}" for i in c["shared"]] + [""]
+    elif n > 1:
+        L += [f"_No difference is shared by {'both' if n == 2 else f'all {n}'}; each one's notes below are its own._", ""]
+    curves = c.get("curves") or []
+    for svg in (energy_overlay_svg(r, curves), tonal_overlay_svg(r, curves)):
+        if svg:
+            L += [svg, ""]
+    for k, e in enumerate(c["each"]):
+        L += [f"<details markdown=\"1\"{' open' if k == 0 else ''}><summary><b>Side by side with "
+              f"{html.escape(e['reference'])}</b></summary>", "", "| | Yours | Theirs |", "|---|---|---|"]
+        L += [f"| {x['aspect']} | {x['yours']} | {x['theirs']} |" for x in e["rows"]]
+        L.append("")
+        if e["ideas"]:
+            L += ["**What they do differently, and what you could try**", ""]
+            L += [f"- **{i['area']}:** {i['idea']}" for i in e["ideas"]]
+        else:
+            L.append("Nothing we measure differs enough to hear: in tempo, shape, groove and sound you're already close.")
+        L += ["", "</details>", ""]
+    return L
+
+
+def producer_report(r):
+    """The producer's view (electronic.py): groove engine, sidechain, the dance arrangement, the mix for clubs."""
+    v = r.get("producer")
+    if not v:
+        return []
+    L = ["", "### 🎛️ Producer's view", "", "_What electronic and other produced music is judged by: the kick, the "
+         "pumping, the arrangement in bars, and how the mix holds up on a club system or a phone._", ""]
+    if v.get("kick"):
+        L.append(f"- **{tip('Drum pattern', 'Drum grid')}:** " + ", ".join(v["kick"]))
+    p = v.get("pump")
+    if p:
+        L.append(f"- **{tip('Sidechain pumping', 'Sidechain')}:** " + (
+            f"{p['kind']}, the sustained sounds duck about {p['depth_db']} dB after each beat and swell back"
+            if p.get("kind") else "none: the pads and synths hold steady under the kick"))
+    m = v.get("map")
+    if m:
+        roles = {"intro": "Intro", "build": "Build", "drop": "Drop", "breakdown": "Breakdown", "outro": "Outro",
+                 "groove": "Groove"}
+        L += ["", f"**{tip('Dance arrangement', 'Drop')}** (bars at {r['tempo_bpm']:.0f} BPM)", "",
+              "| Section | Role | Time | Bars | Level | |", "|---|---|---|---|---|---|"]
+        for x in m["sections"]:
+            extra = []
+            if x["role"] == "intro" and x["beat_only"]:
+                extra.append("drums only: easy to mix in")
+            if x.get("impact_db") is not None:
+                extra.append(f"lands +{x['impact_db']} dB")
+            if x["role"] == "build":
+                extra.append(f"climbs {x['rise_db']} dB")
+            L.append(f"| {x['label']} | {roles[x['role']]} | {fmt_time(x['start'])}–{fmt_time(x['end'])} | "
+                     f"{x['bars']} | {x['level_db']} dB | {'; '.join(extra)} |")
+        facts = []
+        if m.get("first_drop_sec") is not None:
+            facts.append(f"first drop at **{fmt_time(m['first_drop_sec'])}** (bar {m['first_drop_bar']})")
+        if m.get("on_phrase_pct") is not None:
+            facts.append(f"{m['on_phrase_pct']}% of the sections last a whole number of {electronic.PHRASE_BARS}-bar "
+                         "phrases (give or take a bar)")
+        if facts:
+            L += ["", "_" + "; ".join(facts).capitalize() + "._"]
+        L.append("")
+    w = v.get("widths")
+    if w and w.get("low") is not None:
+        state = ("wide: part of it cancels on mono club systems and phones" if v["low_end_wide"] else
+                 "mono enough for club systems and phones" if w.get("low_share", 0) >= electronic.LOW_END_SHARE
+                 else "hardly any low end to judge")
+        L.append(f"- **{tip('Low end', 'Mono low end')}:** correlation {w['low']} below {electronic.LOW_END_HZ} Hz, "
+                 f"{state} · mids {w['mid']} · highs {w['high']}")
+    if v.get("plr_db") is not None:
+        plr = v["plr_db"]
+        how = ("heavily limited: dense and loud, little punch left" if plr < 8 else
+               "typical of a modern club or pop master" if plr < 11 else "dynamic: plenty of punch in the peaks")
+        L.append(f"- **{tip('Peak-to-loudness', 'PLR')}:** {plr} dB, {how}")
+    if v.get("dj"):
+        k = r["key_index"]
+        nb = camelot_neighbours(k)
+        mixes = ", ".join(dict.fromkeys(camelot(x) for x in (k, nb["relative"], nb["up a fifth"], nb["down a fifth"])))
+        L.append(f"- **{tip('Mixes with', 'Camelot')}:** tracks at {v['dj']['bpm_low']}–{v['dj']['bpm_high']} BPM "
+                 f"(within the pitch fader's ~6%) in {mixes}")
     return L
 
 
@@ -3638,7 +4276,8 @@ def build_report(results):
     ok = [r for r in results if "error" not in r]
     L = ["# 🎵 Music Inspiration Report", "",
          f"_{len(results)} track{'' if len(results) == 1 else 's'}, analysed and ready for ideas"
-         + (f", next to your reference {refs[0]['file']}" if refs else "") + "._", ""]
+         + (f", next to {'your reference ' if len(refs) == 1 else 'the songs you admire: '}"
+            + ", ".join(x["file"] for x in refs) if refs else "") + "._", ""]
     if ok:
         heads = ["Length", "Tempo", "Key", "Camelot", "Mode", "Form", "Energy"]
         L += ["| Track | " + " | ".join(tip(h) for h in heads) + " |",
@@ -3706,7 +4345,7 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache
 def _code_version():
     import hashlib
     h = hashlib.sha256()
-    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py"):
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py"):
         try:
             h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
@@ -3740,17 +4379,22 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
     out = Path(out)
     results, pending = [], []
     ai_pool = cf.ThreadPoolExecutor(max_workers=2) if llm else None  # free endpoints queue bursts
-    ref = None
-    if reference:  # a song the musician admires: analysed first, so each comparison can reach the AI too
+    refs = []
+    ref_paths = [Path(x) for x in ([reference] if isinstance(reference, (str, Path)) else list(reference or []))
+                 ][:MAX_REFERENCES]
+    heard = hear_instruments([*map(str, ref_paths), *(str(Path(f)) for f in files)], progress)
+    # songs the musician admires: analysed first, so each comparison can reach the AI too
+    for reference in ref_paths:
         reference = Path(reference)
-        progress(f"Listening to your reference, {reference.name}…")
+        progress(f"Listening to a song you admire, {reference.name}…")
         try:
             ref = analyze(reference, cache_dir=cache_dir)
-            ref.update(role="reference", analyzer_version=CODE_VERSION)
+            ref.update(role="reference", analyzer_version=CODE_VERSION, heard=heard.get(str(reference)))
         except Exception as e:
             progress(f"  ! {reference.name}: {e}")
             ref = {"file": reference.name, "role": "reference", "error": "unreadable or unsupported audio"
                    if "Error opening" in str(e) or "Invalid data" in str(e) else str(e)[:200]}
+        refs.append(ref)
     try:
         for i, f in enumerate(files, 1):
             f = Path(f)
@@ -3758,8 +4402,10 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
             try:
                 r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir, context=context)
                 r["analyzer_version"] = CODE_VERSION
-                if ref and "error" not in ref:
-                    r["comparison"] = compare_tracks(r, ref)
+                if heard.get(str(f)):
+                    r["heard"] = heard[str(f)]
+                if refs:
+                    r["comparison"] = compare_all(r, refs)
                 if memory:  # a signed-in musician who switched their memory on (memory.py)
                     import memory as mem
                     r["past"] = mem.compare_with_past(r, memory, fmt_time)
@@ -3780,8 +4426,7 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
                 r = {"file": f.name, "error": "unreadable or unsupported audio" if "Error opening" in str(e)
                      or "Invalid data" in str(e) else str(e)[:200]}
             results.append(r)
-        if ref:
-            results.append(ref)
+        results += refs
 
         if pending:
             for r, _ in pending:
@@ -3811,7 +4456,8 @@ def main():
                                      "(prefix with part of a file name to target one track: \"copy 4: A E F E\")")
     ap.add_argument("--instruments", help="which instruments play, comma-separated: " + ", ".join(INSTRUMENTS))
     ap.add_argument("--genre", choices=list(GENRES), help="the genre")
-    ap.add_argument("--reference", help="a song you admire: compared side by side with each of your tracks")
+    ap.add_argument("--reference", action="append", help="a song you admire, compared side by side with each of "
+                    "your tracks (up to 3: repeat the option)")
     ap.add_argument("--no-cache", action="store_true", help="re-analyse even if this recording was analysed before")
     ap.add_argument("--bench-llm", action="store_true", help="time the AI models and recommend the fastest")
     args = ap.parse_args()

@@ -28,6 +28,10 @@
   .about { border: 0; padding: 0; margin: 0 0 20px; min-width: 0; }
   .about legend { padding: 0; margin-bottom: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .inst-group .chips { margin-bottom: 8px; gap: 4px; }
+  .inst-group .chip span { padding: 4px 9px; font-size: .82rem; }
+  .inst-label { display: block; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+                margin: 0 0 3px; }
   .chip { position: relative; cursor: pointer; }
   .chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .chip span { display: inline-block; padding: 6px 11px; border: 1px solid var(--line); font-size: .86rem; user-select: none; }
@@ -52,6 +56,10 @@
   body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"],
   body.tags-mode .demos[data-only="musician"] { display: none; }
   .demos { margin-top: 56px; }
+  .admire { border: 1px solid var(--ink); border-left: 4px solid var(--accent); padding: 14px 16px; margin: 0 0 20px; }
+  .admire input.text { margin-bottom: 4px; }
+  #chosen-refs { list-style: none; padding: 0; margin: 0 0 6px; font-size: .9rem; }
+  #chosen-refs li { padding: 4px 0; border-bottom: 1px solid var(--line); }
   .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
   @media (max-width: 860px) { .demos .row3 { grid-template-columns: 1fr; } }
   .demos a.demo { display: block; padding: 16px 18px; border: 1px solid var(--line); color: inherit;
@@ -82,10 +90,11 @@
 <section class="hero">
   <div>
     <div data-only="musician">
-    <p class="eyebrow">For musicians · instrumental tracks</p>
-    <h1>Turn your tracks into ideas.</h1>
-    <p class="lede">Upload a recording and we'll tell you its key, chords, structure, groove and mood, write the bass
-      out as sheet music, and hand you ideas to try, plus MIDI files you can drop straight into your DAW.</p>
+    <p class="eyebrow">For musicians and producers · band, acoustic and electronic</p>
+    <h1>Hear what the songs you love do differently.</h1>
+    <p class="lede">Upload your track with up to three songs you admire. We measure them all the same way and show
+      where you're already close, what they share that yours doesn't, and what to try. You also get your key, chords,
+      structure, groove and mix read back to you, with the bass as sheet music and MIDI for your DAW.</p>
     </div>
     <div data-only="tags">
     <p class="eyebrow">For listeners · playlists and favourite songs</p>
@@ -95,9 +104,10 @@
       with those and you'll reach artists the big recommendation engines tend to skip.</p>
     </div>
     <div class="readout" data-only="musician">
-      <div><b><abbr title="{{ glossary['Key'] }} {{ glossary['Mode'] }}">Key</abbr></b><span>& mode</span></div>
-      <div><b><abbr title="{{ glossary['Tempo'] }} {{ glossary['Meter'] }}">BPM</abbr></b><span>& meter</span></div>
-      <div><b><abbr title="{{ glossary['MIDI'] }} {{ glossary['MusicXML'] }}">MIDI</abbr></b><span>& sheet music</span></div>
+      <div><b><abbr title="Your track beside the songs you admire: tempo, arrangement, groove, loudness, tone,
+        sidechain and drops, with only the differences big enough to hear.">vs.</abbr></b><span>songs you admire</span></div>
+      <div><b><abbr title="{{ glossary['Key'] }} {{ glossary['Tempo'] }}">Key</abbr></b><span>BPM & chords</span></div>
+      <div><b><abbr title="{{ glossary['Sidechain'] }} {{ glossary['Drop'] }}">Drops</abbr></b><span>& the mix</span></div>
     </div>
   </div>
 
@@ -118,6 +128,19 @@
           melody we find will usually be the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
       </label>
       <ul id="chosen"></ul>
+      <div class="admire" data-only="musician">
+        <label class="field" for="reference"><abbr title="Finished songs you'd like yours to feel like, from any
+          genre. We analyse them the same way and put yours beside each one (tempo, arrangement and drops, groove,
+          sidechain, loudness, punch, tone and stereo), pointing out only the differences big enough to hear, with
+          things to try. With two or three, we also show what they all have in common. They get no ideas, MIDI or
+          sheet music of their own, and they're deleted with your audio.">Songs you admire</abbr>
+          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, up to 3</span></label>
+        <input class="text" type="file" id="reference" name="reference" multiple
+               accept="{{ exts.replace(' ', ',') }},audio/*" style="padding:8px">
+        <ul id="chosen-refs"></ul>
+        <p class="muted small" style="margin:0">We'll show where you're already close, what they do differently, and
+          what to try. With more than one, what they all share is the strongest lead.</p>
+      </div>
       <div data-only="tags">
         <label class="field" for="playlist"><abbr title="A public Spotify playlist, album or track, or a YouTube
           playlist. We only read the song names from it, not the audio, so these songs count for less than the ones
@@ -162,11 +185,16 @@
           both. They also pick the sounds for the MIDI files, write a guitar part in guitar notation, label a sung
           melody, and give the AI some context.">About the music</abbr>
           <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, for every track you upload</span></legend>
-        <div class="chips" role="group" aria-label="Instruments that play">
-          {% for key, label in instruments.items() %}
-            <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}" {{ 'checked' if key in prefill.instruments }}><span>{{ label }}</span></label>
-          {% endfor %}
+        {% for group, keys in instrument_groups %}
+        <div class="inst-group" role="group" aria-label="{{ group }}">
+          <span class="inst-label">{{ group }}</span>
+          <div class="chips">
+            {% for key in keys %}
+              <label class="chip"><input type="checkbox" name="instruments" value="{{ key }}" {{ 'checked' if key in prefill.instruments }}><span>{{ instruments[key] }}</span></label>
+            {% endfor %}
+          </div>
         </div>
+        {% endfor %}
         <select name="genre" aria-label="Genre">
           <option value="">Genre — not sure / mixed</option>
           {% for key, label in genres.items() %}<option value="{{ key }}" {{ 'selected' if key == prefill.genre }}>{{ label }}</option>{% endfor %}
@@ -182,8 +210,9 @@
           <ul>
             <li><b>Drums and bass</b> decide whether you get a drum grid and a bass line. This matters most on phone
               recordings, where a bass guitar and a guitar's low strings sound alike.</li>
-            <li><b>One instrument on its own</b> (say, solo guitar or piano): we write its lowest notes out as their own
-              part, in guitar notation for a guitar, with the right sound in the MIDI file.</li>
+            <li><b>One instrument on its own</b> (say, solo guitar, piano or cello): we write its lowest notes out as
+              their own part, in guitar notation for a guitar, with that instrument's range and sound in the MIDI
+              file. A double bass or synth bass gets its own sound too.</li>
             <li><b>Voice, or one lead instrument:</b> we label the melody line as theirs.</li>
             <li><b>What it can't do:</b> apart from the drums and the lowest part, we don't write out each instrument
               separately. A guitar or piano in a band shows up in the chords and the melody line. Ticking it still
@@ -192,14 +221,6 @@
         </details>
       </fieldset>
       <div data-only="musician">
-      <label class="field" for="reference"><abbr title="A finished song you'd like yours to feel like. We analyse it
-        the same way and put the two side by side (tempo, shape, groove, loudness, tone), pointing out only the
-        differences big enough to hear, with things to try. It gets no ideas, MIDI or sheet music of its own, and
-        it's deleted with your audio.">Compare with a song you admire</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, one file</span></label>
-      <input class="text" type="file" id="reference" name="reference" accept="{{ exts.replace(' ', ',') }},audio/*"
-             style="padding:8px">
-      <p class="muted small" style="margin:0 0 18px">We'll show what it does differently from yours, and what you
-        could try.</p>
       <label class="field" for="melody"><abbr title="Picking a tune out of a full band automatically is hit and
         miss, so you can type it instead: note names with spaces between them (C D E, F# Bb …), with octaves if you
         like (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
@@ -241,17 +262,17 @@
     {% endfor %}
   </div>
   <p class="muted small" style="margin:10px 0 0">Made from computer-generated audio, so they sound simpler than a real
-    recording. The first visitor waits about half a minute while one is made; after that it opens straight away.</p>
+    recording. The first visitor waits a minute or so while one is made; after that it opens straight away.</p>
 </section>
 <section class="features" data-only="musician">
-  <div><span class="n">01</span><b>Harmony</b>Where the key moves, the mode and its colour note, and your chord
-    loops in Roman numerals.</div>
-  <div><span class="n">02</span><b>Structure &amp; feel</b>The sections, the energy and mood of each one, and where it
-    builds and drops.</div>
-  <div><span class="n">03</span><b>Rhythm &amp; parts</b>Tempo, time signature and groove, with the drums as a rhythm
-    grid and the bass as sheet music.</div>
-  <div><span class="n">04</span><b>Ideas &amp; exports</b>Things to try, well-known songs that share your track's DNA,
-    and MIDI, sheet music and the full report to take away.</div>
+  <div><span class="n">01</span><b>Next to the songs you admire</b>Side by side on one scale: tempo, arrangement,
+    groove, loudness and tone, the energy curves and tonal balance laid over each other, and what they all share.</div>
+  <div><span class="n">02</span><b>Harmony &amp; structure</b>Where the key moves, your chord loops in Roman numerals,
+    the sections, and the energy and mood of each one.</div>
+  <div><span class="n">03</span><b>Groove &amp; production</b>The drums as a grid and the bass as sheet music. For
+    electronic tracks: sidechain pumping, the drops in bars, a mono low end and punch.</div>
+  <div><span class="n">04</span><b>Ideas &amp; exports</b>Things to try, songs that share your track's DNA, and MIDI,
+    sheet music and the full report to take away.</div>
 </section>
 <p class="muted small" style="margin-top:40px;max-width:46em">You don't need an account. We delete your audio as soon as
   we've analysed it. Without an account, results stay for {{ ttl|round|int }} hours and anyone with the link can open
@@ -274,6 +295,15 @@
     }
   }
   input.addEventListener('change', show);
+  const refs = document.getElementById('reference'), refList = document.getElementById('chosen-refs');
+  refs.addEventListener('change', () => {
+    refList.innerHTML = '';
+    [...refs.files].forEach((f, i) => {
+      const li = document.createElement('li');
+      li.textContent = f.name + (i < {{ max_refs }} ? '' : ' — one too many: choose up to {{ max_refs }}');
+      refList.appendChild(li);
+    });
+  });
   ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => { input.files = ev.dataTransfer.files; show(); });
@@ -293,6 +323,11 @@
       ev.preventDefault();
       alert(tags ? 'Add some songs (upload them, paste a playlist link or type their names), or describe what you\'re after.'
                  : 'Please choose at least one audio file.');
+      return;
+    }
+    if (!tags && refs.files.length > {{ max_refs }}) {
+      ev.preventDefault();
+      alert('Please choose up to {{ max_refs }} songs you admire.');
       return;
     }
     const btn = ev.submitter || go;

@@ -134,7 +134,7 @@ def song(chords, bpm, beats_per_bar, bars_per_chord=1, loops=1, drums=True, walt
 
 def write(path, y):
     import soundfile as sf
-    sf.write(path, y, SR)
+    sf.write(path, y.T if y.ndim == 2 else y, SR)  # stereo arrays are (channels, samples)
     return path
 
 
@@ -233,6 +233,68 @@ def electronic_track(bpm=124, bars=32):
     tt = np.arange(len(pad)) / SR
     pad *= 1 - 0.75 * np.exp(-((tt % beat) / 0.12))
     y = y + pad
+    return (y / np.abs(y).max() * 0.8).astype(np.float32)
+
+
+DANCE_PLAN = [("intro", 16), ("groove", 16), ("breakdown", 8), ("build", 8), ("drop", 16), ("outro", 8)]
+
+
+def dance_track(bpm=126, plan=DANCE_PLAN, sidechain=True, wide_low=False, stabs=False):
+    """A club track with a known arrangement. intro/outro: kick and hats only; groove: + bass and pad; breakdown:
+    pad alone; build: pad + a rising noise riser and snare roll, no kick; drop: everything, louder, with a lead.
+    sidechain: pads duck after every kick. wide_low: the right channel's low end is delayed a quarter period (a
+    widened low end; returns stereo). stabs: off-beat chord stabs instead of a held pad (no sidechain shape)."""
+    beat = 60 / bpm
+    bars = sum(n for _, n in plan)
+    n = int(SR * (bars * 4 * beat + 1))
+    drums, bass, pad = np.zeros(n), np.zeros(n), np.zeros(n)
+    loop = [(57, [57, 60, 64]), (53, [53, 57, 60]), (48, [48, 52, 55]), (55, [55, 59, 62])]  # Am F C G
+    bar = 0
+    for role, count in plan:
+        for k in range(count):
+            t0 = bar * 4 * beat
+            root, notes = loop[bar % 4]
+            gain = 1.0 if role == "drop" else 0.6
+            tb_ = np.arange(int(SR * 4 * beat)) / SR
+            if role in ("groove", "breakdown", "build", "drop"):
+                if stabs:
+                    ts = np.arange(int(SR * beat * 0.3)) / SR
+                    for i in range(4):
+                        place(pad, gain * sum(0.07 * np.exp(-ts * 9) * _partials(hz(m + 12), ts, (1, .5, .33, .25))
+                                              for m in notes), t0 + i * beat + beat / 2)
+                else:
+                    place(pad, gain * sum(0.06 * _partials(hz(m + 12), tb_, (1, .5, .33, .25, .2)) for m in notes), t0)
+            if role == "drop":  # a lead an octave up
+                place(pad, 0.05 * _partials(hz(notes[-1] + 24), tb_, (1, .6, .3)), t0)
+            if role == "build":  # riser and snare roll, getting louder through the section
+                prog = (k + np.arange(int(SR * 4 * beat)) / (SR * 4 * beat)) / count
+                place(drums, 0.25 * prog ** 2 * noise(4 * beat, 1.0, 0, hp=True, seed=bar), t0)
+                for i in range(4 * (1 + 2 * k // count)):
+                    place(drums, 0.06 + 0.25 * k / count * noise(0.08, 1.0, 40, seed=i), t0 + i * beat / (1 + 2 * k // count))
+            for i in range(4):
+                tb = t0 + i * beat
+                if role in ("intro", "groove", "drop", "outro"):
+                    tk = np.arange(int(SR * 0.25)) / SR
+                    place(drums, 0.9 * np.sin(2 * np.pi * (45 + 80 * np.exp(-tk * 40)) * tk) * np.exp(-tk * 12), tb)
+                    place(drums, noise(0.09, 0.12, 40, hp=True, seed=i + 20), tb + beat / 2)
+                    if i in (1, 3) and role in ("groove", "drop"):
+                        place(drums, noise(0.12, 0.35, 35, seed=i), tb)
+                if role in ("groove", "drop"):
+                    tbass = np.arange(int(SR * beat * 0.45)) / SR
+                    place(bass, gain * 0.35 * np.exp(-tbass * 6) * _partials(hz(root - 24), tbass, (1, .45, .2)),
+                          tb + beat / 2)
+            bar += 1
+    if sidechain and not stabs:
+        tt = np.arange(n) / SR
+        pad *= 1 - 0.75 * np.exp(-((tt % beat) / 0.12))
+    left = drums + bass + pad
+    if wide_low:  # a stereo widener on the whole mix: the right channel's lows run a quarter period of 55 Hz late
+        import scipy.signal as ss
+        low = ss.sosfilt(ss.butter(4, 150, btype="low", fs=SR, output="sos"), left)
+        shift = int(SR * 0.25 / 55)
+        y = np.vstack([left, left - low + np.concatenate([np.zeros(shift), low[:-shift]])])
+    else:
+        y = left
     return (y / np.abs(y).max() * 0.8).astype(np.float32)
 
 
@@ -785,11 +847,17 @@ def web_checks(tmp, files):
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
         account_checks(base, job4)
         memory_web_checks(base, files)
-        job5, s5, _, _ = run_job([files["guitar_blues"]], extra={"instruments": ["guitar", "voice"], "genre": "blues"})
+        home = requests.get(base + "/", timeout=10).text
+        check("web", "the upload form offers single instruments, grouped (cello, synth bass, drum machine…)",
+              all(x in home for x in ('value="cello"', 'value="synth_bass"', 'value="drum_machine"', "Wind &amp; brass")))
+        job5, s5, _, _ = run_job([files["guitar_blues"]], extra={"instruments": ["classical_guitar", "voice"],
+                                                                 "genre": "blues"})
         r5 = requests.get(f"{base}/jobs/{job5}/files/music_results.json", timeout=10).json()[0] if s5["state"] == "done" else {}
         sheet = requests.get(f"{base}/jobs/{job5}/files/sheets/solo_guitar_blues_A_140bpm_low_part.musicxml", timeout=10)
         check("web", "the upload form's instruments and genre reach the analysis",
-              (r5.get("context") or {}).get("genre") == "Blues" and "voice" in r5["context"]["instruments"]
+              (r5.get("context") or {}).get("genre") == "Blues"
+              and r5["context"]["instruments"] == ["classical guitar", "lead vocals"]
+              and r5["context"]["keys"] == ["guitar", "voice"]
               and "<sign>G</sign>" in sheet.text, str(r5.get("context")))
         check("web", "a musician's analysis doesn't run the tag search",
               requests.get(f"{base}/jobs/{job5}/files/tags.json", timeout=10).status_code == 404)
@@ -799,8 +867,14 @@ def web_checks(tmp, files):
               s6["state"] == "done" and t6.ok and "12-bar blues" in t6.text
               and requests.get(f"{base}/jobs/{job6}/files/music_report.md", timeout=10).status_code == 404
               and "Your tags" in requests.get(f"{base}/jobs/{job6}", timeout=10).text, s6.get("state"))
+        too_many = [("tracks", (Path(files["pop4"]).name, open(files["pop4"], "rb")))] + [
+            ("reference", (f"ref{i}.wav", open(files["waltz3"], "rb"))) for i in range(4)]
+        r_many = requests.post(base + "/analyze", files=too_many, allow_redirects=False, timeout=60)
+        check("web", "more than three songs you admire are turned away with a clear message",
+              r_many.status_code == 400 and "Up to 3 songs you admire" in r_many.text, f"HTTP {r_many.status_code}")
         up = [("tracks", (Path(files["pop4"]).name, open(files["pop4"], "rb"))),
-              ("reference", ("my_reference.wav", open(files["waltz3"], "rb")))]
+              ("reference", ("my_reference.wav", open(files["waltz3"], "rb"))),
+              ("reference", ("second_favourite.wav", open(files["guitar_blues"], "rb")))]
         job8 = requests.post(base + "/analyze", files=up, allow_redirects=False, timeout=60).headers["Location"].rsplit("/", 1)[-1]
         t0 = time.time()
         while time.time() - t0 < 300 and requests.get(f"{base}/jobs/{job8}/status", timeout=10).json()["state"] not in ("done", "error"):
@@ -810,8 +884,8 @@ def web_checks(tmp, files):
             if not (Path(tmp) / "jobs" / job8 / "reference").exists():
                 break
             time.sleep(0.5)
-        check("web", "a reference uploaded with the form is compared, and deleted with the audio afterwards",
-              "Next to your reference" in page8 and "my_reference.wav" in page8
+        check("web", "two songs you admire uploaded with the form are compared, and deleted with the audio afterwards",
+              "Next to the songs you admire" in page8 and "my_reference.wav" in page8 and "second_favourite.wav" in page8
               and not (Path(tmp) / "jobs" / job8 / "reference").exists())
         demo1 = requests.get(base + "/demo/blues", allow_redirects=False, timeout=60).headers.get("Location", "")
         did = demo1.rsplit("/", 1)[-1]
@@ -1207,7 +1281,7 @@ def comparison_checks(tmp):
     out = Path(tmp) / "cmp_out"
     results, report = ma.run_analysis([mine], out, cache_dir=None, reference=ref)
     r = results[0]
-    areas = {i["area"]: i["idea"] for i in (r.get("comparison") or {}).get("ideas", [])}
+    areas = {i["area"]: i["idea"] for i in ((r.get("comparison") or {}).get("each") or [{}])[0].get("ideas", [])}
     check("compare", "a reference is analysed and compared: a 100 vs 128 BPM tempo gap is named",
           "tempo" in areas and "128" in areas["tempo"], " | ".join(f"{a}: {i[:60]}" for a, i in areas.items()))
     bare = ma.analyze(write(Path(tmp) / "cmp_bare.wav", song(chords, 100, 4, loops=6, drums=False)))
@@ -1218,10 +1292,234 @@ def comparison_checks(tmp):
     check("compare", "no tempo claim when one tempo is only approximate (weak pulse)",
           not any(i["area"] == "tempo" for i in ma.compare_tracks(vague, results[-1])["ideas"]))
     check("compare", "the report shows the comparison and the reference, which stays out of the track table",
-          "Next to your reference" in report and "Your reference: cmp_reference.wav" in report
+          "Next to the song you admire" in report and "Reference: cmp_reference.wav" in report
           and "| cmp_reference.wav |" not in report and results[-1].get("role") == "reference")
     check("compare", "the reference isn't counted in the musician's own profile",
           [t["file"] for t in accounts.job_summary(results)["tracks"]] == ["cmp_mine.wav"])
+
+
+def producer_checks(tmp):
+    """The producer's view (electronic.py) and the comparison against several songs: each measure on a track that
+    has the trait and one that doesn't, with known answers from the generator."""
+    import electronic
+    import instruments
+    import musicanalyze as ma
+    print("\n== Producer's view and songs you admire ==")
+    bpm, beat = 126, 60 / 126
+    # --- sidechain pumping, on the generator's own beat grid (the kicks), then half a beat off: the measure
+    # mustn't depend on where a tracker puts the beat
+    kicks = np.arange(0, 70, beat)
+    split = lambda y: instruments.separate(y, SR, fast=True)[1]
+    plan = [("groove", 16), ("drop", 16)]
+    sc = electronic.pump(split(dance_track(bpm, plan)), SR, kicks)
+    off = electronic.pump(split(dance_track(bpm, plan)), SR, kicks + beat / 2)
+    flat = electronic.pump(split(dance_track(bpm, plan, sidechain=False)), SR, kicks)
+    stab = electronic.pump(split(dance_track(bpm, plan, stabs=True)), SR, kicks)
+    check("producer", "sidechain pumping is found (pads ducked after every kick), wherever the beat grid sits",
+          bool(sc and sc["kind"] and off and off["kind"]),
+          f"{(sc or {}).get('measured_db')} / {(off or {}).get('measured_db')} dB")
+    check("producer", "no pumping on held pads, or on off-beat stabs (a sharp attack and a slow decay, the opposite shape)",
+          bool(flat and not flat["kind"] and stab and not stab["kind"]),
+          f"held {(flat or {}).get('measured_db')} dB, stabs {(stab or {}).get('measured_db')} dB "
+          f"(fall {(stab or {}).get('fall_beats')} / rise {(stab or {}).get('rise_beats')} beat)")
+    # --- the low end in mono, punch (peak-to-loudness), measured on files as streaming services would
+    mono_y = dance_track(bpm, plan)
+    wide = ma.streaming_loudness(write(Path(tmp) / "pr_wide.wav", dance_track(bpm, plan, wide_low=True)))
+    narrow = ma.streaming_loudness(write(Path(tmp) / "pr_narrow.wav", np.vstack([mono_y, mono_y])))
+    import scipy.signal as ss
+    hi = ss.sosfilt(ss.butter(4, 2000, btype="high", fs=SR, output="sos"), mono_y)
+    lag = int(SR * 0.0007)  # a 0.7 ms delay on the highs only: wide top, mono bottom
+    tops = ma.streaming_loudness(write(Path(tmp) / "pr_tops.wav",
+                                       np.vstack([mono_y, mono_y - hi + np.concatenate([np.zeros(lag), hi[:-lag]])])))
+    check("producer", "a widened low end is flagged; a mono one, or one wide only in the highs, isn't",
+          electronic.low_end_wide(wide) and not electronic.low_end_wide(narrow) and not electronic.low_end_wide(tops)
+          and tops["band_widths"]["high"] < tops["band_widths"]["low"],
+          f"low {wide['band_widths']['low']} / {narrow['band_widths']['low']} / {tops['band_widths']['low']} "
+          f"(highs {tops['band_widths']['high']})")
+    loud = ma.streaming_loudness(write(Path(tmp) / "pr_limited.wav", np.clip(mono_y * 6, -0.8, 0.8)))
+    check("producer", "a hard-limited master has a lower peak-to-loudness ratio (less punch) than the original",
+          narrow["plr_db"] - loud["plr_db"] >= ma.PLR_DIFF_DB, f"{narrow['plr_db']} vs {loud['plr_db']} dB")
+    # --- sections from drum activity, on made-up level curves (100 frames a second, a beat every half second):
+    # drums stop 40-56 s (a 16 s breakdown: split), and again for the last 6 s (a ring-out: no section of its own)
+    fps, dur = 100, 90.0
+    n = int(dur * fps)
+    tt = np.arange(n) / fps
+    drum_curve = np.where(((tt >= 40) & (tt < 56)) | (tt >= 84), 1e-6, 1.0)
+    curves = [drum_curve, np.ones(n), np.ones(n)]
+    one = [{"label": "A", "start": 0.0, "end": dur, "energy": "medium", "energy_db": -10.0}]
+    got = ma.refine_sections(one, curves, fps, np.arange(0, dur, 0.5), dur, np.full(n, -10.0))
+    starts = [x["start"] for x in got]
+    check("producer", "a 16 s stretch without drums becomes its own section; a 6 s ring-out at the end doesn't",
+          len(got) == 3 and abs(starts[1] - 40) <= 0.5 and abs(starts[2] - 56) <= 0.5, str(starts))
+    kept = ma.refine_sections([dict(one[0], end=30.0), {"label": "B", "start": 30.0, "end": dur, "energy": "medium",
+                                                        "energy_db": -10.0}],
+                              [np.where(tt >= 33, 1.0, 1e-6), np.ones(n), np.ones(n)], fps, np.arange(0, dur, 0.5),
+                              dur, np.full(n, -10.0), drums=False, key_changes=[30.0])
+    check("producer", "a boundary on a key change stays put, even with a level change 3 s away",
+          [x["start"] for x in kept] == [0.0, 30.0], str([x["start"] for x in kept]))
+    # --- whole analyses: a club track with a known arrangement, one without a breakdown or pumping, a third with a
+    # breakdown the chords carry on through (only the drums say it's a new section), and a pop song
+    house = ma.clean_context(["drums", "bass", "synth"], "house")
+    rA = ma.analyze(write(Path(tmp) / "pr_club.wav", dance_track(bpm)), context=house)
+    rB = ma.analyze(write(Path(tmp) / "pr_mine.wav", dance_track(124, [("intro", 8), ("groove", 16), ("drop", 16),
+                                                                     ("outro", 8)], sidechain=False)), context=house)
+    rC = ma.analyze(write(Path(tmp) / "pr_other.wav", dance_track(128, [("intro", 16), ("drop", 16), ("breakdown", 16),
+                                                                      ("build", 8), ("drop", 16), ("outro", 8)])))
+    pop = ma.analyze(write(Path(tmp) / "pr_pop.wav", song([("C", ""), ("G", ""), ("A", "m"), ("F", "")], 110, 4, loops=10)))
+    phase = np.median([(t % beat) / beat for t in rA["beat_times"]])
+    phase = min(phase, 1 - phase)
+    check("producer", "the beats sit on the kicks of a house groove (not on the louder off-beat hats and bass)",
+          phase < 0.1 and "four-on-the-floor" in rA["drums"].get("traits", []),
+          f"{phase:.2f} of a beat off · {rA['drums'].get('grid')} {rA['drums'].get('traits')}")
+    pop_drums = instruments.separate(song([("C", "")], 110, 4, loops=12), SR, fast=True)[0]
+    on_beats = np.round(np.arange(0.0, 24, 60 / 110) * SR / ma.HOP).astype(int)
+    check("producer", "a kick on 1 and 3 stays where it is (beats aren't moved when the kicks are on them)",
+          instruments.onto_kicks(pop_drums, SR, on_beats, ma.HOP) is None
+          and "four-on-the-floor" not in (pop["drums"].get("traits") or []))
+    mA = (rA.get("producer") or {}).get("map") or {}
+    roles = [x["role"] for x in mA.get("sections", [])]
+    bars = [x["bars"] for x in mA.get("sections", [])]
+    want = [16, 16, 8, 8, 16, 8]
+    check("producer", "a club track's arrangement is mapped: intro, drop, breakdown, build, drop, outro, in bars",
+          roles == ["intro", "drop", "breakdown", "build", "drop", "outro"]
+          # a riser fades in, so where the build starts is a matter of ear: judge breakdown + build together
+          and all(abs(bars[i] - want[i]) <= 2 for i in (0, 1, 4, 5)) and abs(bars[2] + bars[3] - 16) <= 2
+          and abs((mA.get("first_drop_bar") or 0) - 17) <= 1,
+          f"{list(zip(roles, bars))}, first drop bar {mA.get('first_drop_bar')}")
+    check("producer", "the drop after the breakdown lands clearly; the beat-only intro is easy to mix in",
+          (mA.get("impact_db") or 0) >= electronic.DROP_DB and mA.get("beat_only_intro") is True,
+          f"+{mA.get('impact_db')} dB")
+    mC = (rC.get("producer") or {}).get("map") or {}
+    check("producer", "a breakdown under the same chords is still its own section (the drums stop for 16 bars)",
+          [x["role"] for x in mC.get("sections", [])][1:4] == ["drop", "breakdown", "build"],
+          str([(x["role"], x["bars"]) for x in mC.get("sections", [])]))
+    pB = rB.get("producer") or {}
+    check("producer", "no pumping and no breakdown in a track without them; the sidechain idea is offered",
+          not (pB.get("pump") or {}).get("kind") and (pB.get("map") or {}).get("has_breakdown") is False
+          and any("Sidechain them to the kick" in i["idea"] for i in rB["ideas"]))
+    check("producer", "a pop song with a kick on 1 and 3 gets no dance arrangement or club ideas",
+          not ((pop.get("producer") or {}).get("map")) and not any(i["area"] == "arrangement" and "DJs" in i["idea"]
+                                                                   for i in pop["ideas"]))
+    # --- several songs you admire
+    both = ma.compare_all(rB, [rA, rC])
+    keys = [i["key"] for i in both["shared"]]
+    check("compare", "what both admired songs share is named (they pump, yours doesn't), and only that",
+          "pump_more" in keys and all(k in {i["key"] for i in c["ideas"]} for c in both["each"] for k in keys),
+          ", ".join(keys))
+    mixed = ma.compare_all(rB, [rA, rB])
+    check("compare", "a difference only one of them has isn't called shared",
+          not any(i["key"] == "pump_more" for i in mixed["shared"]))
+    same = ma.compare_all(rA, [rA, rA])
+    check("compare", "a track next to itself: no differences, close in every area",
+          not same["shared"] and not any(c["ideas"] for c in same["each"]) and not same["different"])
+    rB["comparison"] = both
+    report = ma.build_report([rB, dict(rA, role="reference"), dict(rC, role="reference")])
+    mine = report[report.index("## 🎵 pr_mine.wav"):]
+    check("compare", "the comparison comes first in the track's report, with both curves laid over each other",
+          mine.index("Next to the songs you admire") < mine.index("### Harmony")
+          and mine.count('class="overlay"') == 2 and "Both songs you admire" in mine
+          and "Reference: pr_club.wav" in report and "| pr_club.wav |" not in report)
+    check("producer", "the producer's view appears for the club track",
+          "Producer's view" in mine and "Dance arrangement" in mine and "Sidechain" in mine)
+
+
+JAMENDO_INSTRUMENTS = ["accordion", "acousticbassguitar", "acousticguitar", "bass", "beat", "bell", "bongo", "brass",
+                       "cello", "clarinet", "classicalguitar", "computer", "doublebass", "drummachine", "drums",
+                       "electricguitar", "electricpiano", "flute", "guitar", "harmonica", "harp", "horn", "keyboard",
+                       "oboe", "orchestra", "organ", "pad", "percussion", "piano", "pipeorgan", "rhodes", "sampler",
+                       "saxophone", "strings", "synthesizer", "trombone", "trumpet", "viola", "violin", "voice"]
+
+
+def _midi_programs(path):
+    data = Path(path).read_bytes()
+    return [data[i + 1] for i in range(len(data) - 1) if data[i] == 0xC0]
+
+
+def instrument_checks(tmp):
+    """More instruments: each one picked belongs to a family the analysis reasons with, and brings its own range,
+    MIDI sound, notation and name. The instrument model's opinion is shown and compared, never obeyed."""
+    import musicanalyze as ma
+    print("\n== Instruments ==")
+    info = ma.INSTRUMENT_INFO
+    check("instruments", "every instrument on the form has a family, a label, and a place in one group",
+          all(v[1] in ma.FAMILY_LABEL for v in info.values())
+          and sorted(k for _, keys in ma.INSTRUMENT_GROUPS for k in keys) == sorted(info))
+    check("instruments", "every instrument the model can name maps to one of ours (all 40)",
+          set(JAMENDO_INSTRUMENTS) == set(ma.HEARD_MAP) and all(v in info for v in ma.HEARD_MAP.values()))
+    old = ma.clean_context(["keys", "guitar", "nonsense"], None)
+    check("instruments", "older choices (whole families) still work; unknown ones are dropped",
+          old == {"instruments": ["keys", "guitar"], "genre": None})
+    cache = Path(tmp) / "inst_cache"
+    # a solo instrument (no drums, no bass) playing A-E-F#m-D: its low part is written out as its own
+    solo = write(Path(tmp) / "inst_solo.wav", song([("A", ""), ("E", ""), ("F#", "m"), ("D", "")], 96, 4, loops=6,
+                                                   drums=False))
+    with_ctx = lambda *keys: ma.analyze(solo, cache_dir=cache, context=ma.clean_context(list(keys)))
+    cello = with_ctx("cello")
+    check("instruments", "a solo cello: its low part is the cello's (range from C2, cello sound in the MIDI file)",
+          cello.get("low_part_specific") == "cello" and ma.low_part_range(cello)[0] == 36
+          and "cello" in ma.low_part_range(cello)[1], f"{cello.get('low_part_instrument')} / {cello.get('low_part_specific')}")
+    out = Path(tmp) / "inst_midi"
+    files = ma.export_midis(cello, out)
+    progs = [p for f in files if f["file"].endswith("_transcription.mid") for p in _midi_programs(out / f["file"])]
+    check("instruments", "the cello's MIDI file uses the cello sound (General MIDI 42)", progs == [42], str(progs))
+    report = lambda r: "\n".join(ma.track_report(r))
+    guitar, uke = with_ctx("acoustic_guitar"), with_ctx("ukulele")
+    check("instruments", "capo shapes are offered for a guitar, not for a ukulele (other tuning, other shapes)",
+          "For guitar" in report(guitar) and "For guitar" not in report(uke) and bool(guitar.get("guitar")),
+          str((guitar.get("guitar") or {}).get("capo")))
+    two = with_ctx("violin", "cello")
+    check("instruments", "two string instruments named: the low part is called the strings' (we can't tell whose)",
+          two.get("low_part_instrument") == "strings" and not two.get("low_part_specific"))
+    sax = {"context": {"chosen": ["saxophone", "drums"]}}
+    check("instruments", "a lead is called by its name when exactly one was picked in its family",
+          ma.named_instrument(sax, "winds") == "saxophone"
+          and ma.named_instrument({"context": {"chosen": ["flute", "trumpet"]}}, "winds") == "wind / brass")
+    band = write(Path(tmp) / "inst_band.wav", song([("A", "m"), ("F", ""), ("C", ""), ("G", "")], 110, 4, loops=6))
+    synth = ma.analyze(band, cache_dir=cache, context=ma.clean_context(["drum_machine", "synth_bass", "synth_pad"]))
+    files = ma.export_midis(synth, Path(tmp) / "inst_midi2")
+    progs = [p for f in files if f["file"].endswith("_transcription.mid")
+             for p in _midi_programs(Path(tmp) / "inst_midi2" / f["file"])]
+    check("instruments", "a drum machine counts as drums and a synth bass as the bass (MIDI: synth bass sound)",
+          synth["drums"].get("present") and synth["bass"].get("present") and progs == [38],
+          f"drums {synth['drums'].get('present')}, bass {synth['bass'].get('present')}, programs {progs}")
+
+    # --- the instrument model: a second opinion, never obeyed (the fake backend stands in for it here)
+    saved = {k: os.environ.get(k) for k in ("MUSIC_TAGGER", "MUSIC_HEAR")}
+    os.environ["MUSIC_TAGGER"] = "fake"  # it always "hears" guitar 60%, drums 20%, piano 10%
+    try:
+        res, rep = ma.run_analysis([band], Path(tmp) / "inst_run1", cache_dir=cache,
+                                   context=ma.clean_context(["drums", "bass"]))
+        r = res[0]
+        names = [x["name"] for x in (r.get("heard") or {}).get("instruments", [])]
+        check("instruments", "the instruments the model hears are listed, sure ones you didn't tick are pointed out",
+              names[:2] == ["guitar", "drums"] and "piano" not in names and "Instruments we hear" in rep
+              and "We also hear guitar" in rep and r["drums"].get("present"), str(names))
+        res2, rep2 = ma.run_analysis([band], Path(tmp) / "inst_run2", cache_dir=cache,
+                                     context=ma.clean_context(["drums", "bass", "electric_guitar"]))
+        check("instruments", "no 'we also hear' when you ticked that family, and nothing changes on its say-so",
+              "We also hear" not in rep2 and res2[0]["drums"] == r["drums"] and res2[0]["key"] == r["key"])
+        os.environ["MUSIC_HEAR"] = "0"
+        res3, _ = ma.run_analysis([band], Path(tmp) / "inst_run3", cache_dir=cache)
+        check("instruments", "switched off (MUSIC_HEAR=0): no model opinion at all", "heard" not in res3[0])
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    # --- comparing what's heard: a reference that features an instrument yours hardly has
+    heard = lambda *xs: {"instruments": [{"key": k, "name": ma.INSTRUMENTS[k], "p": p} for k, p in xs], "model": "x"}
+    mine = dict(r, heard=heard(("electric_guitar", 0.6), ("drums", 0.5)))
+    ref1 = dict(r, file="ref1.wav", heard=heard(("saxophone", 0.55), ("drums", 0.5)))
+    ref2 = dict(r, file="ref2.wav", heard=heard(("saxophone", 0.45), ("piano", 0.3)))
+    both = ma.compare_all(mine, [ref1, ref2])
+    keys1 = [i["key"] for i in both["each"][0]["ideas"]]
+    check("compare", "a reference featuring an instrument yours lacks is named, and when both do it's shared",
+          "inst_saxophone" in keys1 and any(i["key"] == "inst_saxophone" and "saxophone" in i["idea"]
+                                            for i in both["shared"]), str(keys1))
+    has = ma.compare_tracks(dict(mine, heard=heard(("electric_guitar", 0.6), ("saxophone", 0.2))), ref1)
+    check("compare", "no instrument note when yours has it too (even quieter), or for drums and bass (we measure those)",
+          not any(i["key"].startswith("inst_") for i in has["ideas"]), str([i["key"] for i in has["ideas"]]))
 
 
 def memory_checks():
@@ -1445,6 +1743,14 @@ def main():
             comparison_checks(tmp)
         except Exception:
             check("compare", "comparison checks ran", False, traceback.format_exc(limit=3))
+        try:
+            producer_checks(tmp)
+        except Exception:
+            check("producer", "producer checks ran", False, traceback.format_exc(limit=3))
+        try:
+            instrument_checks(tmp)
+        except Exception:
+            check("instruments", "instrument checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:

@@ -184,7 +184,8 @@ def summarise(raw):
     moods = {k: v for k, v in raw.get("moods", {}).items() if k not in USE_THEMES}
     out = {"styles": top(raw.get("styles", {}), 6, 0.08),
            "moods": top(moods, 5, 0.06),
-           "instruments": top(raw.get("instruments", {}), 5, 0.12)}
+           "instruments": top(raw.get("instruments", {}), 5, 0.12),
+           "instrument_scores": raw.get("instruments", {})}  # all 40, for the musician's "instruments we hear"
     for key, pos in POSITIVE.items():
         if key in raw:
             out[key] = raw[key].get(pos, next((v for c, v in raw[key].items() if c.replace("_", "") == pos), None))

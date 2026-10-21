@@ -97,6 +97,44 @@ def hits_are_drums(drums, sr):
     return value >= 0.0008, value
 
 
+OFFBEAT_KICK_RATIO = 2.0  # kicks at least twice as strong halfway between the beats as on them: the grid is off
+EVEN_KICKS = 0.6          # four-on-the-floor: the weakest of the four beats' kicks is at least 60% of the strongest
+
+
+def onto_kicks(drums, sr, beat_frames, hop):
+    """In house and techno the off-beat hi-hat and bass are often the sharpest attacks, so the beat tracker can
+    count them as the beat - then the kick lands halfway between "beats". The kick marks the beat in drum-based
+    music, so: compare the kick band's attacks on the beats with those halfway between them, and if the kicks are
+    clearly in between (OFFBEAT_KICK_RATIO), move every beat half a beat on and onto the nearest kick (within an
+    8th of a beat). Returns the corrected beat frames, or None when the beats already sit on the kicks."""
+    import librosa
+    beat_frames = np.asarray(beat_frames)
+    if len(beat_frames) < 9:
+        return None
+    S = np.abs(librosa.stft(drums, n_fft=2048, hop_length=hop))
+    f = librosa.fft_frequencies(sr=sr, n_fft=2048)
+    lo, hi = DRUM_BANDS["Kick"]
+    # the rise in power, not in dB: a bass note rising out of silence jumps as many dB as a kick, but the kick
+    # carries far more power
+    P = (S[(f >= lo) & (f < hi)] ** 2).sum(axis=0)
+    env = np.maximum(0.0, np.diff(P, prepend=P[0]))
+    peak = lambda i: env[max(0, i - 1):i + 2].max() if 0 <= i < len(env) else 0.0
+    mids = (beat_frames[:-1] + beat_frames[1:]) // 2
+    on = np.median([peak(int(i)) for i in beat_frames[:-1]])
+    off = np.median([peak(int(i)) for i in mids])
+    if not (off > 0 and off >= OFFBEAT_KICK_RATIO * max(on, 1e-6)):
+        return None
+    period = float(np.median(np.diff(beat_frames)))
+    reach = max(1, int(round(period / 8)))
+    moved = []
+    for m in np.round(beat_frames + period / 2).astype(int):
+        if m >= len(env):
+            break
+        a = max(0, m - reach)
+        moved.append(a + int(np.argmax(env[a:m + reach + 1])))
+    return np.array(sorted(set(moved)), dtype=int)
+
+
 def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are_drums=True):
     """Where in the bar the drums hit, and whether each spot is kick- or snare-heavy.
 
@@ -123,12 +161,20 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are
         return np.array([env[max(0, i - 2):i + 3].max() for i in idx])
 
     db = librosa.amplitude_to_db(S, ref=np.max)
-    overall = at_slots(librosa.onset.onset_strength(S=db, sr=sr, hop_length=hop))
     band = {}
     for name, (lo, hi) in DRUM_BANDS.items():
         sel = (freqs >= lo) & (freqs < hi)
         if (S[sel] ** 2).sum() >= 0.01 * (S ** 2).sum():
-            band[name] = at_slots(librosa.onset.onset_strength(S=db[sel], sr=sr, hop_length=hop))
+            if name == "Kick":  # the kick is the big low-end hit: its rise in power, not in dB (see onto_kicks)
+                P = (S[sel] ** 2).sum(axis=0)
+                band[name] = at_slots(np.maximum(0.0, np.diff(P, prepend=P[0])))
+            else:
+                band[name] = at_slots(librosa.onset.onset_strength(S=db[sel], sr=sr, hop_length=hop))
+    # Each drum voice counts equally: an onset curve over all frequencies is ruled by whatever covers the most
+    # bins - the hi-hats - so a kick (a few low bins) could vanish from the grid of a house track.
+    scaled = [v / (np.percentile(v, 90) + 1e-9) for v in band.values()]
+    overall = (np.mean(scaled, axis=0) if len(scaled) >= 2 else
+               at_slots(librosa.onset.onset_strength(S=db, sr=sr, hop_length=hop)))
 
     def bar_profile(v, offset):
         n = (len(v) - 4 * offset) // slots
@@ -155,14 +201,15 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are
     hit = z(bars.mean(0))
 
     grid = []
-    k_minus_s = (z(bar_profile(kick, offset)[active].mean(0)) - z(bar_profile(snare, offset)[active].mean(0))
-                 if kick is not None and snare is not None else np.zeros(slots))
+    kz = z(bar_profile(kick, offset)[active].mean(0)) if kick is not None else np.zeros(slots)
+    sz = z(bar_profile(snare, offset)[active].mean(0)) if snare is not None else np.zeros(slots)
+    k_minus_s = kz - sz if kick is not None and snare is not None else np.zeros(slots)
     for i in range(slots):
         if hit[i] <= 0.3:
             grid.append(".")
-        elif k_minus_s[i] > 0.4:
+        elif k_minus_s[i] > 0.4 and (kick is None or kz[i] > 0):  # and the kick band itself hits here
             grid.append("K")
-        elif k_minus_s[i] < -0.4:
+        elif k_minus_s[i] < -0.4 and (snare is None or sz[i] > 0):
             grid.append("S")
         else:
             grid.append("X" if hit[i] > 0.9 else "x")
@@ -191,7 +238,14 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are
                     "repetition_score": round(float(np.mean(corr)), 2), "fills": fills[:6], "traits": traits,
                     "bars": int(active.sum())})
         return out
-    if all(g[i] in "KX" for i in (0, 4, 8, 12)):
+    # every beat carries a kick: from the grid, or from the kick band on its own (in a house mix the hats and
+    # the off-beat bass outvote the kick in the grid) - four kicks of about the same weight, louder than anything
+    # in the kick band between the beats (a snare's low thump on 2 and 4 is much weaker than a kick)
+    kp = bar_profile(kick, offset)[active].mean(0) if kick is not None else np.zeros(slots)
+    on_beats, offs = kz[[0, 4, 8, 12]], np.delete(kz, [0, 4, 8, 12])
+    if all(g[i] in "KX" for i in (0, 4, 8, 12)) or (
+            kick is not None and on_beats.min() > 0.5 and on_beats.min() > offs.max()
+            and kp[[0, 4, 8, 12]].min() >= EVEN_KICKS * kp[[0, 4, 8, 12]].max()):
         traits.append("four-on-the-floor")
     if g[4] in "SX" and g[12] in "SX" and "S" in (g[4], g[12]):
         traits.append("backbeat (snare on 2 and 4)")

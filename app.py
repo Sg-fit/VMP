@@ -369,8 +369,7 @@ def user_memory(u):
         st = read_status(DATA_DIR / it["job_id"])
         c = st.get("context")
         contexts.append({"keys": c.get("instruments") or [], "genre_key": c.get("genre")} if c else None)
-        if st.get("reference"):
-            refs.append(st["reference"])
+        refs += st.get("references") or ([st["reference"]] if st.get("reference") else [])
         res = DATA_DIR / it["job_id"] / "output" / "music_results.json"
         if n < MEMORY_SCAN and res.exists():
             try:
@@ -498,7 +497,9 @@ def _too_many_uploads():
 
 def form_page(error=None, code=200):
     return render_template("index.html", error=error, ai_label=LLM_LABEL, max_files=MAX_FILES, version=ma.CODE_VERSION,
-                           instruments=ma.INSTRUMENTS, genres={k: v[0] for k, v in ma.GENRES.items()},
+                           max_refs=ma.MAX_REFERENCES,
+                           instruments=ma.INSTRUMENTS, instrument_groups=ma.INSTRUMENT_GROUPS,
+                           genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
                            mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
                            form=request.form, demos=demos.DEMOS, prefill=memory.prefill(user_memory(current_user()))), code
@@ -574,16 +575,22 @@ def analyze():
     if not saved and uploads and not (tags_mode and (playlist or songs.strip() or description)):
         shutil.rmtree(d, ignore_errors=True)
         return form_page("We can't read any of those files. Try mp3, wav, m4a, flac, ogg or aac.", 400)
-    reference = None
-    ref_upload = request.files.get("reference")
-    if not tags_mode and ref_upload and ref_upload.filename:  # a song to measure the musician's track against
+    references = []  # songs the musician admires, to measure their tracks against (up to ma.MAX_REFERENCES)
+    ref_uploads = [f for f in request.files.getlist("reference") if f and f.filename] if not tags_mode else []
+    if len(ref_uploads) > ma.MAX_REFERENCES:
+        shutil.rmtree(d, ignore_errors=True)
+        return form_page(f"Up to {ma.MAX_REFERENCES} songs you admire at a time, please.", 400)
+    for ref_upload in ref_uploads:
         name = secure_filename(ref_upload.filename) or "reference"
         if Path(name).suffix.lower() not in ma.AUDIO_EXTS:
             shutil.rmtree(d, ignore_errors=True)
-            return form_page("We can't read that reference file. Try mp3, wav, m4a, flac, ogg or aac.", 400)
-        (d / "reference").mkdir()
+            return form_page(f"We can't read {name}. Try mp3, wav, m4a, flac, ogg or aac.", 400)
+        (d / "reference").mkdir(exist_ok=True)
+        stem, ext, n = Path(name).stem, Path(name).suffix, 2
+        while (d / "reference" / name).exists():
+            name, n = f"{stem}_{n}{ext}", n + 1
         ref_upload.save(d / "reference" / name)
-        reference = name
+        references.append(name)
 
     ahead = job_queue.qsize()
     if tags_mode:  # finding music: none of the musician's options apply
@@ -591,7 +598,7 @@ def analyze():
                      description=description, created=time.time(),
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
-        write_status(d, state="queued", mode="musician", files=saved, reference=reference,
+        write_status(d, state="queued", mode="musician", files=saved, references=references,
                      memory=user_memory(current_user()),  # None unless signed in with the memory switched on
                      use_ai=bool(LLM and request.form.get("ai")),
                      melody=(request.form.get("melody") or "")[:2000],
@@ -612,12 +619,12 @@ def job(job_id):
     report_html, midi_files = None, []
     if s.get("state") == "done" and s.get("mode") == "tags":
         report_md = (d / "output" / "tags_report.md").read_text(encoding="utf-8")
-        report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
+        report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code", "md_in_html"])
         # search links open in a new tab, so the tags stay open while browsing
         report_html = report_html.replace('<a href="http', '<a target="_blank" rel="noopener" href="http')
     elif s.get("state") == "done":
         report_md = (d / "output" / "music_report.md").read_text(encoding="utf-8")
-        report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code"])
+        report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code", "md_in_html"])
         report_html = re.sub(  # turn `midi/x.mid` and `sheets/x.html` mentions into links
             r"<code>((?:midi|sheets)/[\w.\-]+\.(?:mid|musicxml|html))</code>",
             lambda m: f'<a class="midi" href="{url_for("job_file", job_id=job_id, name=m.group(1))}"'

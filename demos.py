@@ -9,7 +9,7 @@ version, so a new release makes fresh demos and the old ones expire like any oth
 import hashlib
 from pathlib import Path
 
-VERSION = 1  # bump when the demo material changes
+VERSION = 2  # bump when the demo material changes
 
 DEMOS = {
     "blues": {
@@ -23,9 +23,9 @@ DEMOS = {
                  "differently, and what to try.",
     },
     "electronic": {
-        "title": "House track",
-        "about": "Four on the floor at 124 BPM: the drum grid, the synth bass, the energy arc and loudness for "
-                 "streaming.",
+        "title": "House track, next to two it admires",
+        "about": "Four on the floor at 124 BPM beside two club tracks: what both of them share (sidechain pumping, a "
+                 "breakdown), the drops in bars, the energy curves laid over each other.",
     },
 }
 
@@ -41,7 +41,7 @@ def prepare(slug, d):
     import selftest as st
     d = Path(d)
     (d / "input").mkdir(parents=True, exist_ok=True)
-    fields = {"mode": "musician", "demo": slug, "use_ai": False, "melody": "", "context": None, "reference": None}
+    fields = {"mode": "musician", "demo": slug, "use_ai": False, "melody": "", "context": None, "references": []}
     if slug == "blues":
         name = "Solo guitar blues (generated).wav"
         st.write(d / "input" / name, st.guitar_blues())
@@ -56,10 +56,19 @@ def prepare(slug, d):
         ref = "A song I admire (generated).wav"
         (d / "reference").mkdir(exist_ok=True)
         st.write(d / "reference" / ref, st.song([("E", "m"), ("C", ""), ("G", ""), ("D", "")], 118, 4, loops=10))
-        fields["reference"] = ref
+        fields["references"] = [ref]
     elif slug == "electronic":
-        name = "House track (generated).wav"
-        st.write(d / "input" / name, st.electronic_track())
+        name = "My house track (generated).wav"
+        st.write(d / "input" / name, st.dance_track(124, [("intro", 8), ("groove", 16), ("drop", 16), ("outro", 8)],
+                                                     sidechain=False))
+        fields["context"] = ma.clean_context(["drums", "bass", "synth"], "house")
+        (d / "reference").mkdir(exist_ok=True)
+        refs = {"Club track I admire (generated).wav": st.dance_track(126),
+                "Another favourite (generated).wav": st.dance_track(
+                    128, [("intro", 16), ("drop", 16), ("breakdown", 16), ("build", 8), ("drop", 16), ("outro", 8)])}
+        for ref, audio in refs.items():
+            st.write(d / "reference" / ref, audio)
+        fields["references"] = list(refs)
     else:
         raise KeyError(slug)
     fields["files"] = [name]
