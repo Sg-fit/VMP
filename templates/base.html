@@ -11,6 +11,8 @@
       --bg: #f3f3f1; --surface: #ffffff; --ink: #111111;
       --muted: rgba(17, 17, 17, .62); --line: rgba(17, 17, 17, .14); --faint: rgba(17, 17, 17, .05);
       --accent: #ff5a1f; --on-accent: #111111; --err: #c4210b;
+      /* chart series: blue, orange, aqua - checked for colour-blind separation on these surfaces (charts.py) */
+      --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a;
       --sans: Futura, "Futura PT", "Avenir Next", Avenir, "Century Gothic", "Helvetica Neue", system-ui, sans-serif;
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       color-scheme: light;
@@ -20,9 +22,13 @@
         --bg: #191919; --surface: #222222; --ink: #ecf0f1;
         --muted: rgba(236, 240, 241, .68); --line: rgba(236, 240, 241, .14); --faint: rgba(236, 240, 241, .06);
         --err: #ff8a73; color-scheme: dark;
+        --c1: #3987e5; --c2: #d95926; --c3: #199e70;
       }
     }
     * { box-sizing: border-box; }
+    svg.chart text, svg.spark text { font-family: var(--sans); }
+    figure { margin: 0; }
+    figcaption { font-size: .78rem; color: var(--muted); margin-top: 6px; line-height: 1.35; }
     body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--sans);
            -webkit-font-smoothing: antialiased; }
     ::selection { background: var(--accent); color: var(--on-accent); }

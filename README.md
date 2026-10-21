@@ -22,6 +22,17 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **🎹 MIDI sketches** | `.mid` files of the bass (as played, and as written on the sheet), each detected chord loop, a variation of each loop, and the AI's progressions. Drag them into any DAW. |
 | **🔗 Tracks that blend well** | With several files: which tracks are key-compatible (on the Camelot wheel) and close in tempo, for medleys, mashups or set lists |
 
+**Pictures, not just words** (`charts.py`, inline SVG, so they show on the page and in the downloaded report, in
+light and dark mode, with hover tooltips): each track opens with **at a glance** (its key on the Camelot wheel with
+the keys it mixes with, its tempo on a ruler with half and double time and the genre's usual range, its sections on
+an energy/mood map, its loudness against Spotify's level); then the **chords over time** coloured by what they do
+(home, away, tension, borrowed), time in each key and the frequency balance as bars, the **drum groove** as a grid of
+dots, the **bass as a piano roll**, the **dance arrangement** as role blocks and the **pumping** as one beat's level.
+Next to the songs you admire: a **measure-by-measure chart** (your dot against theirs on each measure) and the energy
+and tonal-balance overlays. On the site: an example chart and a picture on each feature on the home page, demo
+thumbnails, a **profile** with your keys on the wheel, your tracks on the mood map and every tempo, sparklines in
+your **history**, and bar charts for tags.
+
 It comes as a **web app** (upload tracks in the browser) and a **command-line tool**. Only the analysis numbers are sent to the AI, never the audio.
 
 **Your memory** (signed-in accounts, off until switched on at *Profile → What we remember*): the app learns from

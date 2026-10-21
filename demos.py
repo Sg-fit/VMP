@@ -61,7 +61,7 @@ def prepare(slug, d):
         name = "My house track (generated).wav"
         st.write(d / "input" / name, st.dance_track(124, [("intro", 8), ("groove", 16), ("drop", 16), ("outro", 8)],
                                                      sidechain=False))
-        fields["context"] = ma.clean_context(["drums", "bass", "synth"], "house")
+        fields["context"] = ma.clean_context(["drum_machine", "synth_bass", "synth_pad"], "house")
         (d / "reference").mkdir(exist_ok=True)
         refs = {"Club track I admire (generated).wav": st.dance_track(126),
                 "Another favourite (generated).wav": st.dance_track(

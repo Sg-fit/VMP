@@ -40,6 +40,7 @@ def _private_numba_cache():
 
 _private_numba_cache()
 
+import charts
 import electronic
 import inspiration
 import instruments
@@ -2428,7 +2429,7 @@ def compare_all(mine, refs):
                 shared.append({"area": area, "key": key, "idea": f"{who} {phrase}"})
     groups = list(dict.fromkeys(AREA_GROUPS.values()))
     differs = {g: sum(1 for c in each if any(AREA_GROUPS.get(i["area"]) == g for i in c["ideas"])) for g in groups}
-    curves = [{"file": x["file"], "duration_sec": x.get("duration_sec"),
+    curves = [{"file": x["file"], "duration_sec": x.get("duration_sec"), "measures": _measures(x),
                "sound": {k: (x.get("sound") or {}).get(k) for k in ("energy_line", "octave_db")}} for x in refs]
     return {"references": [c["reference"] for c in each], "each": each, "shared": shared, "curves": curves,
             "close": [g for g in groups if not differs[g]],
@@ -3593,6 +3594,7 @@ def track_report(r):
     L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
           f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
+    L += glance(r)
     h = r.get("heard") or {}
     if h.get("instruments"):
         heard = " · ".join(f"{x['name']} {round(100 * x['p'])}%" for x in h["instruments"])
@@ -3643,9 +3645,13 @@ def track_report(r):
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     elif r.get("harmonic_rhythm_sec"):
         L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_sec']} seconds")
-    L += ["", f"**{tip('Time in each key')}**", "", "| Key | Time | Share |", "|-----|------|-------|"]
-    for k, v in r["time_in_key"].items():
-        L.append(f"| {k} | {fmt_time(v['seconds'])} | {v['percent']}% |")
+    strip = charts.chord_strip(r["chord_timeline"], r.get("duration_sec"))
+    if strip:
+        L += ["", f"**{tip('Chords over time', 'Chord timeline')}**", "", strip]
+    L += ["", f"**{tip('Time in each key')}**", "",
+          charts.hbars([(k, v["percent"], f"{k}: {fmt_time(v['seconds'])} ({v['percent']}%)")
+                        for k, v in r["time_in_key"].items()], width=420, unit="%", top=100,
+                       label="Share of the track in each key")]
     if r["key_changes"]:
         L += ["", f"**{tip('Key timeline')}:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
     b = r.get("blues_form")
@@ -3713,13 +3719,12 @@ def track_report(r):
           f"- **{tip('Percussive', 'Percussive')} vs tonal:** {rh['percussive_pct']}% percussive energy",
           f"- **{tip('Tone')}:** {s['tone']} ({tip(str(s['brightness_hz']) + ' Hz', 'Brightness')} brightness), {s['texture']}",
           *loudness_lines(s),
-          f"- **{tip('Energy arc', 'Energy')}:** `{sparkline(s['energy_curve'])}`"
+          f"- **{tip('Energy arc', 'Energy')}:** {charts.sparkline(s['energy_curve'], width=140, height=24)}"
           + (f" — biggest build into **{s['biggest_build']['time']}**" if s["biggest_build"] else "")
           + (f", quietest around **{s['quietest_moment']}**" if s["quietest_moment"] else ""),
-          "", f"**{tip('Frequency balance')}**", "", "```"]
-    for name, pct in s["frequency_balance_pct"].items():
-        L.append(f"{name:<18} {bar(pct):<20} {pct:>5}%")
-    L.append("```")
+          "", f"**{tip('Frequency balance')}**", "",
+          charts.hbars([(name, pct, f"{name}: {pct}% of the energy") for name, pct in s["frequency_balance_pct"].items()],
+                       width=420, unit="%", label="Frequency balance: share of the energy in each range")]
     L += producer_report(r)
 
     # Ideas
@@ -3870,7 +3875,8 @@ def instruments_report(r):
         if d.get("hats"):
             rows.append("Cymbals  " + " ".join(d["hats"]))
         L += [f"**🥁 Drums** — " + " · ".join(parts), "", f"Main groove ({tip('how to read', 'Drum grid')}):", "",
-              "```", *rows, "```", ""]
+              charts.drum_grid(g, d.get("hats"), len(g) // 4), "",
+              '<details markdown="1"><summary>As text</summary>', "", "```", *rows, "```", "", "</details>", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — they're there, but we couldn't find a clear repeating pattern.", ""]
     if d.get("unsure"):
@@ -3918,6 +3924,11 @@ def instruments_report(r):
         if b.get("from_user"):
             parts.append("you said there's a bass (on this recording it sounds just like low strings, so we went with you)")
         L += [f"**{tip('Lowest part') if solo else '🎸 Bass'}** — " + " · ".join(parts), ""]
+        roll = charts.piano_roll(r.get("bass_transcription") or [], r.get("duration_sec"),
+                                 lambda m: note_name(m, r["key_index"]))
+        if roll:
+            L += [roll, "", '<span class="muted small">Every note we transcribed: pitch up the side, time along the '
+                  'bottom.</span>', ""]
         L += bass_rhythm_report(r)
     else:
         L += ["**🎸 Bass** — we couldn't hear a clear bass line.", ""]
@@ -4053,7 +4064,7 @@ def feel_report(r):
           "|---------|------|--------|------|------------|------------------|-----------|------------|--------------|"]
     for s in f["sections"]:
         L.append(f"| **{s['label']}** | {fmt_time(s['start'])}–{fmt_time(s['end'])} | "
-                 f"`{'█' * s['energy']}{'░' * (10 - s['energy'])}` {s['energy']} | {s['mood']} | {s['valence']} | "
+                 f"{charts.mini_meter(s['energy'])}{s['energy']} | {s['mood']} | {s['valence']} | "
                  f"{s['loudness_vs_peak_db']} dB | {s['notes_per_sec']} | {s['brightness_hz']} Hz | "
                  f"{s['minor_chords_pct']}% |")
     L.append("")
@@ -4094,7 +4105,7 @@ def past_report(r):
     return L
 
 
-REF_HUES = [28, 200, 290]  # one colour per reference in the overlays (yours is drawn in the text colour)
+REF_HUES = charts.SERIES  # one colour per reference in the overlays (yours is drawn in the text colour)
 
 
 def _overlay_svg(series, xs_label, y_label, aria, W=720, H=150, x_ticks=None):
@@ -4106,13 +4117,13 @@ def _overlay_svg(series, xs_label, y_label, aria, W=720, H=150, x_ticks=None):
         d = " ".join(f"{'M' if i == 0 else 'L'}{left + (W - 2 * left) * x:.1f},{top + ph * (1 - y):.1f}"
                      for i, (x, y) in enumerate(pts))
         stroke = ('stroke="currentColor" stroke-width="2.2"' if style == "mine" else
-                  f'stroke="hsl({style},75%,50%)" stroke-width="1.6" stroke-dasharray="5 3"')
+                  f'style="stroke:{style}" stroke-width="2" stroke-dasharray="5 3"')
         paths.append(f'<path d="{d}" fill="none" {stroke}><title>{html.escape(name)}</title></path>')
     ticks = "".join(f'<text x="{left + (W - 2 * left) * x:.1f}" y="{H - 8}" text-anchor="middle" font-size="10" '
                     f'fill="currentColor" fill-opacity="0.7">{html.escape(t)}</text>' for x, t in (x_ticks or []))
     legend = "".join(
         f'<text x="{W - 6}" y="{12 + 14 * i}" text-anchor="end" font-size="11" '
-        + ('font-weight="700" fill="currentColor"' if style == "mine" else f'fill="hsl({style},75%,45%)"')
+        + 'fill="currentColor"' + (' font-weight="700"' if style == "mine" else "")
         + f'>{"━" if style == "mine" else "╍"} {html.escape(name[:40])}</text>'
         for i, (name, _, style) in enumerate(series))
     return (f'<svg class="overlay" viewBox="0 0 {W} {H}" width="100%" role="img" aria-label="{html.escape(aria)}" '
@@ -4168,6 +4179,61 @@ def _norm_comparison(c):
     return c
 
 
+CAMELOT_NAMES = {camelot(k): KEY_NAMES[k] for k in range(24)}
+
+
+def _figure(svg, caption):
+    return f'<figure>{svg}<figcaption>{html.escape(caption)}</figcaption></figure>' if svg else ""
+
+
+def glance(r):
+    """The track at a glance, as pictures: its key on the Camelot wheel, its tempo on a ruler, its sections on the
+    energy/mood map, and its loudness against Spotify's level. One HTML block (no blank lines inside)."""
+    st = (r.get("sound") or {}).get("streaming") or {}
+    genre = (r.get("context") or {}).get("genre_key")
+    usual = GENRES[genre][1] if genre in GENRES else None
+    secs = (r.get("feel") or {}).get("sections") or []
+    figs = [
+        _figure(charts.camelot_wheel(CAMELOT_NAMES, highlight=r.get("camelot"), size=170,
+                                     label=f"Key {r['key']}, {r['camelot']} on the Camelot wheel"),
+                f"Key {r['key']} · tinted keys mix smoothly with it"),
+        _figure(charts.tempo_ruler(r.get("tempo_bpm"), r.get("tempo_approximate"), usual, width=260),
+                "Tempo · dashed rings: half and double time"
+                + (f" · band: {GENRES[genre][0]} usually {usual[0]}–{usual[1]}" if usual else "")),
+        _figure(charts.mood_map([(x["label"], x["valence"], x["arousal"],
+                                  f"{x['label']} {fmt_time(x['start'])}: {x['mood']}, energy {x['energy']}/10")
+                                 for x in secs], size=170), "Energy & mood, section by section"),
+        _figure(charts.loudness_meter(st["lufs"], st.get("true_peak_db"), st.get("spotify_plays_at"), width=260)
+                if st.get("lufs") is not None else "",
+                f"Loudness · ring: where Spotify plays it · true peak {st.get('true_peak_db')} dBTP"),
+    ]
+    figs = [f for f in figs if f]
+    return [f'<div class="glance">{"".join(figs)}</div>', ""] if figs else []
+
+
+def _measures(r):
+    """The numbers the comparison chart lays side by side (None when not measured)."""
+    st = (r.get("sound") or {}).get("streaming") or {}
+    return {"Tempo": (None if r.get("tempo_approximate") else r.get("tempo_bpm"), " BPM"),
+            "Energy": ((r.get("feel") or {}).get("energy"), "/10"),
+            "Off-beat hits": ((r.get("rhythm") or {}).get("syncopation_pct"), "%"),
+            "Chord change every": (r.get("harmonic_rhythm_beats"), " beats"),
+            "Loudness": (st.get("lufs"), " LUFS"),
+            "Punch (PLR)": (st.get("plr_db"), " dB"),
+            "Loudness range": (st.get("loudness_range_lu"), " LU"),
+            "Brightness": ((r.get("sound") or {}).get("brightness_hz"), " Hz"),
+            "Sidechain pump": ((r.get("pump") or {}).get("depth_db"), " dB")}
+
+
+def comparison_chart(r, c):
+    mine = _measures(r)
+    theirs = [(x.get("measures") or {}) for x in c.get("curves") or []]
+    if not theirs or not any(theirs):
+        return ""
+    rows = [(m, unit, [v] + [(t.get(m) or [None])[0] for t in theirs]) for m, (v, unit) in mine.items()]
+    return charts.dumbbell(rows, ["yours"] + [x["file"] for x in c["curves"]])
+
+
 def comparison_report(r):
     """Your track next to the songs you admire: where you stand, what they all share, the overlays, and each
     reference in detail. Comes first in the track's report: it's what you came to find out."""
@@ -4193,6 +4259,10 @@ def comparison_report(r):
     elif n > 1:
         L += [f"_No difference is shared by {'both' if n == 2 else f'all {n}'}; each one's notes below are its own._", ""]
     curves = c.get("curves") or []
+    chart = comparison_chart(r, c)
+    if chart:
+        L += [chart, "", '<span class="muted small">Measure by measure: your dot in the text colour, each song you '
+              'admire in its own colour. Each row has its own scale; your value is on the right.</span>', ""]
     for svg in (energy_overlay_svg(r, curves), tonal_overlay_svg(r, curves)):
         if svg:
             L += [svg, ""]
@@ -4224,11 +4294,16 @@ def producer_report(r):
         L.append(f"- **{tip('Sidechain pumping', 'Sidechain')}:** " + (
             f"{p['kind']}, the sustained sounds duck about {p['depth_db']} dB after each beat and swell back"
             if p.get("kind") else "none: the pads and synths hold steady under the kick"))
+    if p and p.get("shape"):
+        L += ["", charts.pump_shape(p["shape"]), "",
+              '<span class="muted small">One beat\'s level, averaged over the track: pumping dips at the kick and '
+              'swells back.</span>', ""]
     m = v.get("map")
     if m:
         roles = {"intro": "Intro", "build": "Build", "drop": "Drop", "breakdown": "Breakdown", "outro": "Outro",
                  "groove": "Groove"}
         L += ["", f"**{tip('Dance arrangement', 'Drop')}** (bars at {r['tempo_bpm']:.0f} BPM)", "",
+              charts.dance_map_svg(m, r.get("duration_sec")), "",
               "| Section | Role | Time | Bars | Level | |", "|---|---|---|---|---|---|"]
         for x in m["sections"]:
             extra = []
@@ -4285,7 +4360,7 @@ def build_report(results):
         for r in ok:
             tempo = f"{r['tempo_bpm']:.0f}" if r["tempo_bpm"] else "—"
             L.append(f"| {r['file']} | {r['duration']} | {tempo} | {r['key']} | {r['camelot']} | {mode_tip(r['mode'])} | "
-                     f"{' '.join(s['label'] for s in r['sections'])} | `{sparkline(r['sound']['energy_curve'])}` |")
+                     f"{' '.join(s['label'] for s in r['sections'])} | {charts.sparkline(r['sound']['energy_curve'], width=110, height=22)} |")
         L.append("")
         L += guide()
     for r in results:
@@ -4345,7 +4420,7 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache
 def _code_version():
     import hashlib
     h = hashlib.sha256()
-    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py"):
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py", "charts.py"):
         try:
             h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:

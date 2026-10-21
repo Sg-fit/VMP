@@ -33,6 +33,12 @@ The rules that follow from that:
 - **Colour:** light `#f3f3f1` / ink `#111`; dark `#191919` / `#ecf0f1`. Secondary text and lines are the ink colour at
   reduced opacity. Accent: signal orange `#ff5a1f` (a hardware-LED colour, our own rather than borrowed), always with
   black text on it for contrast.
+- **Charts** (`charts.py`, inline SVG): your own track is always drawn in the ink colour; other series use blue
+  `#2a78d6`, orange `#eb6834`, aqua `#1baf7a` (dark mode `#3987e5`, `#d95926`, `#199e70`), in that fixed order. That
+  set passes a colour-blind separation check against both surfaces (worst pair ΔE 9.2 light, 9.4 dark); aqua is
+  under 3:1 on white, so charts always carry labels or sit next to the numbers. Thin marks, hairline axes, 4 px
+  rounded bar ends, a 2 px surface gap between touching blocks, a 2 px surface ring on dots, `<title>` tooltips on
+  every mark, a legend whenever there are two or more series. Labels never wear a series colour.
 - **Shape:** 0 px corners on cards, buttons and inputs; 2 px on inline code. 1 px hairlines; a 2 px ink rule above
   each track in the report.
 - **Logo:** five level-meter bars, drawn in CSS.

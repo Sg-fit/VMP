@@ -234,6 +234,8 @@ def job_summary(results):
             "tempo_bpm": r.get("tempo_bpm"), "meter": (r.get("meter") or {}).get("label"),
             "key": r.get("key"), "camelot": r.get("camelot"), "mode": r.get("mode"),
             "energy": feel.get("energy"), "mood": feel.get("mood"), "valence": feel.get("valence"),
+            "arousal": feel.get("arousal"),
+            "energy_curve": [round(x, 2) for x in (r.get("sound") or {}).get("energy_curve") or []],
             "form": " ".join(s["label"] for s in r.get("sections", [])),
             "chords": {c["chord"]: c["seconds"] for c in r.get("chords_used", [])},
             "drums": bool((r.get("drums") or {}).get("present")), "bass": bool((r.get("bass") or {}).get("present")),
@@ -285,6 +287,11 @@ def profile_summary(items):
     for t in tracks:
         chords.update(t.get("chords") or {})
     out["chords"] = [c for c, _ in chords.most_common(8)]
+    # for the pictures: keys on the Camelot wheel, every tempo, every track on the energy/mood map
+    out["camelot_counts"] = dict(Counter(t["camelot"] for t in tracks if t.get("camelot")))
+    out["tempo_list"] = [t["tempo_bpm"] for t in tracks if t.get("tempo_bpm") and not t.get("tempo_approximate")]
+    out["mood_points"] = [(None, t["valence"], t["arousal"], f"{t['file']}: {t.get('mood')}") for t in tracks
+                          if t.get("valence") is not None and t.get("arousal") is not None]
     out["drums_pct"] = round(100 * sum(t.get("drums", False) for t in tracks) / len(tracks))
     out["bass_pct"] = round(100 * sum(t.get("bass", False) for t in tracks) / len(tracks))
     # One plain sentence a musician can read at a glance.

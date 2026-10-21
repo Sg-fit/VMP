@@ -10,6 +10,7 @@
   .hist .title:hover { text-decoration: underline; text-decoration-color: var(--accent); }
   .hist .when { font-size: .8rem; color: var(--muted); margin-top: 2px; }
   .tracks { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .trk .spk { display: inline-block; width: 90px; vertical-align: middle; margin-right: 10px; }
   .trk { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .88rem; color: var(--muted); }
   .trk b { color: var(--ink); font-weight: 600; margin-right: 4px; overflow-wrap: anywhere; }
   .tag { font-size: .7rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px;
@@ -74,7 +75,7 @@
     {% elif it.summary %}
     <div class="tracks">
       {% for t in it.summary.tracks %}
-        <div class="trk"><b>{{ t.file }}</b>
+        <div class="trk">{% if t.energy_curve %}<span class="spk" title="Loudness over the track">{{ charts.sparkline(t.energy_curve, width=90, height=20)|safe }}</span>{% endif %}<b>{{ t.file }}</b>
           {% if t.error %}<span>could not be analysed</span>{% else %}
           <span>{{ t.duration }}</span>
           {% if t.tempo_bpm %}<span>{{ t.tempo_bpm|round|int }} BPM {{ t.meter or '' }}</span>{% endif %}

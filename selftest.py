@@ -934,6 +934,8 @@ def account_checks(base, job):
     check("web", "a saved analysis appears in History with its key and tempo",
           "short_phone_clip" in hist and key in hist and tempo in hist, hist[-300:])
     check("web", "the profile sums up the saved music", key in prof and "Your music is" in prof)
+    check("web", "the profile shows the music as pictures (keys on the wheel, tempos, the mood map)",
+          'class="pics"' in prof and "Your keys on the Camelot wheel" in prof)
     check("web", "a saved analysis is private: others get 404",
           anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and
           bob.get(f"{base}/jobs/{job}/download.zip", timeout=10).status_code == 404 and
@@ -1522,6 +1524,68 @@ def instrument_checks(tmp):
           not any(i["key"].startswith("inst_") for i in has["ideas"]), str([i["key"] for i in has["ideas"]]))
 
 
+def chart_checks(tmp):
+    """The pictures: every chart is well-formed SVG, shows what the numbers say, and turns up in the report."""
+    import xml.etree.ElementTree as ET
+    import charts
+    import musicanalyze as ma
+    print("\n== Charts ==")
+
+    def parses(svg):
+        try:
+            ET.fromstring(svg)
+            return True
+        except ET.ParseError:
+            return False
+    names = ma.CAMELOT_NAMES
+    timeline = [{"time": "0:00", "start": 0.0, "chord": "Am", "roman": "i", "clarity": 3},
+                {"time": "0:02", "start": 2.0, "chord": "F", "roman": "VI", "clarity": 3},
+                {"time": "0:04", "start": 4.0, "chord": "E7", "roman": "V7", "clarity": 0.5}]
+    dance = {"sections": [{"label": "A", "start": 0, "end": 30, "role": "intro", "bars": 16},
+                          {"label": "B", "start": 30, "end": 60, "role": "drop", "bars": 16}]}
+    samples = {
+        "wheel": charts.camelot_wheel(names, highlight="8A"),
+        "wheel (counts)": charts.camelot_wheel(names, counts={"8A": 3, "9A": 1}),
+        "tempo": charts.tempo_ruler(124, False, (118, 130)), "no tempo": charts.tempo_ruler(None),
+        "mood": charts.mood_map([("A", 30, 40, "a"), ("B", 70, 80, "b")]),
+        "loudness": charts.loudness_meter(-19.7, -1.9, -18.8),
+        "bars": charts.hbars([("C major", 70, ""), ("A minor", 30, "")], unit="%"),
+        "chords": charts.chord_strip(timeline, 6.0), "drums": charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h."),
+        "roll": charts.piano_roll([{"start": 0, "end": 1, "midi": 40}, {"start": 1, "end": 2, "midi": 45}], 2),
+        "dance": charts.dance_map_svg(dance, 60), "pump": charts.pump_shape([-1, -7, -5, -3, -1, 0]),
+        "dumbbell": charts.dumbbell([("Tempo", " BPM", [100, 128]), ("Energy", "/10", [6, 6])], ["yours", "ref"]),
+        "spark": charts.sparkline([0.1, 0.5, 0.9]), "meter": charts.mini_meter(7), "dots": charts.tempo_dots([90, 92, 124]),
+        "example": charts.example_overlay(), "example roll": charts.example_roll()}
+    bad = [k for k, v in samples.items() if not v or not parses(v)]
+    check("charts", "every chart is well-formed SVG", not bad, ", ".join(bad))
+    fn = {r: charts.chord_function(r) for r in ("I", "i", "vi", "IV", "ii", "V7", "vii°", "bVII", "#iv°", "iii")}
+    check("charts", "chords are coloured by what they do: home (I vi iii), away (IV ii), tension (V vii), borrowed",
+          fn == {"I": "home", "i": "home", "vi": "home", "IV": "away", "ii": "away", "V7": "tension",
+                 "vii°": "tension", "bVII": "other", "#iv°": "other", "iii": "home"}, str(fn))
+    grid = "K.x.S...X...S..."
+    svg = charts.drum_grid(grid, None)
+    count = lambda name: svg.count(f"<title>{name}, step")
+    check("charts", "the drum picture has one dot per hit (kick K/X, snare S/X, other x) and no empty rows",
+          count("Kick") == 2 and count("Snare") == 3 and count("Other hit") == 1 and "Hi-hat" not in svg
+          and "Other hit" not in charts.drum_grid("K...S...K...S...", None))
+    wheel = samples["wheel"]
+    check("charts", "the wheel fills the track's key and tints only the three keys it mixes with",
+          wheel.count("8A A minor: this track") == 1 and wheel.count("mixes smoothly") == 3
+          and all(f"{c} {names[c]}: mixes smoothly" in wheel for c in ("7A", "9A", "8B")))
+    check("charts", "when a song you admire matches yours exactly, it's drawn as a ring (not hidden under your dot)",
+          'fill="none"' in samples["dumbbell"].split("Energy")[1])
+    song_ = write(Path(tmp) / "chart_song.wav", song([("A", "m"), ("F", ""), ("C", ""), ("G", "")], 110, 4, loops=6))
+    res, rep = ma.run_analysis([song_], Path(tmp) / "chart_out", cache_dir=Path(tmp) / "inst_cache",
+                               context=ma.clean_context(["drums", "bass", "piano"]))
+    mine = rep[rep.index("## 🎵 chart_song.wav"):]
+    want = ['class="glance"', "Camelot wheel", "Chords over time", "Drum groove", "piano roll",
+            "Frequency balance: share", "Share of the track in each key"]
+    missing = [w for w in want if w not in mine]
+    check("charts", "the report shows the track as pictures: key wheel, tempo, mood map, loudness, chords, drums, bass",
+          not missing and mine.index('class="glance"') < mine.index("### Harmony") and "█" not in mine,
+          "missing: " + ", ".join(missing))
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -1751,6 +1815,10 @@ def main():
             instrument_checks(tmp)
         except Exception:
             check("instruments", "instrument checks ran", False, traceback.format_exc(limit=3))
+        try:
+            chart_checks(tmp)
+        except Exception:
+            check("charts", "chart checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:

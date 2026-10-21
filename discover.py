@@ -716,6 +716,16 @@ def tag_report(d):
                 if cat == "genre" else ""
             L.append(f"- **{label}**{note}: {_fmt(t.get(cat, []), n)}")
     L.append("")
+    import charts
+    figs = []
+    for cat, label, n in (("style", "Styles", 8), ("mood", "Mood", 6), ("instruments", "Instruments heard", 6)):
+        rows = [(x["tag"][:22], round(100 * x["score"]), f"{x['tag']}: {round(100 * x['score'])}% of your list")
+                for x in (t.get(cat) or [])[:n]]
+        if rows:
+            figs.append(f'<figure>{charts.hbars(rows, width=360, unit="%", label=label, label_w=140, top=100)}'
+                        f'<figcaption>{label}: how much of your list each one describes</figcaption></figure>')
+    if figs:
+        L += [f'<div class="glance">{"".join(figs)}</div>', ""]
     lk = d.get("lesser_known") or []
     if lk:
         L += ["## Lesser-known artists with this sound", "",

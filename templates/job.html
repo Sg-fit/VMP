@@ -38,6 +38,12 @@
   .report hr + p, .report hr + p + p { color: var(--muted); font-size: .82rem; }
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
   .report details ul { padding-left: 20px; }
+  .report svg.chart { margin: 8px 0 4px; }
+  .report .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px 28px;
+                    align-items: start; margin: 18px 0 26px; padding: 18px 0; border-top: 1px solid var(--line);
+                    border-bottom: 1px solid var(--line); }
+  .report .glance svg.chart { margin: 0 auto; }
+  .report .muted.small { font-size: .8rem; }
   .aibar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
            margin-top: 16px; padding: 12px 16px; background: var(--ink); color: var(--bg); font-size: .92rem; }
   .aibar .dot { width: 8px; height: 8px; background: var(--accent); flex: none; animation: blink 1.2s steps(2) infinite; }

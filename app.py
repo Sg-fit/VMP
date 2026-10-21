@@ -40,6 +40,7 @@ from flask import (Flask, Response, abort, jsonify, redirect, render_template, r
 from werkzeug.utils import secure_filename
 
 import accounts
+import charts
 import demos
 import memory
 import musicanalyze as ma
@@ -259,6 +260,23 @@ def intro_seen():
     resp = Response(status=204)
     resp.set_cookie(INTRO_COOKIE, "1", max_age=365 * 24 * 3600, samesite="Lax", httponly=True)
     return resp
+
+
+app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES)
+
+
+def demo_pictures():
+    """A thumbnail for each demo that has been built: its main track's timeline (sections over loudness)."""
+    out = {}
+    for slug in demos.DEMOS:
+        f = DATA_DIR / demos.job_id(slug, ma.CODE_VERSION) / "output" / "music_results.json"
+        try:
+            r = next(x for x in json.loads(f.read_text(encoding="utf-8")) if x.get("role") != "reference"
+                     and "error" not in x)
+            out[slug] = ma.timeline_svg(r)
+        except (OSError, ValueError, StopIteration):
+            pass
+    return out
 
 
 @app.template_filter("datetime")
@@ -502,7 +520,8 @@ def form_page(error=None, code=200):
                            genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
                            mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
-                           form=request.form, demos=demos.DEMOS, prefill=memory.prefill(user_memory(current_user()))), code
+                           form=request.form, demos=demos.DEMOS, demo_pictures=demo_pictures(),
+                           prefill=memory.prefill(user_memory(current_user()))), code
 
 
 @app.get("/")
