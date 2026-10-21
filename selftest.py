@@ -588,13 +588,18 @@ def ai_checks(res):
     if not check("ai", f"AI answers ({label})", not err, err or f"{ai.get('model')} in {secs:.0f}s"):
         return
     check("ai", "AI answer arrives within the deadline", secs <= ma.AI_DEADLINE_SECONDS, f"{secs:.0f}s")
-    check("ai", "AI gives ideas and chord progressions", len(ai["ideas"]) >= 3 and ai["alt_progressions"],
-          f"{len(ai['ideas'])} ideas, {len(ai['alt_progressions'])} progressions")
-    flagged = [i["idea"] for i in ai["ideas"] if "⚠ check this" in i["idea"]]
+    every = ai["ideas"] + ai.get("gap_ideas", [])
+    check("ai", "AI gives ideas and chord progressions", len(every) >= 3 and ai["alt_progressions"],
+          f"{len(ai.get('gap_ideas', []))} gap ideas + {len(ai['ideas'])} more, {len(ai['alt_progressions'])} progressions")
+    gaps_found = [g["id"] for g in (r.get("gaps") or {}).get("gaps", [])]
+    check("ai", "the AI answers the gaps it was given (one idea per gap, at least most of them)",
+          not gaps_found or len(ai.get("gap_ideas", [])) >= (len(gaps_found) + 1) // 2,
+          f"{[i['gap'] for i in ai.get('gap_ideas', [])]} of {gaps_found}")
+    flagged = [i["idea"] for i in every if "⚠ check this" in i["idea"]]
     # An AI that gets the odd time wrong is what the fact-check is for (the page marks it). Most ideas being off
     # means the analysis summary it was given is wrong: that's ours to fix.
     check("ai", "AI ideas mostly match the analysis (most times/chords check out)",
-          len(flagged) <= len(ai["ideas"]) // 2, f"{len(flagged)} of {len(ai['ideas'])} flagged")
+          len(flagged) <= len(every) // 2, f"{len(flagged)} of {len(every)} flagged")
     for f_ in flagged:
         warn("ai", "an AI idea was flagged by the fact-check (shown to the musician with a ⚠)", f_[:300])
 
@@ -1651,6 +1656,95 @@ def trend_checks():
           tempo_tile.get("note", "").startswith("▲ up from"), str(tempo_tile))
 
 
+def gap_checks(tmp):
+    """What's there and what's missing: known answers on made-up analyses and on generated audio, a negative case
+    for each gap, and the AI's reply held to the gaps we found."""
+    import gaps
+    import musicanalyze as ma
+    print("\n== What's there, what's missing ==")
+    triad = lambda iv, q: ma.chord_name((7 + iv) % 12, q, ma.KEY_NAMES.index("G major"))
+    note = lambda iv: ma.spell((7 + iv) % 12, ma.KEY_NAMES.index("G major"))
+    scale = ["G", "A", "B", "C", "D", "E", "F#"]
+
+    def made(chords, strength=None, mode="Ionian (major)", melody=None, sections=None, **extra):
+        """A made-up G major analysis: chords as (name, roman, seconds)."""
+        t, tl = 0.0, []
+        for name, rom, sec in chords:
+            tl.append({"time": ma.fmt_time(t), "start": t, "chord": name, "roman": rom, "clarity": 3})
+            t += sec
+        st = {n: 0.7 for n in ma.NOTES + ["F#", "Bb", "Eb", "Ab"]}
+        st.update(strength or {})
+        secs = sections or [{"label": "A", "start": 0, "end": t, "valence": 60, "arousal": 40, "mood": "calm",
+                             "minor_chords_pct": 20, "notes_per_sec": 2, "energy": 4}]
+        r = {"key": "G major", "key_index": ma.KEY_NAMES.index("G major"), "mode": mode, "scale_notes": scale,
+             "note_strength": st, "chord_timeline": tl, "duration_sec": t, "feel": {"sections": secs},
+             "sound": {"brightness_hz": 1500}, "tempo_bpm": 100, "top_line": {"present": False}}
+        if melody:
+            r["melody"] = {"degrees": melody}
+        r.update(extra)
+        return gaps.analyse(r, ma.MODES, triad, note)
+    ids = lambda g: [x["id"] for x in g["gaps"]]
+    loop = [("G", "I", 2), ("D", "V", 2), ("Em", "vi", 2), ("C", "IV", 2)] * 4
+    weak = made(loop, {"B": 0.3})
+    strong = made(loop, {"B": 0.9})
+    check("gaps", "the key's colour note is called missing when it's barely heard, not when it's there",
+          "colour" in ids(weak) and "colour" not in ids(strong) and "Em" in next(x["idea"] for x in weak["gaps"]
+                                                                             if x["id"] == "colour"))
+    g = made(loop, melody=["3", "2", "1", "5", "2", "3", "5", "2"])
+    mel = next((x for x in g["gaps"] if x["id"] == "melody_degrees"), {})
+    har = next((x for x in g["gaps"] if x["id"] == "harmony_degrees"), {})
+    check("gaps", "the melody's unused scale notes are named exactly (B A G D... never touches 4, 6, 7)",
+          mel.get("evidence", {}).get("missing") == ["4", "6", "7"], str(mel.get("evidence")))
+    check("gaps", "the chords' unused scale degrees are named exactly (I V vi IV: nothing on 2, 3, 7)",
+          har.get("evidence", {}).get("unused") == ["2", "3", "7"] and "dim" not in har.get("idea", ""),
+          str(har.get("evidence")))
+    full = made(loop, melody=["1", "2", "3", "4", "5", "6", "7", "1"])
+    check("gaps", "a melody that uses every scale note has no melody gap", "melody_degrees" not in ids(full))
+    no_v = made([("G", "I", 2), ("C", "IV", 2), ("Em", "vi", 2), ("Am", "ii", 2)] * 3)
+    check("gaps", "a major-key song with no V chord is missing tension and release; one with a V isn't",
+          "dominant" in ids(no_v) and "dominant" not in ids(made(loop)))
+    check("gaps", "a modal track (Dorian) isn't told it lacks a dominant",
+          "dominant" not in ids(made([("Gm", "i", 2), ("C", "IV", 2)] * 6, mode="Dorian")))
+    one = made([("G", "I", 2), ("C", "IV", 2)] * 6)
+    check("gaps", "two chords throughout is missing harmonic movement, and every chord the same length is one pace",
+          "static_harmony" in ids(one) and "harmonic_pace" in ids(one) and "harmonic_pace" not in ids(
+              made([("G", "I", 2), ("C", "IV", 1), ("D", "V", 3), ("G", "I", 1.5)] * 3)))
+    flat = [{"label": l_, "start": 0, "end": 10, "valence": 62, "arousal": 35, "mood": "calm", "minor_chords_pct": 10,
+             "notes_per_sec": 2, "energy": 4} for l_ in "ABA"]
+    moving = [dict(flat[0], valence=70, arousal=75, mood="excited"), dict(flat[0], valence=30, arousal=30, mood="sad"),
+              dict(flat[0], valence=30, arousal=75, mood="tense"), dict(flat[0])]
+    m1 = next((x for x in made(loop, sections=flat)["gaps"] if x["id"] == "mood"), {})
+    check("gaps", "sections all in one mood: the contrast is missing; a track that visits every corner has no mood gap",
+          m1.get("title") == "Mood contrast" and "mood" not in ids(made(loop, sections=moving)), m1.get("missing", ""))
+    blues = made([("G7", "I7", 2), ("C7", "IV7", 2), ("D7", "V7", 2)] * 4, {"Bb": 0.2, "F": 0.2},
+                 blues_form={"name": "12-bar blues"})
+    check("gaps", "a blues is judged on its blue notes (b3, b7), not on chords its form leaves out",
+          "blue_notes" in ids(blues) and "harmony_degrees" not in ids(blues) and "colour" not in ids(blues))
+
+    # the AI is held to the gaps: one idea per gap id it was given, invented ids dropped, mood directions kept
+    r = ma.analyze(write(Path(tmp) / "gap_song.wav", song([("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100, 4,
+                                                          loops=6)), "B4 A4 G4 D5 A4 B4 D5 A4",
+                   cache_dir=Path(tmp) / "inst_cache")
+    known = [x["id"] for x in r["gaps"]["gaps"]]
+    asked = {}
+
+    def fake_llm(prompt, info):
+        asked["prompt"] = prompt
+        return json.dumps({"vibe": "v", "gap_ideas": [{"gap": k, "idea": f"fill {k}"} for k in known]
+                           + [{"gap": "made_up", "idea": "x"}],
+                           "mood": {"now": "calm", "directions": [{"towards": "tense", "how": "minor chords, b2"}]},
+                           "ideas": [{"area": "harmony", "idea": "extra"}], "alt_progressions": [], "title_ideas": []})
+    ai = ma.ai_brainstorm(r, fake_llm)
+    check("gaps", "the AI gets the gaps by id, and its ideas are kept only for gaps we found",
+          all(f"[{k}]" in asked["prompt"] for k in known) and [i["gap"] for i in ai["gap_ideas"]] == known
+          and ai["mood"]["directions"][0]["towards"] == "tense", f"{known} -> {[i['gap'] for i in ai['gap_ideas']]}")
+    r["ai"] = ai
+    rep = "\n".join(ma.track_report(r))
+    check("gaps", "the report shows the scale-degree chart, the gap table, and the AI's ideas grouped by gap",
+          "What's there, what's missing" in rep and "Scale degrees used by the chords and the melody" in rep
+          and "Filling the gaps" in rep and "**Mood**: now calm" in rep and rep.index("What's there") < rep.index("Ideas to try"))
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -1888,6 +1982,10 @@ def main():
             trend_checks()
         except Exception:
             check("trends", "trend checks ran", False, traceback.format_exc(limit=3))
+        try:
+            gap_checks(tmp)
+        except Exception:
+            check("gaps", "gap checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:

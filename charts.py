@@ -614,3 +614,58 @@ def key_timeline(points, t0, t1, width=460, height=170):
     for tx, lab in _date_ticks(t0, t1, x):
         parts.append(_text(tx, height - 4, lab, size=9, anchor="middle", opacity=0.6))
     return _svg(width, height, "".join(parts), "Keys over time on the Camelot wheel", max_w=width)
+
+
+# ---------------------------------------------------------------- scale degrees: what the chords and melody use
+def degree_chart(rows, melody_source=None, width=520, height=190):
+    """For each degree of the scale, two columns: the share of chord time built on it (blue) and its share of the
+    melody (orange, when we have a melody). The mode's colour note is marked. Unused degrees show as an empty slot,
+    so what's missing is visible at a glance."""
+    if not rows:
+        return ""
+    has_mel = any(r_["melody"] is not None for r_ in rows)
+    left, right, top, bottom = 34, 6, 26, 40
+    ph = height - top - bottom
+    top_v = max(0.25, max(max(r_["harmony"], r_["melody"] or 0) for r_ in rows))
+    slot = (width - left - right) / len(rows)
+    bw = min(22.0, (slot - 10) / (2 if has_mel else 1))
+    y = lambda v: top + ph * (1 - v / top_v)
+    parts = []
+    for k in (0, 0.5, 1):
+        v = top_v * k
+        parts.append(f'<line x1="{left}" y1="{y(v):.1f}" x2="{width - right}" y2="{y(v):.1f}" stroke="currentColor" '
+                     f'stroke-opacity="{0.3 if k == 0 else 0.08}"/>')
+        parts.append(_text(left - 6, y(v) + 3, f"{v:.0%}", size=9, anchor="end", opacity=0.6))
+    mel_word = {"typed": "in your typed melody", "top line": "in the top line"}.get(melody_source, "in the melody")
+    series = [("harmony", C1, "chords built on it")] + ([("melody", C2, mel_word)]
+                                                         if has_mel else [])
+    lx = left
+    for _, col, word in series:
+        parts.append(f'<rect x="{lx}" y="4" width="10" height="10" rx="2" style="fill:{col}"/>')
+        parts.append(_text(lx + 14, 13, word, size=10, opacity=0.85))
+        lx += 30 + 6.2 * len(word)
+    for i, r_ in enumerate(rows):
+        x0 = left + slot * i + (slot - bw * len(series) - 2 * (len(series) - 1)) / 2
+        if r_["colour"]:
+            parts.append(f'<rect x="{left + slot * i + 2:.1f}" y="{top - 4}" width="{slot - 4:.1f}" height="{ph + 4}" '
+                         f'rx="3" style="fill:{ACCENT}" fill-opacity="0.08"/>')
+        for j, (key, col, word) in enumerate(series):
+            v = r_[key] or 0.0
+            bx = x0 + j * (bw + 2)
+            if v <= 0:
+                parts.append(f'<line x1="{bx:.1f}" y1="{top + ph - 1:.1f}" x2="{bx + bw:.1f}" y2="{top + ph - 1:.1f}" '
+                             f'style="stroke:{col}" stroke-width="2" stroke-dasharray="3 2">'
+                             f'<title>{esc(r_["degree"])} ({esc(r_["note"])}): not {esc(word)}</title></line>')
+                continue
+            h = ph * v / top_v
+            rr = min(4.0, bw / 2, h)
+            d = (f"M{bx:.1f},{top + ph:.1f} v{-(h - rr):.1f} a{rr},{rr} 0 0 1 {rr},{-rr} h{bw - 2 * rr:.1f} "
+                 f"a{rr},{rr} 0 0 1 {rr},{rr} v{h - rr:.1f} z")
+            parts.append(f'<path d="{d}" style="fill:{col}"><title>{esc(r_["degree"])} ({esc(r_["note"])}): '
+                         f'{v:.0%} {esc(word)}</title></path>')
+        cx = left + slot * (i + 0.5)
+        parts.append(_text(cx, top + ph + 14, r_["degree"], size=11, anchor="middle", weight=700))
+        parts.append(_text(cx, top + ph + 26, r_["note"], size=10, anchor="middle", opacity=0.7))
+        if r_["colour"]:
+            parts.append(_text(cx, top + ph + 38, "★ colour", size=9, anchor="middle", weight=700))
+    return _svg(width, height, "".join(parts), "Scale degrees used by the chords and the melody", max_w=width)

@@ -42,6 +42,7 @@ _private_numba_cache()
 
 import charts
 import electronic
+import gaps as gapmap
 import inspiration
 import instruments
 import notation
@@ -1553,7 +1554,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-21a"
+ANALYSIS_VERSION = "2026-10-22a"
 
 
 def _cache_key(path, light=False):
@@ -1901,6 +1902,8 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
             pcs = [n % 12 for n in result["melody"]["variations_midi"]["original"]]
             result["melody"]["check"] = check_melody(extras["chroma"], extras["bounds"], pcs, main_key)
     result["references"] = shared_dna(result)
+    result["gaps"] = gapmap.analyse(result, MODES, lambda iv, q: chord_name((key_tonic(main_key) + iv) % 12, q, main_key),
+                                    lambda iv: spell((key_tonic(main_key) + iv) % 12, main_key))
     result["ideas"] = rule_based_ideas(result)
     result["guitar"] = guitar_capo(result)
     if result.get("blues_form"):
@@ -1908,6 +1911,9 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
     genre = (context or {}).get("genre")
     if genre:
         result["ideas"].append({"area": GENRES[genre][0].lower(), "idea": GENRES[genre][2]})
+    # ideas that fill a gap in the analysis come first: they're about this track specifically
+    result["ideas"] = [{"area": g["area"], "idea": g["idea"], "gap": g["id"]} for g in result["gaps"]["gaps"]
+                       if g.get("idea")] + result["ideas"]
     # The producer's view (electronic.py) is worked out after the cache too: it depends on what the musician told us
     result["producer"] = electronic.producer_view(result)
     result["ideas"] += electronic.producer_ideas(result, result["producer"])
@@ -1995,6 +2001,7 @@ def top_line_summary(notes, grid, chords, key):
         "follows_chords": chord_share >= 0.75,
         "range": f"{note_name(lo, key)}–{note_name(hi, key)}",
         "main_notes": [{"note": k, "pct": round(100 * v / len(voiced))} for k, v in pcs.most_common(5)],
+        "note_pct": {k: round(100 * v / len(voiced), 1) for k, v in pcs.items()},
         "motifs": motifs,
     }
 
@@ -2848,12 +2855,17 @@ def export_midis(r, out_dir):
 BRAINSTORM_PROMPT = """You are a creative music producer helping a musician develop an instrumental demo.
 Below is an automatic analysis of the track. Reply with ONLY this JSON (no other text):
 {{"vibe": "<1-2 sentences on the feel the data suggests>",
+ "gap_ideas": [{{"gap": "<an id from GAPS>", "idea": "<under 35 words: how to fill this gap in THIS track - name the notes, chords, section or time>"}}],
+ "mood": {{"now": "<the mood in a few words, from the data>", "directions": [{{"towards": "<a mood>", "how": "<under 30 words: which levers - chords, the colour note, tempo, register, rhythm density, brightness>"}}]}},
  "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 30 words, specific: cite a time, section, chord or note>"}}],
  "alt_progressions": [{{"name": "<short>", "chords": ["<chord>", "..."], "why": "<one short sentence>"}}],
  "title_ideas": ["<title>", "<title>", "<title>"],
  "references": [{{"artist": "<artist>", "track": "<recording>", "shared": "<the one specific element it shares>"}}]}}
 
-Rules: exactly 5 ideas, different from each other and from the "already suggested" list; no generic advice.
+Rules: one gap_idea for each GAP listed below, in the same order, using its id (none if there are no GAPS); each
+fills that gap in this track and goes beyond the "already suggested" list. mood.directions: exactly 2 - one towards
+a mood the track never reaches (see the mood gap), one that deepens the mood it has; say which levers move it.
+Then 2 more ideas on anything else; no generic advice.
 At most one rhythm idea and one sound/production idea; favour harmony, melody, arrangement and structure.
 Only cite times that appear in the analysis (chord timeline, section starts, key moments) - never invent one.
 When explaining a chord, be musically exact (e.g. a dominant 7th leads to the chord a fifth below it).
@@ -2968,6 +2980,13 @@ def ai_summary(r):
             bits.append("dance arrangement " + ", ".join(f"{x['role']} {fmt_time(x['start'])} {x['bars']} bars"
                                                          for x in m["sections"]))
         lines.append("Producer's view: " + "; ".join(bits) + ".")
+    g = r.get("gaps") or {}
+    if g.get("degrees"):
+        lines.append("Scale degrees (share of chord time as root / of the melody): " + "; ".join(
+            f"{x['degree']} {x['note']}{' (colour note)' if x['colour'] else ''} {x['harmony']:.0%}"
+            + (f" / {x['melody']:.0%}" if x["melody"] is not None else "") for x in g["degrees"]) + ".")
+    if g.get("gaps"):
+        lines.append("GAPS (what's missing, by id):\n" + "\n".join(gapmap.ai_lines(g)))
     if r.get("memory_profile"):
         lines.append(r["memory_profile"])
     if r.get("past"):
@@ -3159,6 +3178,27 @@ def _race(models, ask, info, fatal, complete=lambda text: True):
         pool.shutdown(wait=False, cancel_futures=True)  # don't wait for slow stragglers
 
 
+def _gap_ideas(items, r):
+    """The AI's idea for each gap, kept only for gaps we actually found (an invented id is dropped)."""
+    known = {g["id"]: g for g in (r.get("gaps") or {}).get("gaps", [])}
+    out, seen = [], set()
+    for i in items if isinstance(items, list) else []:
+        if isinstance(i, dict) and i.get("gap") in known and i.get("idea") and i["gap"] not in seen:
+            seen.add(i["gap"])
+            g = known[i["gap"]]
+            out.append({"gap": g["id"], "title": g["title"], "missing": g["missing"], "area": g["area"],
+                        "idea": _check_times(_clean(i["idea"]), r)})
+    return out
+
+
+def _mood_reply(m):
+    if not isinstance(m, dict):
+        return {}
+    dirs = [{"towards": _clean(d.get("towards", "")), "how": _clean(d.get("how", ""))}
+            for d in m.get("directions") or [] if isinstance(d, dict) and d.get("how")][:3]
+    return {"now": _clean(m.get("now", "")), "directions": dirs} if dirs or m.get("now") else {}
+
+
 def ai_brainstorm(r, llm):
     prompt = BRAINSTORM_PROMPT.format(key=r["key"], summary=ai_summary(r))
     info = {}
@@ -3177,6 +3217,8 @@ def ai_brainstorm(r, llm):
         "vibe": _clean(obj.get("vibe", "")),
         "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _check_times(_clean(i["idea"]), r)}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
+        "gap_ideas": _gap_ideas(obj.get("gap_ideas"), r),
+        "mood": _mood_reply(obj.get("mood")),
         "alt_progressions": [{"name": _clean(p.get("name", "")), "why": _clean(p.get("why", "")),
                               "chords": [_clean(c) for c in p["chords"]]}
                              for p in obj.get("alt_progressions", [])
@@ -3729,6 +3771,7 @@ def track_report(r):
 
     # Ideas
     L += past_report(r)
+    L += gaps_report(r)
     L += ["", "### 💡 Ideas to try", "", "_We worked these out from the analysis itself, no AI involved. Try "
           "them out and keep whatever works for you._", ""]
     for i in r["ideas"]:
@@ -3746,6 +3789,19 @@ def track_report(r):
         else:
             if ai["vibe"]:
                 L += [f"> {ai['vibe']}", ""]
+            if ai.get("gap_ideas"):
+                L += ["**Filling the gaps** (from _What's there, what's missing_ above)", ""]
+                for i in ai["gap_ideas"]:
+                    L.append(f"- **{i['title']}** ({i['missing']}): {i['idea']}")
+                L.append("")
+            mood = ai.get("mood") or {}
+            if mood.get("directions"):
+                L += ["**Mood**" + (f": now {mood['now']}" if mood.get("now") else ""), ""]
+                for d in mood["directions"]:
+                    L.append(f"- **towards {d['towards'] or 'another mood'}:** {d['how']}")
+                L.append("")
+            if ai["ideas"]:
+                L += ["**More ideas**", ""] if ai.get("gap_ideas") or mood.get("directions") else []
             for i in ai["ideas"]:
                 L.append(f"- **{i.get('area', 'idea')}:** {i['idea']}")
             if ai.get("dropped_progressions"):
@@ -4089,6 +4145,25 @@ def reference_report(r):
     return L
 
 
+def gaps_report(r):
+    """What the track uses and leaves out: the scale degrees in its chords and melody (a chart), then each gap."""
+    g = r.get("gaps") or {}
+    if not g.get("degrees") and not g.get("gaps"):
+        return []
+    L = ["", "### 🧭 What's there, what's missing", "",
+         "_The map the ideas below are built on: which notes of the scale your chords and melody use, the key's "
+         "colour note, and the moods your sections visit. A gap is a choice you haven't made yet, not a mistake._", ""]
+    if g.get("degrees"):
+        L += [charts.degree_chart(g["degrees"], g.get("melody_source")), ""]
+    if g.get("gaps"):
+        L += ["| | What you have | What's missing |", "|---|---|---|"]
+        L += [f"| **{x['title']}** | {x['have']} | {x['missing']} |" for x in g["gaps"]]
+        L.append("")
+    else:
+        L.append("Nothing obvious is missing: the chords and melody use the scale widely and the mood moves.")
+    return L
+
+
 def past_report(r):
     """What the musician's memory adds: this track next to their own saved ones, and close calls it settles."""
     if "memory_tracks" not in r:
@@ -4420,7 +4495,7 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache
 def _code_version():
     import hashlib
     h = hashlib.sha256()
-    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py", "charts.py"):
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py", "charts.py", "gaps.py"):
         try:
             h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:
