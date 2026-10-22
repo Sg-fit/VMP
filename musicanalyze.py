@@ -4533,7 +4533,7 @@ def _write_outputs(results, out):
 
 
 def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analysis_done=None,
-                 cache_dir=DEFAULT_CACHE_DIR, context=None, reference=None, memory=None):
+                 cache_dir=DEFAULT_CACHE_DIR, context=None, reference=None, memory=None, hear=True):
     """Analyse files, write music_report.md / music_results.json / midi/*.mid into `out`.
 
     Built to keep the musician waiting as little as possible:
@@ -4550,7 +4550,8 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
     refs = []
     ref_paths = [Path(x) for x in ([reference] if isinstance(reference, (str, Path)) else list(reference or []))
                  ][:MAX_REFERENCES]
-    heard = hear_instruments([*map(str, ref_paths), *(str(Path(f)) for f in files)], progress)
+    # the instrument model's opinion (hear=False for demos: their audio is synthesized, so it would mean nothing)
+    heard = hear_instruments([*map(str, ref_paths), *(str(Path(f)) for f in files)], progress) if hear else {}
     # songs the musician admires: analysed first, so each comparison can reach the AI too
     for reference in ref_paths:
         reference = Path(reference)

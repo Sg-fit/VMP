@@ -192,12 +192,53 @@ def summarise(raw):
     return out
 
 
+# The model process (TensorFlow + the EffNet network and its heads) needs roughly this much memory on top of what's
+# already running. In a container with a memory cap, starting it without that headroom gets something killed -
+# possibly the analysis itself - so it isn't started then. It's a bonus: the analysis never depends on it.
+MODEL_MEMORY_MB = int(os.environ.get("MUSIC_MODEL_MEMORY_MB", 800))
+
+
+def free_memory_mb(cgroup="/sys/fs/cgroup", meminfo="/proc/meminfo"):
+    """Memory free for a new process here, in MB: the container's cap minus what it uses (page cache that can be
+    dropped doesn't count), or the machine's available memory, whichever is smaller. None where neither can be
+    read (e.g. Windows): then no limit is assumed."""
+    found = []
+    root = Path(cgroup)
+    try:  # cgroup v2
+        cap = (root / "memory.max").read_text().strip()
+        if cap != "max":
+            used = int((root / "memory.current").read_text())
+            stat = dict(line.split() for line in (root / "memory.stat").read_text().splitlines() if " " in line)
+            used -= int(stat.get("inactive_file", 0))
+            found.append((int(cap) - used) / 2 ** 20)
+    except (OSError, ValueError):
+        try:  # cgroup v1
+            cap = int((root / "memory" / "memory.limit_in_bytes").read_text())
+            if cap < 2 ** 60:
+                used = int((root / "memory" / "memory.usage_in_bytes").read_text())
+                found.append((cap - used) / 2 ** 20)
+        except (OSError, ValueError):
+            pass
+    try:
+        for line in Path(meminfo).read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                found.append(int(line.split()[1]) / 1024)
+    except (OSError, ValueError, IndexError):
+        pass
+    return round(min(found)) if found else None
+
+
 def predict(paths, load_audio, timeout=900):
     """Tag each audio file. load_audio(path) -> (mono samples, sample rate). Returns {path: summary} or
-    {} when the model isn't set up here. Raises RuntimeError if the model process fails."""
+    {} when the model isn't set up here. Raises RuntimeError if the model process fails, or isn't started because
+    there isn't enough memory free for it (MODEL_MEMORY_MB)."""
     kind = backend()
     if not kind or not paths:
         return {}
+    free = free_memory_mb() if kind == "essentia" else None
+    if free is not None and free < MODEL_MEMORY_MB:
+        raise RuntimeError(f"not enough free memory to start it this time ({free} MB free, it needs about "
+                           f"{MODEL_MEMORY_MB} MB)")
     import librosa
     import numpy as np
     with tempfile.TemporaryDirectory() as tmp:

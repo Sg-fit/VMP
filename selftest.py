@@ -921,6 +921,7 @@ def web_checks(tmp, files):
         again = browser.get(base + "/demo/blues", allow_redirects=False, timeout=30).headers.get("Location", "")
         check("web", "a demo builds once from generated audio, then opens straight away for everyone",
               "This is a demo report" in dpage and "12-bar" in dpage and "Save to history" not in dpage
+              and "guitar 60%" not in dpage  # the stand-in model always hears this; demos don't ask it
               and again.endswith(did), f"{did[:8]} / {again.rsplit('/', 1)[-1][:8]}")
         check("web", "an unknown demo is a 404", browser.get(base + "/demo/nope", timeout=10).status_code == 404)
         r7 = browser.post(base + "/analyze", data={"mode": "tags", "songs": "Massive Attack - Teardrop"},
@@ -1872,6 +1873,58 @@ def lineup_checks(tmp):
           and told["drums"].get("present") and told["drums"].get("grid") and any(x["drums"] for x in told["sections"]))
 
 
+def model_memory_checks(tmp):
+    """The style/instrument model is a bonus: it only starts when the container has the memory for it, and a
+    skipped model never costs the analysis."""
+    import musicanalyze as ma
+    import tagger
+    print("\n== The model and the memory cap ==")
+    mb = 2 ** 20
+    v2 = Path(tmp) / "cg2"
+    v2.mkdir()
+    (v2 / "memory.max").write_text(str(1500 * mb))
+    (v2 / "memory.current").write_text(str(1300 * mb))
+    (v2 / "memory.stat").write_text(f"anon 1\ninactive_file {100 * mb}\nactive_file 5\n")
+    meminfo = Path(tmp) / "meminfo"
+    meminfo.write_text("MemTotal: 4000000 kB\nMemAvailable: 2000000 kB\n")
+    v1 = Path(tmp) / "cg1"
+    (v1 / "memory").mkdir(parents=True)
+    (v1 / "memory" / "memory.limit_in_bytes").write_text(str(2500 * mb))
+    (v1 / "memory" / "memory.usage_in_bytes").write_text(str(1000 * mb))
+    nocap = Path(tmp) / "cg_max"
+    nocap.mkdir()
+    (nocap / "memory.max").write_text("max")
+    got = (tagger.free_memory_mb(v2, meminfo), tagger.free_memory_mb(v1, meminfo), tagger.free_memory_mb(nocap, meminfo),
+           tagger.free_memory_mb(Path(tmp) / "none", Path(tmp) / "none"))
+    check("model", "free memory is read from the container's cap (cgroup v2 or v1), else the machine's",
+          got == (300, 1500, 1953, None), str(got))
+    saved = (tagger.backend, tagger.free_memory_mb)
+    try:
+        tagger.backend, tagger.free_memory_mb = (lambda: "essentia"), (lambda *a, **k: 300)
+        try:
+            tagger.predict(["x.wav"], ma.load_audio)
+            refused = False
+        except RuntimeError as e:
+            refused = "not enough free memory" in str(e)
+        notes = []
+        heard = ma.hear_instruments(["x.wav"], notes.append)
+        check("model", "with too little memory free the model isn't started, and the analysis carries on without it",
+              refused and heard == {} and any("not enough free memory" in n for n in notes), "; ".join(notes)[:160])
+    finally:
+        tagger.backend, tagger.free_memory_mb = saved
+    saved_env = os.environ.get("MUSIC_TAGGER")
+    os.environ["MUSIC_TAGGER"] = "fake"
+    try:
+        f = write(Path(tmp) / "mm_song.wav", song([("C", ""), ("G", "")], 100, 4, loops=4))
+        res, _ = ma.run_analysis([f], Path(tmp) / "mm_out", cache_dir=Path(tmp) / "inst_cache", hear=False)
+        check("model", "demos don't run the instrument model (their audio is synthesized)", "heard" not in res[0])
+    finally:
+        if saved_env is None:
+            os.environ.pop("MUSIC_TAGGER", None)
+        else:
+            os.environ["MUSIC_TAGGER"] = saved_env
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -2117,6 +2170,10 @@ def main():
             lineup_checks(tmp)
         except Exception:
             check("lineup", "line-up checks ran", False, traceback.format_exc(limit=3))
+        try:
+            model_memory_checks(tmp)
+        except Exception:
+            check("model", "model memory checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:
