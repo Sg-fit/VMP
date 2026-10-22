@@ -2872,12 +2872,11 @@ def export_midis(r, out_dir):
 BRAINSTORM_PROMPT = """You are a creative music producer helping a musician develop an instrumental demo.
 Below is an automatic analysis of the track. Reply with ONLY this JSON (no other text):
 {{"vibe": "<1-2 sentences on the feel the data suggests>",
- "gap_ideas": [{{"gap": "<exactly one of: {gap_ids}>", "idea": "<under 35 words: how to fill this gap in THIS track - name the notes, chords, section or time>"}}],
- "mood": {{"now": "<the mood in a few words, from the data>", "directions": [{{"towards": "<a mood>", "how": "<under 30 words: which levers - chords, the colour note, tempo, register, rhythm density, brightness>"}}]}},
- "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 30 words, specific: cite a time, section, chord or note>"}}],
+ "gap_ideas": [{{"gap": "<exactly one of: {gap_ids}>", "idea": "<under 25 words: how to fill this gap in THIS track - name the notes, chords, section or time>"}}],
+ "mood": {{"now": "<the mood in a few words, from the data>", "directions": [{{"towards": "<a mood>", "how": "<under 20 words: which levers - chords, the colour note, tempo, register, rhythm density, brightness>"}}]}},
+ "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 25 words, specific: cite a time, section, chord or note>"}}],
  "alt_progressions": [{{"name": "<short>", "chords": ["<chord>", "..."], "why": "<one short sentence>"}}],
- "title_ideas": ["<title>", "<title>", "<title>"],
- "references": [{{"artist": "<artist>", "track": "<recording>", "shared": "<the one specific element it shares>"}}]}}
+ "title_ideas": ["<title>", "<title>", "<title>"]}}
 
 Rules: one gap_idea for each GAP listed below, in the same order, using its id (none if there are no GAPS); each
 fills that gap in this track and goes beyond the "already suggested" list. mood.directions: exactly 2 - one towards
@@ -2892,7 +2891,6 @@ If a blues Form is given (8-, 12- or 16-bar), the alt_progressions must keep tha
 as many chords as the form has bars (e.g. a quick change, dominant 7ths throughout, a ii-V before the turnaround).
 Chord names ending in 5 (D5, C#5) are power chords (root and fifth), not single notes; call single notes "the note C#".
 If the musician named the instruments, write ideas for that line-up; suggesting an added instrument is fine if you say so.
-2 references only if you are certain the recording exists and really shares that element; otherwise [].
 Use only facts given below; the analysis is approximate, so don't build on anything marked uncertain.
 
 ANALYSIS
@@ -2903,7 +2901,7 @@ ANALYSIS
 # overall limit for one brainstorm. Results are shown before the AI finishes, so the limit can be
 # generous: NVIDIA's free models often need 60-90+ seconds.
 AI_HEDGE_SECONDS = float(os.environ.get("MUSIC_AI_HEDGE_SECONDS", 30))
-AI_DEADLINE_SECONDS = float(os.environ.get("MUSIC_AI_DEADLINE_SECONDS", 150))
+AI_DEADLINE_SECONDS = float(os.environ.get("MUSIC_AI_DEADLINE_SECONDS", 210))
 
 
 def ai_summary(r):
@@ -2971,13 +2969,14 @@ def ai_summary(r):
     known = [p["progression"] for p in refs.get("progressions", [])] + ([refs["mode"]["mode"]] if refs.get("mode") else [])
     if known:
         lines.append("Already compared with: " + "; ".join(known) + ".")
-    lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
+    lines.append("Already suggested: " + " | ".join(i["idea"][:50] for i in r["ideas"][:6]) + ".")
     c = _norm_comparison(r.get("comparison"))
     for e in (c or {}).get("each", []):
-        lines.append(f"The musician admires a reference song. Side by side, yours vs theirs: "
-                     + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in e["rows"]) + ".")
+        differ = [x for x in e["rows"] if x["yours"] != x["theirs"]][:8]
+        lines.append(f"The musician admires a reference song. Where they differ, yours vs theirs: "
+                     + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in differ) + ".")
         if e["ideas"]:
-            lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in e["ideas"]) + ".")
+            lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:90] for i in e["ideas"][:4]) + ".")
     if (c or {}).get("shared"):
         lines.append("What every song they admire shares that theirs doesn't: " + " ".join(i["idea"] for i in c["shared"])
                      + " Help them get closer to this, in their own way.")
@@ -3131,14 +3130,24 @@ def _chat(client, model, prompt, quick=True):
     messages = ([{"role": "system", "content": hint}] if hint and quick else []) +         [{"role": "user", "content": prompt}]
     r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=4096 if hint else 1200,
                                        messages=messages)
-    return r.choices[0].message.content or ""
+    msg = r.choices[0].message
+    text = msg.content or ""
+    if "{" not in text:  # some reasoning models leave the JSON in their reasoning when they run long
+        extra = getattr(msg, "model_extra", None) or {}
+        thought = getattr(msg, "reasoning_content", None) or extra.get("reasoning_content") or extra.get("reasoning") or ""
+        if isinstance(thought, str) and "{" in thought and _parse_json_reply(thought):
+            text = thought[thought.index("{"):]
+    return text
 
 
 def _complete_answer(text):
     """A brainstorm reply is complete when it has several ideas and at least one progression
     (a reply cut off at the token limit usually loses the progressions at the end)."""
     obj = _parse_json_reply(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL))
-    return bool(obj) and len(obj.get("ideas") or []) >= 3 and bool(obj.get("alt_progressions"))
+    if not obj:
+        return False
+    ideas = len(obj.get("ideas") or []) + len(obj.get("gap_ideas") or obj.get("gaps") or [])
+    return ideas >= 3 and bool(obj.get("alt_progressions"))
 
 
 def _race(models, ask, info, fatal, complete=lambda text: True):

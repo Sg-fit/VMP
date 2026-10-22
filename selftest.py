@@ -627,6 +627,24 @@ def unit_checks():
     check("unit", "AI timing check flags a wrong chord time", "⚠" in ma._check_times("Add G#7 before C#m at 0:35", fake))
     check("unit", "AI timing check flags a wrong section", "⚠" in ma._check_times("A sweep at 1:45 before the C section", fake))
     check("unit", "AI timing check accepts a correct claim", "⚠" not in ma._check_times("Lift into C#m at 0:47", fake))
+    new_shape = json.dumps({"vibe": "v", "gap_ideas": [{"gap": "colour", "idea": "x"}, {"gap": "mood", "idea": "y"}],
+                            "ideas": [{"area": "a", "idea": "z"}, {"area": "a", "idea": "w"}],
+                            "alt_progressions": [{"name": "n", "chords": ["G"]}]})
+    check("unit", "an AI reply in the gap shape (gap ideas + 2 more + progressions) is complete; a cut-off one isn't",
+          ma._complete_answer(new_shape) and not ma._complete_answer(json.dumps({"gap_ideas": [{"gap": "colour"}]})))
+
+    class _Msg:  # a reasoning model that left its answer in the reasoning field
+        content = ""
+        model_extra = {"reasoning_content": "thinking it over... " + new_shape}
+
+    class _Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**k):
+                    return type("R", (), {"choices": [type("C", (), {"message": _Msg()})()]})()
+    check("unit", "an answer a reasoning model left in its reasoning field is still used",
+          ma._complete_answer(ma._chat(_Client, "nvidia/nemotron-x", "p")))
     ma.AI_HEDGE_SECONDS, ma.AI_DEADLINE_SECONDS = 0.3, 1.5
     t0 = time.time()
     info = {}
