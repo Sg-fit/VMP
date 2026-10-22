@@ -2872,7 +2872,7 @@ def export_midis(r, out_dir):
 BRAINSTORM_PROMPT = """You are a creative music producer helping a musician develop an instrumental demo.
 Below is an automatic analysis of the track. Reply with ONLY this JSON (no other text):
 {{"vibe": "<1-2 sentences on the feel the data suggests>",
- "gap_ideas": [{{"gap": "<an id from GAPS>", "idea": "<under 35 words: how to fill this gap in THIS track - name the notes, chords, section or time>"}}],
+ "gap_ideas": [{{"gap": "<exactly one of: {gap_ids}>", "idea": "<under 35 words: how to fill this gap in THIS track - name the notes, chords, section or time>"}}],
  "mood": {{"now": "<the mood in a few words, from the data>", "directions": [{{"towards": "<a mood>", "how": "<under 30 words: which levers - chords, the colour note, tempo, register, rhythm density, brightness>"}}]}},
  "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 30 words, specific: cite a time, section, chord or note>"}}],
  "alt_progressions": [{{"name": "<short>", "chords": ["<chord>", "..."], "why": "<one short sentence>"}}],
@@ -3195,17 +3195,49 @@ def _race(models, ask, info, fatal, complete=lambda text: True):
         pool.shutdown(wait=False, cancel_futures=True)  # don't wait for slow stragglers
 
 
-def _gap_ideas(items, r):
-    """The AI's idea for each gap, kept only for gaps we actually found (an invented id is dropped)."""
-    known = {g["id"]: g for g in (r.get("gaps") or {}).get("gaps", [])}
-    out, seen = [], set()
-    for i in items if isinstance(items, list) else []:
-        if isinstance(i, dict) and i.get("gap") in known and i.get("idea") and i["gap"] not in seen:
-            seen.add(i["gap"])
-            g = known[i["gap"]]
-            out.append({"gap": g["id"], "title": g["title"], "missing": g["missing"], "area": g["area"],
-                        "idea": _check_times(_clean(i["idea"]), r)})
-    return out
+def _gap_ideas(items, r, unmatched=None):
+    """The AI's idea for each gap, kept only for gaps we actually found. Models write the reference loosely, so a
+    reference is matched by id ("colour", "[colour]", "Colour"), by the gap's title, or - when an idea names no gap at
+    all - by its place in the order the gaps were listed. One that names a gap we didn't find is dropped (and kept in
+    `unmatched`, so a self-test can show what the model sent)."""
+    gaps = (r.get("gaps") or {}).get("gaps", [])
+    known = {g["id"]: g for g in gaps}
+    if isinstance(items, dict):  # {"colour": "...", ...}
+        items = [{"gap": k, "idea": v} for k, v in items.items()]
+    if not isinstance(items, list):
+        return []
+
+    def find(ref):
+        ref = str(ref or "").strip().strip("[]()\"'` ").lower().replace(" ", "_").replace("-", "_")
+        if not ref:
+            return None
+        if ref in known:
+            return ref
+        for g in gaps:  # "colour_note", "the_key's_colour_note", "melody_degrees_(...)"
+            title = g["title"].lower().replace(" ", "_")
+            if ref.startswith(g["id"]) or g["id"] in ref or ref == title or title in ref or ref in title:
+                return g["id"]
+        return False
+    picked, loose = {}, []
+    for i in items:
+        if not isinstance(i, dict):
+            continue
+        idea = i.get("idea") or i.get("suggestion") or i.get("text")
+        if not idea:
+            continue
+        ref = i.get("gap") or i.get("id") or i.get("gap_id") or i.get("title")
+        gid = find(ref)
+        if gid and gid not in picked:
+            picked[gid] = idea
+        elif gid is None:
+            loose.append(idea)  # no reference given: placed by order below
+        elif unmatched is not None:
+            unmatched.append({"gap": ref, "idea": str(idea)[:120]})
+    for g in gaps:  # ideas that named no gap fill the remaining gaps in the order they were listed
+        if g["id"] not in picked and loose:
+            picked[g["id"]] = loose.pop(0)
+    return [{"gap": g["id"], "title": g["title"], "missing": g["missing"], "area": g["area"],
+             "idea": _check_times(_clean(str(picked[g["id"]])), r)} for g in gaps if g["id"] in picked]
 
 
 def _mood_reply(m):
@@ -3217,7 +3249,9 @@ def _mood_reply(m):
 
 
 def ai_brainstorm(r, llm):
-    prompt = BRAINSTORM_PROMPT.format(key=r["key"], summary=ai_summary(r))
+    ids = [g["id"] for g in (r.get("gaps") or {}).get("gaps", [])]
+    prompt = BRAINSTORM_PROMPT.format(key=r["key"], summary=ai_summary(r),
+                                      gap_ids=", ".join(ids) if ids else "none - leave gap_ideas empty")
     info = {}
     try:
         raw = llm(prompt, info)
@@ -3234,7 +3268,7 @@ def ai_brainstorm(r, llm):
         "vibe": _clean(obj.get("vibe", "")),
         "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _check_times(_clean(i["idea"]), r)}
                   for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
-        "gap_ideas": _gap_ideas(obj.get("gap_ideas"), r),
+        "gap_ideas": _gap_ideas(obj.get("gap_ideas") or obj.get("gaps"), r, unmatched := []),
         "mood": _mood_reply(obj.get("mood")),
         "alt_progressions": [{"name": _clean(p.get("name", "")), "why": _clean(p.get("why", "")),
                               "chords": [_clean(c) for c in p["chords"]]}
@@ -3244,6 +3278,9 @@ def ai_brainstorm(r, llm):
         "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
                        for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
     }
+    if not out["gap_ideas"] and (r.get("gaps") or {}).get("gaps"):
+        # for the self-test and the logs: what the model sent where the gap ideas should have been
+        out["gap_reply"] = (unmatched or obj.get("gap_ideas") or obj.get("gaps") or "(no gap_ideas field)")
     if r.get("blues_form"):
         # The AI is asked to keep the 12-bar form but doesn't always (it once padded a pop loop to 12 chords and
         # called it a blues), so check each progression and drop the ones that don't follow the form.
@@ -3276,7 +3313,7 @@ def bench_llm():
             sys.exit("--bench-llm compares NVIDIA/OpenAI models; with Anthropic there is only one model to use.")
         sys.exit("Set NVIDIA_API_KEY or OPENAI_API_KEY first.")
     import openai
-    prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY)
+    prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY, gap_ids="none - leave gap_ideas empty")
     if os.environ.get("NVIDIA_API_KEY"):
         client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=120, max_retries=0)
         names = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] +             [m.strip() for m in (NVIDIA_FALLBACK_MODELS + "," + os.environ.get("MUSIC_BENCH_MODELS", "")).split(",")]

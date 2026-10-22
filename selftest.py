@@ -596,7 +596,8 @@ def ai_checks(res):
     gaps_found = [g["id"] for g in (r.get("gaps") or {}).get("gaps", [])]
     check("ai", "the AI answers the gaps it was given (one idea per gap, at least most of them)",
           not gaps_found or len(ai.get("gap_ideas", [])) >= (len(gaps_found) + 1) // 2,
-          f"{[i['gap'] for i in ai.get('gap_ideas', [])]} of {gaps_found}")
+          f"{[i['gap'] for i in ai.get('gap_ideas', [])]} of {gaps_found}"
+          + (f"; the model sent: {json.dumps(ai.get('gap_reply'))[:400]}" if ai.get("gap_reply") else ""))
     flagged = [i["idea"] for i in every if "⚠ check this" in i["idea"]]
     # An AI that gets the odd time wrong is what the fact-check is for (the page marks it). Most ideas being off
     # means the analysis summary it was given is wrong: that's ours to fix.
@@ -1821,6 +1822,20 @@ def gap_checks(tmp):
     check("gaps", "the AI gets the gaps by id, and its ideas are kept only for gaps we found",
           all(f"[{k}]" in asked["prompt"] for k in known) and [i["gap"] for i in ai["gap_ideas"]] == known
           and ai["mood"]["directions"][0]["towards"] == "tense", f"{known} -> {[i['gap'] for i in ai['gap_ideas']]}")
+    # models write the reference loosely: brackets, the title, another field name, a dictionary, or no id at all
+    shapes = {
+        "brackets": [{"gap": f"[{k}]", "idea": f"fill {k}"} for k in known],
+        "titles": [{"id": g["title"], "idea": f"fill {g['id']}"} for g in r["gaps"]["gaps"]],
+        "dictionary": {k: f"fill {k}" for k in known},
+        "no ids, in order": [{"idea": f"fill {k}"} for k in known],
+    }
+    read = {name: [(i["gap"], i["idea"]) for i in ma._gap_ideas(items, r)] for name, items in shapes.items()}
+    want = [(k, f"fill {k}") for k in known]
+    junk = []
+    kept = ma._gap_ideas([{"gap": "made_up", "idea": "x"}, {"gap": known[0], "idea": "real"}], r, junk)
+    check("gaps", "the AI's gap ideas are read however the model writes the reference; invented gaps still dropped",
+          all(v == want for v in read.values()) and [i["gap"] for i in kept] == [known[0]] and junk[0]["gap"] == "made_up",
+          "; ".join(f"{k}: {v}" for k, v in read.items() if v != want))
     r["ai"] = ai
     rep = "\n".join(ma.track_report(r))
     check("gaps", "the report shows the scale-degree chart, the gap table, and the AI's ideas grouped by gap",
