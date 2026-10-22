@@ -108,6 +108,11 @@ NVIDIA_MODEL = "openai/gpt-oss-20b"
 # Tried in order if the main model times out or has been retired (comma-separated, overridable
 # with MUSIC_FALLBACK_MODELS).
 NVIDIA_FALLBACK_MODELS = "nvidia/nemotron-3-super-120b-a12b"
+# What --bench-llm tries besides the two above: chat models NVIDIA listed on 22 Oct 2026. A model can be listed and
+# still refused for a free key (404), or queued for minutes, which is why it's measured with your key, not assumed.
+NVIDIA_BENCH_CANDIDATES = ("nvidia/nemotron-3.5-lightning-30b-a3b,nvidia/nemotron-nano-3-30b-a3b,google/gemma-3-12b-it,"
+                           "nv-mistralai/mistral-nemo-12b-instruct,mistralai/mistral-large-2-instruct,"
+                           "deepseek-ai/deepseek-v4.1-flash,nvidia/llama-3.1-nemotron-70b-instruct,moonshotai/kimi-k2.6")
 ANTHROPIC_MODEL = "claude-haiku-4-5"
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -3309,12 +3314,17 @@ Most used chords: E, A, Em, C#m, B, Bm.
 Chord loops: Em - A (i - IV).
 Drums: backbeat (snare on 2 and 4); tight repetition; 16-step grid X...S...X...S... (K kick, S snare, X both); no fills.
 Bass: plays the chord roots; main notes E 73%, A 16%, C# 3%.
-Energy: biggest build into 2:17 (+14.8 dB); quietest around 2:13."""
+Energy: biggest build into 2:17 (+14.8 dB); quietest around 2:13.
+GAPS (what's missing, by id):
+- [colour] The key's colour note: the track has a major key, whose colour note is G# (degree 3); missing: G# is barely heard.
+- [harmony_degrees] Chords the key offers, unused: the track has chords built on 1, 4, 6; missing: anything on 2 (F#), 3 (G#), 7 (D#).
+- [mood] Mood contrast: the track has every section feels calm; missing: a section in another mood: excited or tense."""
+BENCH_GAP_IDS = "colour, harmony_degrees, mood"
 
 
 def bench_llm():
-    """Time each configured model on a realistic prompt - with and without the 'think less' switch for
-    reasoning models - and print the .env settings for the fastest reliable setup."""
+    """Time each model (the configured ones, then NVIDIA_BENCH_CANDIDATES or MUSIC_BENCH_MODELS) on the real prompt,
+    with your key, and print the .env settings for the fastest ones that give a complete answer."""
     import math
     import time as _time
     if not os.environ.get("NVIDIA_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
@@ -3322,31 +3332,36 @@ def bench_llm():
             sys.exit("--bench-llm compares NVIDIA/OpenAI models; with Anthropic there is only one model to use.")
         sys.exit("Set NVIDIA_API_KEY or OPENAI_API_KEY first.")
     import openai
-    prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY, gap_ids="none - leave gap_ideas empty")
+    prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY, gap_ids=BENCH_GAP_IDS)
+    limit = 90
     if os.environ.get("NVIDIA_API_KEY"):
-        client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=120, max_retries=0)
-        names = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] +             [m.strip() for m in (NVIDIA_FALLBACK_MODELS + "," + os.environ.get("MUSIC_BENCH_MODELS", "")).split(",")]
+        client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=limit, max_retries=0)
+        extra = os.environ.get("MUSIC_BENCH_MODELS") or NVIDIA_BENCH_CANDIDATES
+        names = [os.environ.get("MUSIC_MODEL", NVIDIA_MODEL)] + [m.strip() for m in (
+            os.environ.get("MUSIC_FALLBACK_MODELS", NVIDIA_FALLBACK_MODELS) + "," + extra).split(",")]
     else:
-        client = openai.OpenAI(timeout=120, max_retries=0)
+        client = openai.OpenAI(timeout=limit, max_retries=0)
         names = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)] + os.environ.get("MUSIC_BENCH_MODELS", "").split(",")
     models = [m for m in dict.fromkeys(n.strip() for n in names) if m]
-    print(f"Testing {len(models)} model(s), one request at a time ({len(prompt)}-character prompt, 120 s limit).\n")
+    print(f"Testing {len(models)} model(s), one request at a time ({len(prompt)}-character prompt, {limit} s limit "
+          "each). This takes a few minutes.\n", flush=True)
     results = []
     for model in models:
-        reasoning = any(k in model.lower() for k in REASONING_HINTS)
-        for quick in ([True, False] if reasoning else [True]):
-            label = model + ("  (think less)" if reasoning and quick else "  (normal)" if reasoning else "")
-            t = _time.time()
-            try:
-                text = _chat(client, model, prompt, quick=quick)
-                secs = _time.time() - t
-                usable = _parse_json_reply(text) is not None
-                note = "usable" if usable else ("EMPTY reply" if not text.strip() else "reply not usable")
-            except Exception as e:
-                secs, usable = _time.time() - t, False
-                note = f"{type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip()
-            print(f"  {label:55} {secs:6.1f}s   {note}")
-            results.append((model, quick, secs, usable))
+        quick = True  # reasoning models with their "think less" switch, as the app uses them
+        t = _time.time()
+        try:
+            text = _chat(client, model, prompt, quick=quick)
+            secs = _time.time() - t
+            usable = _complete_answer(text)
+            note = ("complete answer" if usable else "EMPTY reply" if not text.strip() else
+                    "incomplete answer" if _parse_json_reply(text) else "reply not usable")
+        except Exception as e:
+            secs, usable = _time.time() - t, False
+            note = f"{type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip()
+            if getattr(e, "status_code", None) == 404:
+                note += " (not available for your key)"
+        print(f"  {model:50} {secs:6.1f}s   {note}", flush=True)
+        results.append((model, quick, secs, usable))
     good = sorted([r for r in results if r[3]], key=lambda r: r[2])
     if not good:
         print("\nNo model gave a usable answer. NVIDIA's free models may be overloaded right now - try again in a "
@@ -3354,11 +3369,11 @@ def bench_llm():
         return
     order = list(dict.fromkeys(r[0] for r in good))
     # Real jobs ask for two tracks at once and free endpoints slow down under load: leave headroom.
-    deadline = min(180, max(90, math.ceil(good[0][2] * 4 / 10) * 10))
+    deadline = min(240, max(90, math.ceil(good[0][2] * 4 / 10) * 10))
     print("\nRecommended .env settings (then run: docker compose up -d):\n")
     print(f"MUSIC_MODEL={order[0]}")
     if len(order) > 1:
-        print(f"MUSIC_FALLBACK_MODELS={','.join(order[1:])}")
+        print(f"MUSIC_FALLBACK_MODELS={','.join(order[1:3])}")  # two backups: more just adds parallel requests
     print(f"MUSIC_AI_DEADLINE_SECONDS={deadline}")
 
 

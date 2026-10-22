@@ -232,7 +232,10 @@ python musicanalyze.py ./music_folder --melody "copy 4: A E F E A E D E"   # one
 - Writes `music_report.md`, `music_results.json`, `midi/*.mid` and `sheets/*` (MusicXML + engraved HTML) to `--out`.
 - The AI brainstorm runs when an API key is set. On Windows PowerShell, set it with `$env:NVIDIA_API_KEY="nvapi-..."`, not `export`. Use `--no-llm` to skip it.
 - Speed: about 20 s per minute of audio on CPU. Re-running the same recording (to add a melody or retry the AI) takes about 1 s, because the analysis is cached by file content. Use `--no-cache` to force a fresh analysis.
-- **Pick the fastest AI model** for your API key (it times each configured model on a real prompt):
+- **Pick the fastest AI model** for your API key. It times your configured models and a list of current NVIDIA chat
+  models (or `MUSIC_BENCH_MODELS=a,b,c`) on the real prompt, one at a time, flags the ones your key can't use (404), and
+  prints the `.env` lines for the fastest that give a complete answer. Free models come and go, so rerun it when the
+  AI starts timing out:
 
   ```bash
   python musicanalyze.py --bench-llm
