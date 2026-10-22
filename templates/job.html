@@ -10,6 +10,19 @@
   @media (prefers-reduced-motion: reduce) { .working i { animation: none; transform: scaleY(.6); } }
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; align-items: center; }
   .savebar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 16px; }
+  .privacy-box { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-top: 14px; padding: 10px 14px;
+                 border: 1px solid var(--line); border-left: 4px solid var(--ink); font-size: .88rem; }
+  .privacy-box form { margin: 0; }
+  .privacy-box .linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
+                          text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  .organise { margin-top: 10px; font-size: .9rem; }
+  .organise summary { cursor: pointer; color: var(--muted); }
+  .organise form { display: grid; gap: 8px; max-width: 460px; margin-top: 10px; }
+  .organise label { display: grid; gap: 3px; font-size: .78rem; color: var(--muted); }
+  .organise label.inline { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: .9rem; }
+  .organise input:not([type=checkbox]), .organise select, .organise textarea { font: inherit; font-size: .9rem; padding: 6px 8px;
+      border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--ink); }
+  .organise .btn { justify-self: start; padding: 8px 14px; }
   .savebar form { margin: 0; }
   .savebar .ok { font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
   .savebar .ok::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
@@ -60,6 +73,41 @@
   .notify-note:empty { display: none; }
 </style>
 {% endblock %}
+{% macro privacy_box() %}
+<div class="privacy-box" id="privacy">
+  <b>🔒 Who can see this</b>
+  {% if s.demo %}<span>Everyone: it's a demo, made from generated audio.</span>
+  {% elif s.shared %}<span><b>Anyone with this link</b> can open it{% if not saved %}, until {{ expires|datetime }}{% endif %}.</span>
+  {% elif saved %}<span><b>Only you.</b> It's in your private history, until you delete it.</span>
+  {% elif s.visitor %}<span><b>Only this browser.</b> We delete it on {{ expires|datetime }}{% if not user %}, or sign in to keep it{% endif %}.</span>
+  {% else %}<span>Anyone with this link, until {{ expires|datetime }}.</span>{% endif %}
+  {% if creator and not s.demo %}
+    <form method="post" action="{{ url_for('job_share', job_id=job_id) }}">
+      <input type="hidden" name="on" value="{{ '0' if s.shared else '1' }}">
+      <button type="submit" class="linkish">{{ 'Stop sharing' if s.shared else 'Share by link' }}</button></form>
+    {% if s.state == 'done' or s.state == 'error' %}
+    <form method="post" action="{{ url_for('job_forget', job_id=job_id) }}"
+          onsubmit="return confirm('Delete this result and everything made from it now? This can\'t be undone.')">
+      <button type="submit" class="linkish">Delete now</button></form>
+    {% endif %}
+  {% endif %}
+  <span class="muted">Your audio was deleted as soon as it was analysed. <a href="{{ url_for('privacy') }}">How we handle your music</a></span>
+</div>
+{% if meta %}
+<details class="organise"><summary>Organise: {{ meta.project or 'no project' }}{{ ' · ' ~ meta.status if meta.status }}{% for lab in meta.labels %} · {{ lab }}{% endfor %}{{ ' · ★' if meta.starred }}</summary>
+  <form method="post" action="{{ url_for('job_organise', job_id=job_id) }}">
+    <label>Project <input name="project" value="{{ meta.project }}" maxlength="60" list="project-names" placeholder="e.g. EP 2027"></label>
+    <label>Status <select name="status"><option value="">—</option>{% for st in statuses %}<option {{ 'selected' if meta.status == st }}>{{ st }}</option>{% endfor %}</select></label>
+    <label>Labels <input name="labels" value="{{ meta.labels|join(', ') }}" maxlength="240" placeholder="demo, chill, needs vocals"></label>
+    <label>Notes <textarea name="notes" rows="3" maxlength="2000" placeholder="Only you can see these">{{ meta.notes }}</textarea></label>
+    <label class="inline"><input type="checkbox" name="starred" value="1" {{ 'checked' if meta.starred }}> ★ Star it</label>
+    <input type="hidden" name="starred_present" value="1">
+    <button class="btn secondary" type="submit">Save</button>
+  </form>
+  <datalist id="project-names">{% for name, n, last in projects %}<option value="{{ name }}">{% endfor %}</datalist>
+</details>
+{% endif %}
+{% endmacro %}
 {% block content %}
 <script>
   // "Notify me when the AI is done": opt-in, can be cancelled, remembered for this job across the page reload
@@ -168,6 +216,7 @@
           what all your lists have in common.</span>
       {% endif %}
     </div>
+    {{ privacy_box() }}
   </div>
   <script>document.addEventListener('DOMContentLoaded', () => aiNotify.finished('Your tags are ready.'));</script>
   <p class="muted small" style="margin:32px 0 0;max-width:46em">Your tags come first, then searches built from them
@@ -209,6 +258,7 @@
       {% endif %}
     </div>
     {% endif %}
+    {{ privacy_box() }}
     {% if midi_files %}
       <div class="midis"><span class="label"><abbr title="{{ glossary['MIDI'] }}">MIDI</abbr></span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
     {% endif %}
@@ -288,10 +338,10 @@
       document.querySelectorAll('.report h3').forEach(h => {
         if (!/Ideas to try|AI brainstorm/.test(h.textContent)) return;
         let track = h; while (track && track.tagName !== 'H2') track = track.previousElementSibling;
-        let ul = h.nextElementSibling;
-        while (ul && ul.tagName !== 'UL' && ul.tagName !== 'H3' && ul.tagName !== 'H2') ul = ul.nextElementSibling;
-        if (!ul || ul.tagName !== 'UL') return;
-        ul.querySelectorAll(':scope > li').forEach(li => {
+        const lists = [];
+        for (let el = h.nextElementSibling; el && el.tagName !== 'H3' && el.tagName !== 'H2'; el = el.nextElementSibling)
+          if (el.tagName === 'UL') lists.push(el);
+        lists.forEach(ul => ul.querySelectorAll(':scope > li').forEach(li => {
           const strong = li.querySelector('strong');
           const area = strong ? strong.textContent.replace(/:$/, '').trim() : 'idea';
           const text = li.textContent.replace(strong ? strong.textContent : '', '').trim();
@@ -309,7 +359,7 @@
             box.appendChild(b);
           });
           li.appendChild(box);
-        });
+        }));
       });
     })();
   </script>

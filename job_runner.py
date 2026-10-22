@@ -14,6 +14,7 @@ Usage (normally only called by app.py):
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -25,18 +26,29 @@ def status_path(d):
 
 
 def read_status(d):
-    try:
-        return json.loads(status_path(d).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"state": "unknown", "message": ""}
+    for attempt in range(20):  # Windows locks a file while it's being replaced: wait a moment and read again
+        try:
+            return json.loads(status_path(d).read_text(encoding="utf-8"))
+        except PermissionError:
+            time.sleep(0.05)
+        except (OSError, json.JSONDecodeError):
+            break
+    return {"state": "unknown", "message": "", "unreadable": True}
 
 
 def write_status(d, **changes):
     d = Path(d)
     s = read_status(d) if status_path(d).exists() else {}
     s.update(changes, updated=time.time())
-    tmp = d / "status.tmp"
+    # each writer (the app, the worker, its threads) its own temporary file, then an atomic replace
+    tmp = d / f"status.{os.getpid()}.{threading.get_ident()}.tmp"
     tmp.write_text(json.dumps(s), encoding="utf-8")
+    for attempt in range(40):
+        try:
+            tmp.replace(status_path(d))
+            return
+        except PermissionError:  # Windows: someone is reading it right now
+            time.sleep(0.05)
     tmp.replace(status_path(d))
 
 

@@ -119,7 +119,7 @@
     <a href="{{ url_for('index') }}">Analyse</a>
     <a href="{{ url_for('find') }}">Find music</a>
     {% if user %}
-      <a href="{{ url_for('history') }}">History</a>
+      <a href="{{ url_for('history') }}">Library</a>
       <a href="{{ url_for('profile') }}" class="me">{{ user.username }}</a>
     {% else %}
       <a href="{{ url_for('login', next=request.path) }}">Sign in</a>
@@ -208,6 +208,7 @@
   })();
 </script>
 <footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks ·
+  <a href="{{ url_for('privacy') }}">🔒 Privacy: your unreleased music stays yours</a> ·
   <button type="button" class="limits-link" data-open-intro>What the app can't do</button></span>
   {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
 </body>

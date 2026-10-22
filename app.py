@@ -20,6 +20,7 @@ Environment variables (all optional):
 """
 
 import io
+import hashlib
 import json
 import os
 import secrets
@@ -82,18 +83,60 @@ job_queue = queue.Queue()
 
 # ---------------------------------------------------------------- job storage (one folder per job)
 
+def _browser_id(create=False):
+    """This browser's private id (a random value in the signed session cookie), hashed: it's what a temporary result
+    is tied to, so only the browser that made it can open it. None until this browser has started an analysis."""
+    v = session.get("visitor")
+    if not v and create:
+        v = session["visitor"] = secrets.token_hex(16)
+        session.permanent = True
+    return hashlib.sha256(v.encode()).hexdigest()[:32] if v else None
+
+
+def is_creator(job_id, st=None):
+    """The person this result belongs to: the signed-in owner of a saved analysis, or the browser that started a
+    temporary one."""
+    owner = accounts.owner_of(job_id)
+    if owner is not None:
+        return owner == session.get("uid")
+    st = st if st is not None else read_status(DATA_DIR / job_id)
+    return bool(st.get("visitor")) and st["visitor"] == _browser_id()
+
+
 def get_job_dir(job_id):
-    """The job's folder. Temporary results open for anyone with the link; an analysis saved to someone's
-    history opens only for them (404 for everyone else, so its existence isn't revealed)."""
+    """The job's folder, for the person it belongs to (404 for everyone else, so its existence isn't revealed):
+    a saved analysis opens for its owner, a temporary one for the browser that started it. A demo, or a result its
+    owner chose to share by link, opens for anyone with the link."""
     if not JOB_ID.match(job_id):
         abort(404)
     d = DATA_DIR / job_id
     if not d.is_dir():
         abort(404)
+    st = read_status(d)
+    if st.get("unreadable"):
+        abort(404)  # never open a result whose owner we can't check
+    if st.get("demo") or st.get("shared"):
+        return d
     owner = accounts.owner_of(job_id)
-    if owner is not None and owner != session.get("uid"):
-        abort(404)
+    if owner is not None:
+        if owner != session.get("uid"):
+            abort(404)
+    elif st.get("visitor") and st["visitor"] != _browser_id():
+        abort(404)  # results from before this rule have no visitor and keep working by link until they expire
     return d
+
+
+def purge_job(d):
+    """Delete a result's folder and the cached analyses made from its audio (derived data: keys, chords, ...)."""
+    cache = Path(os.environ.get("MUSIC_CACHE_DIR") or DATA_DIR / "cache")
+    for f in (d / "output").glob("*.json") if (d / "output").is_dir() else []:  # musician and tag results alike
+        try:
+            for keys in re.findall(r'"cache_keys":\s*\[([^\]]*)\]', f.read_text(encoding="utf-8")):
+                for key in re.findall(r'"([\w\-]+)"', keys):
+                    (cache / f"{key}.pkl").unlink(missing_ok=True)
+        except OSError:
+            pass
+    shutil.rmtree(d, ignore_errors=True)
 
 
 def cleanup_old_jobs():
@@ -103,8 +146,9 @@ def cleanup_old_jobs():
     for d in DATA_DIR.iterdir():
         if d.is_dir() and JOB_ID.match(d.name) and d.name not in keep:
             s = read_status(d)
-            if s.get("state") not in ("queued", "running") and s.get("updated", 0) < cutoff:
-                shutil.rmtree(d, ignore_errors=True)
+            # counted from when it was made: sharing or other later changes don't extend a result's life
+            if s.get("state") not in ("queued", "running") and (s.get("created") or s.get("updated", 0)) < cutoff:
+                purge_job(d)
 
 
 def fail_interrupted_jobs():
@@ -266,6 +310,23 @@ def intro_seen():
 app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES)
 
 
+PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account")
+
+
+@app.after_request
+def privacy_headers(resp):
+    """Unreleased music stays private: results and personal pages are never indexed or kept in shared caches, no
+    page can be framed by another site, and a result's address never leaks to a site it links to."""
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()")
+    if request.path.startswith(PRIVATE_PATHS):
+        resp.headers["Cache-Control"] = "private, no-store"
+        resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    return resp
+
+
 def demo_pictures():
     """A thumbnail for each demo that has been built: its main track's timeline (sections over loudness)."""
     out = {}
@@ -291,7 +352,10 @@ def _safe_next(default="/"):
 
 
 def _sign_in(user_id):
+    visitor = session.get("visitor")  # this browser's own temporary results stay its own
     session.clear()  # a fresh session on sign-in
+    if visitor:
+        session["visitor"] = visitor
     session["uid"] = user_id
     session.permanent = True  # remembered for 30 days on this device
 
@@ -369,9 +433,36 @@ def history():
     items = _summaries(accounts.history(u["id"]))
     for it in items:
         it["state"] = read_status(DATA_DIR / it["job_id"]).get("state", "missing")
-    view = trends.overview(items, request.args.get("range", trends.DEFAULT_FRAME))
+    a = request.args
+    f = {"q": a.get("q", "").strip(), "project": a.get("project", ""), "status": a.get("status", ""),
+         "label": a.get("label", ""), "starred": a.get("starred") == "1"}
+
+    def match(it):
+        """Search and filters: the title, track names, project, labels, notes and key all count for search."""
+        if f["project"] and it.get("project") != f["project"]:
+            return False
+        if f["status"] and it.get("status") != f["status"]:
+            return False
+        if f["label"] and f["label"] not in it.get("labels", []):
+            return False
+        if f["starred"] and not it.get("starred"):
+            return False
+        if f["q"]:
+            tracks = (it.get("summary") or {}).get("tracks") or []
+            hay = " ".join([it.get("title", ""), it.get("project", ""), it.get("notes", ""), " ".join(it.get("labels", []))]
+                           + [f"{t.get('file', '')} {t.get('key', '')}" for t in tracks]).lower()
+            return all(w in hay for w in f["q"].lower().split())
+        return True
+    shown = [it for it in items if match(it)]
+    view = trends.overview(shown, request.args.get("range", trends.DEFAULT_FRAME))
     view["tiles"] = trends.tiles(view)
-    return render_template("history.html", items=items, v=view, version=ma.CODE_VERSION)
+    def hurl(**changes):
+        """This page's address with some filters changed (None or '' removes one)."""
+        args = {**request.args.to_dict(), **changes}
+        return url_for("history", **{k: v for k, v in args.items() if v})
+    return render_template("history.html", items=items, v=view, version=ma.CODE_VERSION, f=f, hurl=hurl,
+                           filtered=any(f.values()), projects=accounts.projects(u["id"]),
+                           labels=accounts.all_labels(u["id"]), statuses=accounts.STATUSES)
 
 
 MEMORY_SCAN = 15  # most recent saved analyses whose ideas count as "already shown"
@@ -491,8 +582,101 @@ def job_delete(job_id):
     """Remove an analysis from your history and delete its files."""
     u = _require_user()
     if accounts.forget_job(u["id"], job_id) and read_status(DATA_DIR / job_id).get("state") not in ("queued", "running"):
-        shutil.rmtree(DATA_DIR / job_id, ignore_errors=True)
+        purge_job(DATA_DIR / job_id)
     return redirect(url_for("history"))
+
+
+@app.post("/jobs/<job_id>/forget")
+def job_forget(job_id):
+    """Delete a result now, saved or not, instead of waiting for it to expire. Only the person it belongs to."""
+    if not JOB_ID.match(job_id) or not (DATA_DIR / job_id).is_dir() or not is_creator(job_id):
+        abort(404)
+    if read_status(DATA_DIR / job_id).get("state") in ("queued", "running"):
+        abort(409, "It's still being analysed. Delete it once it's done.")
+    u = current_user()
+    if u:
+        accounts.forget_job(u["id"], job_id)
+    purge_job(DATA_DIR / job_id)
+    return redirect(url_for("history") + "?deleted=1" if u else url_for("index", deleted=1))
+
+
+@app.post("/jobs/<job_id>/share")
+def job_share(job_id):
+    """Share by link, or stop sharing. Only the person the result belongs to."""
+    if not JOB_ID.match(job_id) or not (DATA_DIR / job_id).is_dir() or not is_creator(job_id):
+        abort(404)
+    write_status(DATA_DIR / job_id, shared=request.form.get("on") == "1")
+    return redirect(url_for("job", job_id=job_id))
+
+
+@app.post("/jobs/<job_id>/organise")
+def job_organise(job_id):
+    """Project, status, labels, notes and the star of a saved analysis."""
+    u = _require_user()
+    f = request.form
+    accounts.organise(u["id"], job_id, project=f.get("project"), status=f.get("status"), labels=f.get("labels"),
+                      notes=f.get("notes"), starred=f.get("starred") == "1" if "starred_present" in f else None)
+    return redirect(_safe_next(url_for("job", job_id=job_id)))
+
+
+@app.post("/jobs/<job_id>/star")
+def job_star(job_id):
+    u = _require_user()
+    accounts.organise(u["id"], job_id, starred=request.form.get("on") == "1")
+    return redirect(_safe_next(url_for("history")))
+
+
+@app.post("/projects/rename")
+def project_rename():
+    u = _require_user()
+    accounts.rename_project(u["id"], request.form.get("old", ""), request.form.get("new", ""))
+    return redirect(url_for("history", project=request.form.get("new", "") or None))
+
+
+@app.get("/account")
+def account_page():
+    u = _require_user()
+    return render_template("settings.html", saved=len(accounts.history(u["id"])), version=ma.CODE_VERSION,
+                           error=request.args.get("error"))
+
+
+@app.get("/account/export")
+def account_export():
+    """Everything we hold about you, in one zip: your account data, and each saved analysis's report, data,
+    MIDI and sheet music."""
+    u = _require_user()
+    data = accounts.export(u["id"])
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("account.json", json.dumps(data, indent=2, ensure_ascii=False))
+        for it in data["saved"]:
+            out = DATA_DIR / it["job_id"] / "output"
+            folder = re.sub(r"[^\w\-. ]+", "_", it["title"])[:60] + f" ({it['job_id'][:8]})"
+            for f in out.rglob("*") if out.is_dir() else []:
+                if f.is_file():
+                    z.write(f, f"analyses/{folder}/{f.relative_to(out).as_posix()}")
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{u["username"]}-music-analyzer-data.zip"'})
+
+
+@app.post("/account/delete")
+def account_delete():
+    """Delete the account and everything in it, after the password is typed again."""
+    u = _require_user()
+    if not accounts.check_login(u["username"], request.form.get("password")):
+        time.sleep(1)
+        return redirect(url_for("account_page", error="That password isn't right, so nothing was deleted."))
+    for job_id in accounts.delete_account(u["id"]):
+        if JOB_ID.match(job_id):
+            purge_job(DATA_DIR / job_id)
+    session.clear()
+    return redirect(url_for("index", deleted="account"))
+
+
+@app.get("/privacy")
+def privacy():
+    return render_template("privacy.html", ttl=JOB_TTL_HOURS, cache_hours=ma.CACHE_HOURS, version=ma.CODE_VERSION,
+                           ai_on=bool(LLM))
 
 
 _recent_uploads = {}
@@ -616,11 +800,12 @@ def analyze():
 
     ahead = job_queue.qsize()
     if tags_mode:  # finding music: none of the musician's options apply
-        write_status(d, state="queued", mode="tags", files=saved, playlist=playlist, songs=songs,
+        write_status(d, state="queued", mode="tags", files=saved, visitor=_browser_id(create=True), playlist=playlist, songs=songs,
                      description=description, created=time.time(),
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
         write_status(d, state="queued", mode="musician", files=saved, references=references,
+                     visitor=_browser_id(create=True),
                      memory=user_memory(current_user()),  # None unless signed in with the memory switched on
                      use_ai=bool(LLM and request.form.get("ai")),
                      melody=(request.form.get("melody") or "")[:2000],
@@ -660,8 +845,13 @@ def job(job_id):
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)
     teach = bool(u and u.get("memory_on") and owner == u["id"] and s.get("mode") != "tags" and not s.get("demo"))
+    meta = next((it for it in accounts.history(u["id"]) if it["job_id"] == job_id), None) \
+        if u and owner == u["id"] else None
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
                            version=ma.CODE_VERSION, saved=owner is not None, demos=demos.DEMOS, teach=teach,
+                           creator=is_creator(job_id, s), meta=meta, statuses=accounts.STATUSES,
+                           projects=accounts.projects(u["id"]) if meta else [],
+                           expires=(s.get("created") or s.get("updated") or time.time()) + JOB_TTL_HOURS * 3600,
                            fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"))
 
 

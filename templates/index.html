@@ -56,6 +56,13 @@
   body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"],
   body.tags-mode .demos[data-only="musician"] { display: none; }
   .demos { margin-top: 56px; }
+  .private-note { font-size: .84rem; color: var(--muted); margin: 12px 0 0; }
+  .notice { border-left: 3px solid var(--ink); background: var(--faint); padding: 10px 14px; margin-bottom: 16px; }
+  .privacy-strip { margin-top: 64px; border-top: 2px solid var(--ink); padding-top: 16px; }
+  .privacy-strip .row4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 24px; }
+  .privacy-strip .row4 div { padding: 10px 0; }
+  .privacy-strip b { display: block; margin-bottom: 4px; }
+  .privacy-strip span { color: var(--muted); font-size: .9rem; }
   .example { margin: 28px 0 0; max-width: 520px; }
   .features .pic { display: block; height: 100px; margin-bottom: 14px; color: var(--ink); }
   .features .pic svg { max-height: 100px; width: auto; max-width: 100%; }
@@ -120,6 +127,8 @@
 
   <div class="panel">
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    {% if request.args.deleted == 'account' %}<div class="notice">Your account and everything in it have been deleted.</div>
+    {% elif request.args.deleted %}<div class="notice">Deleted: that result and everything made from it are gone.</div>{% endif %}
     <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data"
           class="{{ 'tags' if mode == 'tags' }}">
       <div class="modes" role="radiogroup" aria-label="What do you want to do?">
@@ -246,6 +255,8 @@
         {% endif %}
         <button class="btn primary" id="go" type="submit">Analyse →</button>
       </div>
+      <p class="private-note">🔒 Private: only you can open the result{% if not user %} (on this browser){% endif %}, and your
+        audio is deleted as soon as it's analysed. <a href="{{ url_for('privacy') }}">How we handle your music</a></p>
       </div>
     </form>
   </div>
@@ -281,12 +292,22 @@
   <div><span class="pic" aria-hidden="true">{{ charts.example_roll(width=260, height=80)|safe }}</span><span class="n">04</span><b>Ideas &amp; exports</b>Things to try, songs that share your track's DNA, and MIDI,
     sheet music and the full report to take away.</div>
 </section>
-<p class="muted small" style="margin-top:40px;max-width:46em">You don't need an account. We delete your audio as soon as
-  we've analysed it. Without an account, results stay for {{ ttl|round|int }} hours and anyone with the link can open
-  them. {% if user %}You're signed in, so this goes into your private
-  <a href="{{ url_for('history') }}">history</a>.{% else %}<a href="{{ url_for('signup') }}">Create a free account</a>
-  to keep everything in a private history, with a profile that sums up your music.{% endif %}
-  The AI only ever sees the analysis numbers, never your audio.</p>
+<section class="privacy-strip" aria-labelledby="privacy-h">
+  <p class="eyebrow" id="privacy-h">Private by default · made for unreleased music</p>
+  <div class="row4">
+    <div><b>Audio gone at once</b><span>Deleted as soon as it's analysed, songs you compare with too.</span></div>
+    <div><b>Only you can open it</b><span>A result opens only {% if user %}in your account{% else %}in this browser{% endif %}.
+      Sharing by link is a switch you turn on, and “Delete now” is always there.</span></div>
+    <div><b>No titles leave the server</b><span>The optional AI sees the analysis numbers only: no audio, no file names.</span></div>
+    <div><b>No ads, no trackers</b><span>Nothing from other sites, nothing sold, nothing used for training.
+      <a href="{{ url_for('privacy') }}">Read how →</a></span></div>
+  </div>
+</section>
+<p class="muted small" style="margin-top:24px;max-width:46em">You don't need an account. Without one, results stay for
+  {{ ttl|round|int }} hours, on this browser only. {% if user %}You're signed in, so this goes into your private
+  <a href="{{ url_for('history') }}">library</a>, filed by project, status and your own labels.{% else %}<a href="{{ url_for('signup') }}">Create
+  a free account</a> (no email needed) to keep everything in a private library, filed by project, status and your own
+  labels, with a profile that sums up your music.{% endif %}</p>
 
 <script>
   const input = document.getElementById('tracks'), drop = document.getElementById('drop'),

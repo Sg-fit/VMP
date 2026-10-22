@@ -615,6 +615,7 @@ def run_tags(files, out_dir, song_text=None, playlist_url=None, progress=None, c
                         tags.setdefault(cat, {})[t] = max(tags.get(cat, {}).get(t, 0), NAME_WEIGHT * v)
                 froms += song.get("sources", [])
         songs.append({"name": _display(song, f.name), "weight": AUDIO_WEIGHT, "tags": tags, "from": froms,
+                      "cache_keys": r.get("cache_keys") or [],  # so deleting the result deletes its cached analysis
                       "artist": song.get("found_artist") or song.get("artist"), "audio": True,
                       "artist_id": song.get("artist_id"),
                       "measured": {"tempo_bpm": r.get("tempo_bpm"),

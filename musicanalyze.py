@@ -1883,6 +1883,8 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
                 pass  # caching is an optimisation only
 
     main_key = result["key_index"]
+    if cache_dir:  # so deleting the result can delete the cached analysis too (app.py, purge)
+        result["cache_keys"] = [_cache_key(path), _cache_key(path, True)]
     apply_context(result, context)
     finish_low_part(result)
     if light:
@@ -1920,10 +1922,14 @@ def analyze(path, melody_text=None, cache_dir=None, context=None, light=False):
     return result
 
 
-def prune_cache(cache_dir, max_age_days=30):
-    """Delete cache entries not used for a while (called occasionally)."""
+CACHE_HOURS = float(os.environ.get("MUSIC_CACHE_HOURS", 24))  # cached analyses (derived data, never audio)
+
+
+def prune_cache(cache_dir, max_age_days=None):
+    """Delete cache entries older than CACHE_HOURS (called after each job). The cache only saves re-analysing the same
+    file; keeping it no longer than a temporary result means nothing derived from unreleased music outlives it."""
     import time as _time
-    cutoff = _time.time() - max_age_days * 86400
+    cutoff = _time.time() - (max_age_days * 86400 if max_age_days is not None else CACHE_HOURS * 3600)
     for p in Path(cache_dir).glob("*.pkl"):
         try:
             if p.stat().st_mtime < cutoff:
@@ -2957,7 +2963,7 @@ def ai_summary(r):
     lines.append("Already suggested: " + " | ".join(i["idea"][:60] for i in r["ideas"][:8]) + ".")
     c = _norm_comparison(r.get("comparison"))
     for e in (c or {}).get("each", []):
-        lines.append(f"The musician admires {e['reference']}. Side by side, yours vs theirs: "
+        lines.append(f"The musician admires a reference song. Side by side, yours vs theirs: "
                      + "; ".join(f"{x['aspect']} {x['yours']} vs {x['theirs']}" for x in e["rows"]) + ".")
         if e["ideas"]:
             lines.append("Differences big enough to hear: " + " | ".join(i["idea"][:110] for i in e["ideas"]) + ".")

@@ -765,13 +765,15 @@ def web_checks(tmp, files):
     import zipfile
 
     import requests
+    browser = requests.Session()  # one visitor's browser: its results are tied to it
     print("\n== Web app end to end (simulated AI) ==")
     ai_port, port = free_port(), free_port()
     fake = fake_ai_server(ai_port)
     env = {**os.environ, "PORT": str(port), "DATA_DIR": str(Path(tmp) / "jobs"), "APP_PASSWORD": "selftest",
            "NVIDIA_API_KEY": "nvapi-selftest", "MUSIC_LLM_BASE_URL": f"http://127.0.0.1:{ai_port}/v1",
            "MUSIC_SEPARATION": "simple", "MUSIC_SELFTEST_CRASH_ONCE": str(Path(tmp) / "crash-flag"),
-           "MUSIC_TAGGER": "fake", "MUSIC_OFFLINE": "1"}
+           "MUSIC_TAGGER": "fake", "MUSIC_OFFLINE": "1",
+           "UPLOADS_PER_HOUR": "500"}  # the run makes more uploads from one address than a person would
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MUSIC_MODEL", "MUSIC_FALLBACK_MODELS"):
         env.pop(k, None)
     proc = subprocess.Popen([sys.executable, str(HERE / "app.py")], env=env, cwd=HERE,
@@ -780,22 +782,22 @@ def web_checks(tmp, files):
     try:
         for _ in range(60):
             try:
-                if requests.get(base + "/health", timeout=2).ok:
+                if browser.get(base + "/health", timeout=2).ok:
                     break
             except requests.ConnectionError:
                 time.sleep(1)
-        h = requests.get(base + "/health", timeout=5)
+        h = browser.get(base + "/health", timeout=5)
         check("web", "health page answers without a password", h.ok and "version" in h.json(), h.text[:80])
-        check("web", "analysing needs no account or password", requests.get(base + "/", timeout=5).status_code == 200)
+        check("web", "analysing needs no account or password", browser.get(base + "/", timeout=5).status_code == 200)
 
         def run_job(paths, melody="", extra=None):
             up = [("tracks", (Path(p).name, open(p, "rb"))) for p in paths]
-            r = requests.post(base + "/analyze", files=up, data={"ai": "1", "melody": melody, **(extra or {})},
+            r = browser.post(base + "/analyze", files=up, data={"ai": "1", "melody": melody, **(extra or {})},
                               auth=auth, allow_redirects=False, timeout=60)
             job = r.headers["Location"].rsplit("/", 1)[-1]
             t0, first = time.time(), None
             while time.time() - t0 < 600:
-                s = requests.get(f"{base}/jobs/{job}/status", auth=auth, timeout=10).json()
+                s = browser.get(f"{base}/jobs/{job}/status", auth=auth, timeout=10).json()
                 if s["state"] == "done" and first is None:
                     first = time.time() - t0
                 if s["state"] == "error" or (s["state"] == "done" and not s["ai_pending"]):
@@ -804,16 +806,17 @@ def web_checks(tmp, files):
             return job, {"state": "timeout"}, first, time.time() - t0
 
         job, s, first, total = run_job([files["pop4"], files["corrupt"]], "pop: G A B D")
-        check("web", "upload → analysis → AI ideas completes", s["state"] == "done", f"{s['state']} after {total:.0f}s")
+        check("web", "upload → analysis → AI ideas completes", s["state"] == "done",
+              f"{s['state']} after {total:.0f}s" + (f": {s.get('message', '')[:300]}" if s["state"] != "done" else ""))
         check("web", "a worker crash (segfault-style) is retried automatically",
               (Path(tmp) / "crash-flag").exists() and s["state"] == "done", "the first job crashed once and still finished")
         check("web", "results shown before the AI finished", first is not None and first < total,
               f"results {first:.0f}s, AI {total:.0f}s" if first else "")
-        page = requests.get(f"{base}/jobs/{job}", auth=auth, timeout=10).text
+        page = browser.get(f"{base}/jobs/{job}", auth=auth, timeout=10).text
         check("web", "report contains the AI ideas (none pending)", "idea 0" in page and "still writing" not in page)
         check("web", "typed melody was analysed for the matching track", "Your melody" in page)
         check("web", "corrupt file reported on the page", "unreadable" in page.lower())
-        z = requests.get(f"{base}/jobs/{job}/download.zip", auth=auth, timeout=30)
+        z = browser.get(f"{base}/jobs/{job}/download.zip", auth=auth, timeout=30)
         names = zipfile.ZipFile(__import__("io").BytesIO(z.content)).namelist() if z.ok else []
         check("web", "zip has report, data and MIDI (incl. AI progression)",
               {"music_report.md", "music_results.json"} <= set(names) and any("_ai_" in n for n in names),
@@ -824,7 +827,7 @@ def web_checks(tmp, files):
               any(n.endswith("_bass_from_sheet.mid") for n in names), ", ".join(n for n in names if "sheet" in n))
         sheet_link = re.search(r'href="([^"]+/files/sheets/[^"]+\.html)"', page)
         check("web", "the engraved sheet opens from the report",
-              bool(sheet_link) and "<svg" in requests.get(base + sheet_link.group(1), auth=auth, timeout=10).text)
+              bool(sheet_link) and "<svg" in browser.get(base + sheet_link.group(1), auth=auth, timeout=10).text)
         res = json.loads(zipfile.ZipFile(__import__("io").BytesIO(z.content)).read("music_results.json"))
         check("web", "results carry the analyzer version", all("analyzer_version" in r for r in res if "error" not in r))
 
@@ -835,7 +838,7 @@ def web_checks(tmp, files):
         # Crash recovery: kill the worker mid-job; that job fails cleanly, the next one works.
         import psutil
         up = [("tracks", (Path(files["modulate"]).name, open(files["modulate"], "rb")))]
-        r = requests.post(base + "/analyze", files=up, auth=auth, allow_redirects=False, timeout=60)
+        r = browser.post(base + "/analyze", files=up, auth=auth, allow_redirects=False, timeout=60)
         job3 = r.headers["Location"].rsplit("/", 1)[-1]
         time.sleep(3)
         for p in psutil.Process(proc.pid).children(recursive=True):
@@ -843,48 +846,63 @@ def web_checks(tmp, files):
                 p.kill()
         t0 = time.time()
         while time.time() - t0 < 120:
-            s3 = requests.get(f"{base}/jobs/{job3}/status", auth=auth, timeout=10).json()
+            s3 = browser.get(f"{base}/jobs/{job3}/status", auth=auth, timeout=10).json()
             if s3["state"] in ("error", "done"):
                 break
             time.sleep(1)
         check("web", "a killed worker is replaced and the job finishes", s3["state"] == "done", s3.get("message", ""))
+        jgone, sg, _, _ = run_job([files["short_m4a"]])
+        keys = [k for r in browser.get(f"{base}/jobs/{jgone}/files/music_results.json", timeout=10).json()
+                for k in r.get("cache_keys") or []]
+        cache_dir = Path(tmp) / "jobs" / "cache"
+        had = [k for k in keys if (cache_dir / f"{k}.pkl").exists()]
+        stranger = requests.post(f"{base}/jobs/{jgone}/forget", allow_redirects=False, timeout=10)
+        browser.post(f"{base}/jobs/{jgone}/forget", allow_redirects=False, timeout=10)
+        check("web", "“Delete now” removes the result and the cached analysis of its audio (and only its owner can)",
+              stranger.status_code == 404 and had and not (Path(tmp) / "jobs" / jgone).exists()
+              and not any((cache_dir / f"{k}.pkl").exists() for k in keys), f"{len(had)} cache entries")
+        broken = Path(tmp) / "jobs" / ("ab" * 16)
+        (broken / "output").mkdir(parents=True)
+        (broken / "status.json").write_text("{not json", encoding="utf-8")
+        check("web", "a result whose owner can't be checked (unreadable status) opens for no one",
+              requests.get(f"{base}/jobs/{broken.name}", auth=auth, timeout=10).status_code == 404)
         job4, s4, _, _ = run_job([files["short_m4a"]])
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
-        account_checks(base, job4)
+        account_checks(base, job4, browser)
         memory_web_checks(base, files)
-        home = requests.get(base + "/", timeout=10).text
+        home = browser.get(base + "/", timeout=10).text
         check("web", "the upload form offers single instruments, grouped (cello, synth bass, drum machine…)",
               all(x in home for x in ('value="cello"', 'value="synth_bass"', 'value="drum_machine"', "Wind &amp; brass")))
         job5, s5, _, _ = run_job([files["guitar_blues"]], extra={"instruments": ["classical_guitar", "voice"],
                                                                  "genre": "blues"})
-        r5 = requests.get(f"{base}/jobs/{job5}/files/music_results.json", timeout=10).json()[0] if s5["state"] == "done" else {}
-        sheet = requests.get(f"{base}/jobs/{job5}/files/sheets/solo_guitar_blues_A_140bpm_low_part.musicxml", timeout=10)
+        r5 = browser.get(f"{base}/jobs/{job5}/files/music_results.json", timeout=10).json()[0] if s5["state"] == "done" else {}
+        sheet = browser.get(f"{base}/jobs/{job5}/files/sheets/solo_guitar_blues_A_140bpm_low_part.musicxml", timeout=10)
         check("web", "the upload form's instruments and genre reach the analysis",
               (r5.get("context") or {}).get("genre") == "Blues"
               and r5["context"]["instruments"] == ["classical guitar", "lead vocals"]
               and r5["context"]["keys"] == ["guitar", "voice"]
               and "<sign>G</sign>" in sheet.text, str(r5.get("context")))
         check("web", "a musician's analysis doesn't run the tag search",
-              requests.get(f"{base}/jobs/{job5}/files/tags.json", timeout=10).status_code == 404)
+              browser.get(f"{base}/jobs/{job5}/files/tags.json", timeout=10).status_code == 404)
         job6, s6, _, _ = run_job([files["guitar_blues"]], extra={"mode": "tags", "songs": "Portishead - Roads"})
-        t6 = requests.get(f"{base}/jobs/{job6}/files/tags.json", timeout=10)
+        t6 = browser.get(f"{base}/jobs/{job6}/files/tags.json", timeout=10)
         check("web", "a tag job runs from the form and skips the musician's work (no report, MIDI or AI)",
               s6["state"] == "done" and t6.ok and "12-bar blues" in t6.text
-              and requests.get(f"{base}/jobs/{job6}/files/music_report.md", timeout=10).status_code == 404
-              and "Your tags" in requests.get(f"{base}/jobs/{job6}", timeout=10).text, s6.get("state"))
+              and browser.get(f"{base}/jobs/{job6}/files/music_report.md", timeout=10).status_code == 404
+              and "Your tags" in browser.get(f"{base}/jobs/{job6}", timeout=10).text, s6.get("state"))
         too_many = [("tracks", (Path(files["pop4"]).name, open(files["pop4"], "rb")))] + [
             ("reference", (f"ref{i}.wav", open(files["waltz3"], "rb"))) for i in range(4)]
-        r_many = requests.post(base + "/analyze", files=too_many, allow_redirects=False, timeout=60)
+        r_many = browser.post(base + "/analyze", files=too_many, allow_redirects=False, timeout=60)
         check("web", "more than three songs you admire are turned away with a clear message",
               r_many.status_code == 400 and "Up to 3 songs you admire" in r_many.text, f"HTTP {r_many.status_code}")
         up = [("tracks", (Path(files["pop4"]).name, open(files["pop4"], "rb"))),
               ("reference", ("my_reference.wav", open(files["waltz3"], "rb"))),
               ("reference", ("second_favourite.wav", open(files["guitar_blues"], "rb")))]
-        job8 = requests.post(base + "/analyze", files=up, allow_redirects=False, timeout=60).headers["Location"].rsplit("/", 1)[-1]
+        job8 = browser.post(base + "/analyze", files=up, allow_redirects=False, timeout=60).headers["Location"].rsplit("/", 1)[-1]
         t0 = time.time()
-        while time.time() - t0 < 300 and requests.get(f"{base}/jobs/{job8}/status", timeout=10).json()["state"] not in ("done", "error"):
+        while time.time() - t0 < 300 and browser.get(f"{base}/jobs/{job8}/status", timeout=10).json()["state"] not in ("done", "error"):
             time.sleep(1)
-        page8 = requests.get(f"{base}/jobs/{job8}", timeout=10).text
+        page8 = browser.get(f"{base}/jobs/{job8}", timeout=10).text
         for _ in range(20):  # the status says "done" a moment before the worker deletes the uploads
             if not (Path(tmp) / "jobs" / job8 / "reference").exists():
                 break
@@ -892,18 +910,18 @@ def web_checks(tmp, files):
         check("web", "two songs you admire uploaded with the form are compared, and deleted with the audio afterwards",
               "Next to the songs you admire" in page8 and "my_reference.wav" in page8 and "second_favourite.wav" in page8
               and not (Path(tmp) / "jobs" / job8 / "reference").exists())
-        demo1 = requests.get(base + "/demo/blues", allow_redirects=False, timeout=60).headers.get("Location", "")
+        demo1 = browser.get(base + "/demo/blues", allow_redirects=False, timeout=60).headers.get("Location", "")
         did = demo1.rsplit("/", 1)[-1]
         t0 = time.time()
-        while time.time() - t0 < 300 and requests.get(f"{base}/jobs/{did}/status", timeout=10).json()["state"] not in ("done", "error"):
+        while time.time() - t0 < 300 and browser.get(f"{base}/jobs/{did}/status", timeout=10).json()["state"] not in ("done", "error"):
             time.sleep(1)
-        dpage = requests.get(f"{base}/jobs/{did}", timeout=10).text
-        again = requests.get(base + "/demo/blues", allow_redirects=False, timeout=30).headers.get("Location", "")
+        dpage = browser.get(f"{base}/jobs/{did}", timeout=10).text
+        again = browser.get(base + "/demo/blues", allow_redirects=False, timeout=30).headers.get("Location", "")
         check("web", "a demo builds once from generated audio, then opens straight away for everyone",
               "This is a demo report" in dpage and "12-bar" in dpage and "Save to history" not in dpage
               and again.endswith(did), f"{did[:8]} / {again.rsplit('/', 1)[-1][:8]}")
-        check("web", "an unknown demo is a 404", requests.get(base + "/demo/nope", timeout=10).status_code == 404)
-        r7 = requests.post(base + "/analyze", data={"mode": "tags", "songs": "Massive Attack - Teardrop"},
+        check("web", "an unknown demo is a 404", browser.get(base + "/demo/nope", timeout=10).status_code == 404)
+        r7 = browser.post(base + "/analyze", data={"mode": "tags", "songs": "Massive Attack - Teardrop"},
                            allow_redirects=False, timeout=30)
         check("web", "a tag job needs no upload when songs are named", r7.status_code == 302, f"HTTP {r7.status_code}")
     finally:
@@ -918,15 +936,28 @@ def web_checks(tmp, files):
         fake.shutdown()
 
 
-def account_checks(base, job):
+def account_checks(base, job, browser):
     """Accounts: history, profile, and saved analyses private to their owner. `job` is a finished
-    anonymous analysis."""
+    anonymous analysis made by `browser`."""
     import requests
     anon = requests.Session()
-    check("web", "an anonymous result opens for anyone with the link", anon.get(f"{base}/jobs/{job}", timeout=10).ok)
-    res = anon.get(f"{base}/jobs/{job}/files/music_results.json", timeout=10).json()[0]
+    mine, theirs = browser.get(f"{base}/jobs/{job}", timeout=10), anon.get(f"{base}/jobs/{job}", timeout=10)
+    check("web", "a temporary result opens only in the browser that made it (anyone else: 404)",
+          mine.ok and theirs.status_code == 404 and "Only this browser" in mine.text, f"{mine.status_code}/{theirs.status_code}")
+    check("web", "result pages are private to the web: no indexing, no shared caching, no referrer",
+          "noindex" in mine.headers.get("X-Robots-Tag", "") and "no-store" in mine.headers.get("Cache-Control", "")
+          and mine.headers.get("Referrer-Policy") == "no-referrer" and mine.headers.get("X-Frame-Options") == "DENY")
+    anon.post(f"{base}/jobs/{job}/share", data={"on": "1"}, timeout=10)  # a stranger can't switch sharing on
+    still_private = anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404
+    browser.post(f"{base}/jobs/{job}/share", data={"on": "1"}, timeout=10)
+    shared = anon.get(f"{base}/jobs/{job}", timeout=10).ok
+    browser.post(f"{base}/jobs/{job}/share", data={"on": "0"}, timeout=10)
+    check("web", "sharing by link is the owner's switch: on, the link works for anyone; off, it doesn't again",
+          still_private and shared and anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404)
+    res = browser.get(f"{base}/jobs/{job}/files/music_results.json", timeout=10).json()[0]
     key, tempo = res["key"], (f"{int(res['tempo_bpm'] + 0.5)} BPM" if res.get("tempo_bpm") else res["duration"])
     alice, bob = requests.Session(), requests.Session()
+    alice.cookies.update(browser.cookies)  # the same browser signs up: its own results come along
     a = alice.post(base + "/signup", data={"username": "alice", "password": "selftest-pw", "password2": "selftest-pw",
                                            "next": "/"}, allow_redirects=False, timeout=10)
     dup = bob.post(base + "/signup", data={"username": "Alice", "password": "another-pw", "password2": "another-pw"},
@@ -945,10 +976,55 @@ def account_checks(base, job):
           and "short_phone_clip" in week)
     check("web", "the profile shows the music as pictures (keys on the wheel, tempos, the mood map)",
           'class="pics"' in prof and "Your keys on the Camelot wheel" in prof)
+    alice.post(f"{base}/jobs/{job}/organise", data={"project": "  EP   2027 ", "status": "mixing", "labels": "Demo, chill, demo",
+                                                     "notes": "needs a bridge", "next": "/history"}, timeout=10)
+    alice.post(f"{base}/jobs/{job}/star", data={"on": "1", "next": "/history"}, timeout=10)
+    lib = alice.get(base + "/history", timeout=10).text
+    in_ep = alice.get(base + "/history", params={"project": "EP 2027"}, timeout=10).text
+    elsewhere = alice.get(base + "/history", params={"status": "finished"}, timeout=10).text
+    found = alice.get(base + "/history", params={"q": "bridge"}, timeout=10).text
+    check("web", "the library files an analysis: project, status, labels (tidied), notes, a star",
+          all(x in lib for x in ("EP 2027", ">mixing</a>", ">demo</a>", ">chill</a>", "needs a bridge", "★"))
+          and lib.count(">demo</a>") == 1, " / ".join(x for x in ("EP 2027", ">mixing</a>", ">demo</a>", ">chill</a>",
+                                                                 "needs a bridge", "★") if x not in lib))
+    check("web", "the library filters by project and status, and search finds notes",
+          "short_phone_clip" in in_ep and "short_phone_clip" not in elsewhere.split('class="tl"')[-1]
+          and "short_phone_clip" in found)
+    bob.post(f"{base}/jobs/{job}/organise", data={"project": "stolen"}, timeout=10)
+    check("web", "only the owner can file an analysis", "stolen" not in alice.get(base + "/history", timeout=10).text)
+    import io
+    import zipfile
+    z = alice.get(base + "/account/export", timeout=30)
+    names = zipfile.ZipFile(io.BytesIO(z.content)).namelist() if z.ok else []
+    data = json.loads(zipfile.ZipFile(io.BytesIO(z.content)).read("account.json")) if "account.json" in names else {}
+    check("web", "you can download everything: account data and each saved analysis's files, in one zip",
+          z.ok and any(n.endswith("music_report.md") for n in names) and data.get("username") == "alice"
+          and data["saved"][0]["project"] == "EP 2027", f"{len(names)} files")
+    check("web", "the privacy page explains what's kept, for how long, and what leaves the server",
+          all(x in anon.get(base + "/privacy", timeout=10).text for x in ("Audio deleted at once", "What leaves our server",
+                                                                          "Delete now")))
     check("web", "a saved analysis is private: others get 404",
           anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404 and
           bob.get(f"{base}/jobs/{job}/download.zip", timeout=10).status_code == 404 and
           alice.get(f"{base}/jobs/{job}", timeout=10).ok)
+    # deleting an account: a wrong password deletes nothing; the right one deletes the account and its analyses
+    dave = requests.Session()
+    dave.cookies.update(browser.cookies)
+    dave.post(base + "/signup", data={"username": "dave", "password": "selftest-pw4", "password2": "selftest-pw4"}, timeout=10)
+    up = [("tracks", ("dave_take.wav", open(Path(__file__).resolve().parent / "selftest.py", "rb")))]
+    dave_job = dave.post(base + "/analyze", files=up, data={"genre": ""}, allow_redirects=False, timeout=30
+                         ).headers.get("Location", "").rsplit("/", 1)[-1]
+    t0 = time.time()
+    while time.time() - t0 < 120 and dave.get(f"{base}/jobs/{dave_job}/status", timeout=10).json().get("state") in ("queued", "running"):
+        time.sleep(1)
+    kept = dave.post(base + "/account/delete", data={"password": "wrong"}, allow_redirects=False, timeout=10)
+    alive = dave.get(base + "/history", allow_redirects=False, timeout=10).status_code == 200
+    gone = dave.post(base + "/account/delete", data={"password": "selftest-pw4"}, allow_redirects=False, timeout=30)
+    relog = requests.post(base + "/login", data={"username": "dave", "password": "selftest-pw4"}, allow_redirects=False,
+                          timeout=10)
+    check("web", "deleting an account needs the password, then removes the account and its analyses",
+          alive and "error" in kept.headers.get("Location", "") and gone.status_code == 302 and relog.status_code == 401
+          and dave.get(f"{base}/jobs/{dave_job}", timeout=10).status_code == 404, dave_job[:8])
     check("web", "history and profile need a sign-in",
           anon.get(base + "/history", allow_redirects=False, timeout=10).status_code == 302)
     wrong = requests.post(base + "/login", data={"username": "alice", "password": "nope"}, allow_redirects=False, timeout=10)
@@ -1089,9 +1165,12 @@ def live_checks(base, tmp):
     pw = os.environ.get("APP_PASSWORD", "")
     headers = {"Authorization": "Basic " + base64.b64encode(f"selftest:{pw}".encode()).decode()} if pw else {}
 
+    import http.cookiejar
+    jar = http.cookiejar.CookieJar()  # like a browser: results open only for the browser that started them
+
     def get(path):
         req = urllib.request.Request(base + path, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar)).open(req, timeout=30) as r:
             return r.read().decode("utf-8", "replace")
     try:
         h = json.loads(get("/health"))
@@ -1111,7 +1190,7 @@ def live_checks(base, tmp):
     req = urllib.request.Request(base + "/analyze", data=body, method="POST",
                                  headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"})
     try:
-        urllib.request.build_opener(NoRedirect).open(req, timeout=60)
+        urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect).open(req, timeout=60)
         check("live", "upload accepted", False, "no redirect to a job page")
         return
     except urllib.error.HTTPError as e:
@@ -1146,7 +1225,7 @@ def live_checks(base, tmp):
     req = urllib.request.Request(base + "/analyze", data=body, method="POST",
                                  headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"})
     try:
-        urllib.request.build_opener(NoRedirect).open(req, timeout=60)
+        urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect).open(req, timeout=60)
         check("live", "tag job accepted", False, "no redirect to a job page")
         return
     except urllib.error.HTTPError as e:

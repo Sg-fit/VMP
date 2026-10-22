@@ -183,7 +183,5 @@ def ai_profile(mem):
         lines.append("Kinds of ideas that didn't help them: " + ", ".join(mem["disliked_areas"][:5]) + ".")
     if mem.get("goals"):
         lines.append(f"Their goals, in their words: {mem['goals']}")
-    if mem.get("references"):
-        lines.append("Songs they admire: " + ", ".join(mem["references"][:5]) + ".")
     lines.append("Push them somewhere new relative to these habits rather than repeating what they already do.")
     return "\n".join(lines)

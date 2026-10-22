@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Your data · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .data { max-width: 640px; }
+  .data section { border-top: 2px solid var(--ink); padding: 18px 0 26px; }
+  .data h2 { font-size: 1.2rem; margin: 0 0 6px; }
+  .data input[type=password] { width: min(100%, 320px); font: inherit; padding: 10px 12px; border: 1px solid var(--line);
+                               border-radius: 0; background: var(--bg); color: var(--ink); margin: 8px 8px 8px 0; }
+  .danger { background: var(--err); border-color: var(--err); color: #fff; }
+  .danger:hover { background: var(--ink); border-color: var(--ink); }
+</style>
+{% endblock %}
+{% block content %}
+<p class="eyebrow">Your account</p>
+<h1>Your data</h1>
+<p class="lede">It's your music. Take everything with you, or remove it all. Neither needs an email or a reason.</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="data">
+  <section>
+    <h2>Download everything</h2>
+    <p class="muted">One zip: your account details, every saved analysis ({{ saved }}) with its report, data, MIDI and sheet
+      music, how you've filed them (projects, labels, notes), and what your memory holds (ratings, corrections, goals).</p>
+    <a class="btn secondary" href="{{ url_for('account_export') }}">Download my data (.zip)</a>
+  </section>
+  <section>
+    <h2>Delete my account</h2>
+    <p class="muted">Deletes your account, every saved analysis and its files, the cached analyses made from them, and
+      your memory, straight away. It can't be undone. Download your data first if you want a copy.</p>
+    <form method="post" action="{{ url_for('account_delete') }}"
+          onsubmit="return confirm('Delete your account and everything in it? This can\'t be undone.')">
+      <label class="small" for="pw">Type your password to confirm</label><br>
+      <input type="password" id="pw" name="password" autocomplete="current-password" required>
+      <button class="btn danger" type="submit">Delete my account</button>
+    </form>
+  </section>
+  <p class="small"><a href="{{ url_for('privacy') }}">How we handle your music →</a></p>
+</div>
+{% endblock %}

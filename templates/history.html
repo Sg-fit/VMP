@@ -53,7 +53,8 @@
   .tag { font-size: .7rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 2px 7px;
          border: 1px solid var(--line); color: var(--muted); }
   .tag.live { border-color: var(--accent); color: var(--ink); }
-  .actions { display: flex; gap: 6px; align-items: center; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: center; max-width: 440px; }
+  .actions details[open] { order: 10; flex-basis: 100%; }
   .actions form { margin: 0; }
   .actions button { font: inherit; font-size: .82rem; background: none; border: 1px solid var(--line); color: var(--muted);
                     padding: 5px 10px; cursor: pointer; border-radius: 0; }
@@ -65,23 +66,65 @@
   details.rename input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
                          border-radius: 0; width: min(100%, 360px); margin: 8px 6px 0 0; }
   .empty { margin-top: 32px; }
+  .projects { display: flex; gap: 8px; overflow-x: auto; margin: 28px 0 0; padding-bottom: 4px; }
+  .proj { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--line);
+          text-decoration: none; color: var(--ink); min-width: 140px; }
+  .proj span { font-size: .78rem; color: var(--muted); }
+  .proj.on { border-color: var(--ink); box-shadow: inset 0 -3px 0 var(--accent); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0 0; }
+  .filters input[type=search], .filters select { font: inherit; font-size: .9rem; padding: 8px 10px; border: 1px solid var(--line);
+                                                 border-radius: 0; background: var(--bg); color: var(--ink); }
+  .filters input[type=search] { flex: 1 1 240px; }
+  .filters .btn { padding: 8px 14px; }
+  .star { color: var(--accent); }
+  a.tag { text-decoration: none; }
+  a.tag:hover { border-color: var(--ink); color: var(--ink); }
+  .tag.st-finished, .tag.st-released { border-color: var(--ink); color: var(--ink); }
+  form.org { display: grid; gap: 8px; margin-top: 8px; max-width: 420px; }
+  form.org label { display: grid; gap: 3px; font-size: .78rem; color: var(--muted); }
+  form.org input, form.org select, form.org textarea { font: inherit; font-size: .9rem; padding: 6px 8px; border: 1px solid var(--line);
+                                                       border-radius: 0; background: var(--bg); color: var(--ink); width: 100%; margin: 0; }
+  form.org button { justify-self: start; }
   @media (max-width: 600px) { .tl .entry { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 {% block content %}
 <p class="eyebrow">Saved analyses</p>
 <h1>History</h1>
-<p class="lede">Your saved work over time: a summary for the period you pick, what changed, the trends, and every
-  analysis on a timeline. Open one to read its report again.</p>
+<p class="lede">Your library: every saved analysis, filed by project, where it's at, and your own labels and notes,
+  with a summary, what changed and the trends for whatever you pick. Only you can see it.</p>
 <a class="btn primary" href="{{ url_for('index') }}">New analysis →</a>
 <a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
 
 {% if items %}
+{% if projects %}
+<div class="projects" aria-label="Projects">
+  <a class="proj{{ ' on' if not f.project }}" href="{{ hurl(project=None) }}"><b>All projects</b><span>{{ items|length }} saved</span></a>
+  {% for name, n, last in projects %}
+    <a class="proj{{ ' on' if f.project == name }}" href="{{ hurl(project=name) }}"><b>{{ name }}</b><span>{{ n }} saved · {{ last|datetime(date_only=True) }}</span></a>
+  {% endfor %}
+</div>
+{% endif %}
+<form class="filters" method="get" action="{{ url_for('history') }}" role="search">
+  <input type="hidden" name="range" value="{{ v.frame }}">
+  <input type="search" name="q" value="{{ f.q }}" placeholder="Search titles, tracks, notes, labels, keys…" aria-label="Search">
+  <select name="project" aria-label="Project"><option value="">Any project</option>
+    {% for name, n, last in projects %}<option {{ 'selected' if f.project == name }}>{{ name }}</option>{% endfor %}</select>
+  <select name="status" aria-label="Status"><option value="">Any status</option>
+    {% for st in statuses %}<option {{ 'selected' if f.status == st }}>{{ st }}</option>{% endfor %}</select>
+  {% if labels %}<select name="label" aria-label="Label"><option value="">Any label</option>
+    {% for lab, n in labels %}<option {{ 'selected' if f.label == lab }}>{{ lab }}</option>{% endfor %}</select>{% endif %}
+  <label class="small"><input type="checkbox" name="starred" value="1" {{ 'checked' if f.starred }}> ★ starred</label>
+  <button class="btn secondary" type="submit">Filter</button>
+  {% if filtered %}<a class="small" href="{{ url_for('history', range=v.frame) }}">Clear</a>{% endif %}
+</form>
 <nav class="frames" aria-label="Time frame">
   {% for key, label in v.frames.items() %}
-    <a href="{{ url_for('history', range=key) }}" {% if key == v.frame %}aria-current="page"{% endif %}>{{ label }}</a>
+    <a href="{{ hurl(range=key) }}" {% if key == v.frame %}aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>
+{% if filtered %}<p class="muted small" style="margin:8px 0 0">Showing {{ v['items']|length }} of {{ items|length }} saved
+  analyses{% if f.project %} in <b>{{ f.project }}</b>{% endif %}. The summary and trends below are for these only.</p>{% endif %}
 
 {% if v['items'] %}
 <div class="tiles">
@@ -130,12 +173,34 @@
   <li class="entry{{ ' tags' if it.summary and it.summary.kind == 'tags' }}">
     <div>
       <a class="title" href="{{ url_for('job', job_id=it.job_id) }}">{{ it.title }}</a>
-      <div class="when">{{ it.created|datetime }}
+      <div class="when">{% if it.starred %}<span class="star" title="Starred">★</span> {% endif %}{{ it.created|datetime }}
+        {% if it.project %} · <a class="tag" href="{{ hurl(project=it.project) }}">{{ it.project }}</a>{% endif %}
+        {% if it.status %} · <a class="tag st-{{ it.status }}" href="{{ hurl(status=it.status) }}">{{ it.status }}</a>{% endif %}
+        {% for lab in it.labels %} <a class="tag lab" href="{{ hurl(label=lab) }}">{{ lab }}</a>{% endfor %}
         {% if it.summary and it.summary.kind == 'tags' %} · <span class="tag">tag list</span>{% endif %}
         {% if it.state in ('queued', 'running') %} · <span class="tag live">analysing</span>
         {% elif it.state == 'error' %} · <span class="tag">failed</span>{% endif %}</div>
     </div>
     <div class="actions">
+      <form method="post" action="{{ url_for('job_star', job_id=it.job_id) }}">
+        <input type="hidden" name="on" value="{{ '0' if it.starred else '1' }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <button type="submit" aria-pressed="{{ 'true' if it.starred else 'false' }}"
+                title="{{ 'Unstar' if it.starred else 'Star' }}">{{ '★' if it.starred else '☆' }}</button>
+      </form>
+      <details class="rename"><summary>Organise</summary>
+        <form class="org" method="post" action="{{ url_for('job_organise', job_id=it.job_id) }}">
+          <input type="hidden" name="next" value="{{ request.full_path }}">
+          <label>Project <input name="project" value="{{ it.project }}" maxlength="60" list="project-names"
+                                placeholder="e.g. EP 2027"></label>
+          <label>Status <select name="status"><option value="">—</option>
+            {% for st in statuses %}<option {{ 'selected' if it.status == st }}>{{ st }}</option>{% endfor %}</select></label>
+          <label>Labels <input name="labels" value="{{ it.labels|join(', ') }}" maxlength="240"
+                               placeholder="comma-separated: demo, chill, needs vocals"></label>
+          <label>Notes <textarea name="notes" rows="3" maxlength="2000" placeholder="Only you can see these">{{ it.notes }}</textarea></label>
+          <button type="submit">Save</button>
+        </form>
+      </details>
       <details class="rename"><summary>Rename</summary>
         <form method="post" action="{{ url_for('job_rename', job_id=it.job_id) }}">
           <input name="title" value="{{ it.title }}" maxlength="200" aria-label="New name"><button type="submit">Save</button>
@@ -170,8 +235,10 @@
   {% endfor %}
   {% endfor %}
 </ol>
+<datalist id="project-names">{% for name, n, last in projects %}<option value="{{ name }}">{% endfor %}</datalist>
 {% else %}
-<p class="empty muted">Nothing saved in the last {{ v.frame_label }}. <a href="{{ url_for('history', range='all') }}">See all
+<p class="empty muted">{% if filtered %}Nothing matches these filters{% if v.frame != 'all' %} in the last {{ v.frame_label }}{% endif %}.
+  <a href="{{ url_for('history') }}">Show everything</a>{% else %}Nothing saved in the last {{ v.frame_label }}.{% endif %} <a href="{{ url_for('history', range='all') }}">See all
   time</a>.</p>
 {% endif %}
 {% else %}

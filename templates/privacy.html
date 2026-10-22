@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Privacy · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .pv { max-width: 760px; }
+  .promise { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; border-top: 2px solid var(--ink);
+             margin: 8px 0 40px; }
+  .promise div { padding: 16px 18px 18px 0; border-bottom: 1px solid var(--line); }
+  .promise b { display: block; font-size: 1.05rem; margin-bottom: 4px; }
+  .promise span { color: var(--muted); font-size: .92rem; }
+  .pv h2 { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; display: flex; align-items: center;
+           gap: 8px; margin: 36px 0 10px; }
+  .pv h2::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+  .pv table { width: 100%; font-size: .92rem; }
+  .pv li { margin: 6px 0; }
+  @media (max-width: 600px) { .promise { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+{% block content %}
+<p class="eyebrow">Privacy</p>
+<h1>Your unreleased music stays yours.</h1>
+<p class="lede">Most of what people bring here hasn't been released. So the app is built private by default: your audio
+  is gone the moment it's analysed, your results are yours alone, and nothing that could identify your songs leaves
+  our server.</p>
+
+<div class="promise pv">
+  <div><b>Audio deleted at once</b><span>Your recording, and any song you compare it with, is deleted as soon as it has
+    been analysed. We never keep, play or share it.</span></div>
+  <div><b>Results only you can open</b><span>A result opens only in the browser that made it, or in your account once
+    saved. Sharing by link is a switch you turn on.</span></div>
+  <div><b>No names leave the server</b><span>The optional AI ideas get the analysis numbers (key, chords, tempo,
+    sections), never your audio, file names or titles.</span></div>
+  <div><b>No ads, no trackers</b><span>No analytics, no third-party scripts or fonts, nothing sold or shared. Your music
+    is never used to train anything.</span></div>
+</div>
+
+<div class="pv">
+  <h2>What we keep, and for how long</h2>
+  <table>
+    <tr><th>What</th><th>Kept</th><th>Who can see it</th></tr>
+    <tr><td>Your audio files (and songs you compare with)</td><td>Only while they're being analysed, then deleted</td><td>No one</td></tr>
+    <tr><td>A result you haven't saved</td><td>{{ ttl|round|int }} hours, or until you press “Delete now”</td>
+        <td>Only the browser that made it (or anyone with the link, if you turn sharing on)</td></tr>
+    <tr><td>A result saved to your library</td><td>Until you delete it, or your account</td><td>Only you (or anyone with the link, if you share it)</td></tr>
+    <tr><td>Your library's projects, labels and notes</td><td>Until you change or delete them</td><td>Only you</td></tr>
+    <tr><td>The analysis cache (numbers worked out from your audio, so re-analysing the same file is instant)</td>
+        <td>Up to {{ cache_hours|round|int }} hours, and deleted with the result</td><td>No one: it's never shown</td></tr>
+    <tr><td>Your memory (ratings, corrections, goals)</td><td>Off unless you switch it on; until you clear it</td><td>Only you</td></tr>
+    <tr><td>Your account</td><td>Until you delete it: a username and a hashed password, no email</td><td>Only you</td></tr>
+  </table>
+
+  <h2>What leaves our server</h2>
+  <ul>
+    <li><b>AI ideas</b> ({{ 'switched on here' if ai_on else 'switched off on this server' }}; you can untick them for any upload):
+      the analysis numbers go to the AI provider to write suggestions. No audio, no file names, no song titles, no
+      account details.</li>
+    <li><b>“Find music like this”</b>, only when you use it: the song names and playlist links you type are looked up on
+      MusicBrainz, ListenBrainz and Last.fm, and a public Spotify or YouTube playlist is read for its song names.
+      Songs you upload there are analysed here, like everything else.</li>
+    <li><b>Nothing else.</b> The style and instrument models run on our own server. Pages load nothing from other
+      sites.</li>
+  </ul>
+
+  <h2>How the site protects it</h2>
+  <ul>
+    <li>Result pages, your library and your profile tell search engines not to index them and browsers not to keep
+      copies in shared caches.</li>
+    <li>When you follow a link out of a result (a search link, say), the other site isn't told where you came from, so a
+      result's address can't leak.</li>
+    <li>Two small cookies only: your sign-in (it also holds this browser's private key to its own results), and
+      whether you've closed the welcome note.</li>
+    <li>Like any website, the server's log records which pages were requested and from where. The site runs behind
+      Cloudflare, which carries the traffic.</li>
+  </ul>
+
+  <h2>Your controls</h2>
+  <ul>
+    <li><b>Delete now</b> on any result, saved or not.</li>
+    <li><b>Share by link</b> and <b>Stop sharing</b>, on any result of yours.</li>
+    <li><a href="{{ url_for('account_page') }}">Download all your data</a> as one zip, or <b>delete your account</b> and
+      everything in it, straight away.</li>
+    <li><a href="{{ url_for('memory_page') }}">What we remember</a>: off by default; see it, edit it, or forget everything.</li>
+  </ul>
+</div>
+{% endblock %}

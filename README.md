@@ -45,6 +45,23 @@ range), never a changed result; ideas you disliked are dropped, liked kinds come
 last; the AI gets a short profile of your habits and goals. Everything is listed on that page, deletable one by one
 or all at once ("Forget everything"); anonymous use is unaffected. Logic and rules: `memory.py`.
 
+**Private by default** (`/privacy` explains it on the site): most tracks people bring are unreleased, so
+- uploaded audio (and songs you compare with) is deleted as soon as it's analysed;
+- a result opens **only in the browser that made it** (a random id in the signed session cookie), or for its owner once
+  saved; sharing by link is a switch the owner turns on and off; **Delete now** removes a result at once;
+- the analysis cache (numbers derived from the audio) lives at most `MUSIC_CACHE_HOURS` (24) and is deleted with the
+  result;
+- the AI gets analysis numbers only: no audio, file names or song titles;
+- result, library and profile pages send `noindex`, `no-store`, `no-referrer` and `DENY` framing headers; pages load
+  nothing from other sites;
+- **Your data** (`/account`): download everything as one zip (account data, every saved analysis's files, projects,
+  labels, notes, memory), or delete the account and everything in it after typing the password again.
+
+**Your library** (signed-in accounts, `/history`): file each saved analysis under a **project**, give it a **status**
+(idea, writing, recording, mixing, finished, released), **labels** and private **notes**, and **star** it, from the
+library or the result page. Search (titles, track names, notes, labels, keys) and filter by project, status, label
+or star; the summary, what changed and the trends below follow the filters, so you can follow one project over time.
+
 **History over time** (signed-in accounts, `/history`; logic in `trends.py`): pick a time frame (7 days, 30 days,
 3 months, 12 months, all time) and get summary tiles (tracks, minutes, typical tempo, energy, mood, loudness, share
 in minor keys, most used key), each compared with the previous period of the same length ("▲ up from 102"); **what

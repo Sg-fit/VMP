@@ -47,6 +47,13 @@ def init(path):
             db.execute("ALTER TABLE users ADD COLUMN memory_on INTEGER NOT NULL DEFAULT 0")
         if "goals" not in cols:
             db.execute("ALTER TABLE users ADD COLUMN goals TEXT NOT NULL DEFAULT ''")
+        # Keeping the work organised: a project, where it's at, labels, private notes, a star
+        saved_cols = [c[1] for c in db.execute("PRAGMA table_info(saved)")]
+        for col, kind in (("project", "TEXT NOT NULL DEFAULT ''"), ("status", "TEXT NOT NULL DEFAULT ''"),
+                          ("labels", "TEXT NOT NULL DEFAULT ''"), ("notes", "TEXT NOT NULL DEFAULT ''"),
+                          ("starred", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in saved_cols:
+                db.execute(f"ALTER TABLE saved ADD COLUMN {col} {kind}")
         db.executescript("""
             CREATE TABLE IF NOT EXISTS feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,9 +213,87 @@ def saved_job_ids():
 
 def history(user_id):
     with _connect() as db:
-        rows = db.execute("SELECT job_id, title, created, summary FROM saved WHERE user_id = ? ORDER BY created DESC",
-                          (user_id,)).fetchall()
-    return [{**dict(r), "summary": json.loads(r["summary"]) if r["summary"] else None} for r in rows]
+        rows = db.execute("SELECT job_id, title, created, summary, project, status, labels, notes, starred FROM saved "
+                          "WHERE user_id = ? ORDER BY created DESC", (user_id,)).fetchall()
+    return [{**dict(r), "summary": json.loads(r["summary"]) if r["summary"] else None,
+             "labels": [x for x in (r["labels"] or "").split(",") if x], "starred": bool(r["starred"])} for r in rows]
+
+
+# ---------------------------------------------------------------- organising
+
+STATUSES = ["idea", "writing", "recording", "mixing", "finished", "released"]
+MAX_LABELS, LABEL_LEN, PROJECT_LEN, NOTES_LEN = 8, 24, 60, 2000
+
+
+def clean_labels(text):
+    """'Chill, demo,  EP 2 , chill' -> ['chill', 'demo', 'ep 2']: lower case, no duplicates, at most 8."""
+    out = []
+    for x in (text or "").replace(";", ",").split(","):
+        x = " ".join(x.strip().lower().split())[:LABEL_LEN]
+        if x and x not in out:
+            out.append(x)
+    return out[:MAX_LABELS]
+
+
+def organise(user_id, job_id, project=None, status=None, labels=None, notes=None, starred=None):
+    """Update how one saved analysis is filed. Only its owner can; None leaves a field as it is."""
+    sets, args = [], []
+    if project is not None:
+        sets.append("project = ?"), args.append(" ".join(project.split())[:PROJECT_LEN])
+    if status is not None:
+        sets.append("status = ?"), args.append(status if status in STATUSES else "")
+    if labels is not None:
+        sets.append("labels = ?"), args.append(",".join(clean_labels(labels)))
+    if notes is not None:
+        sets.append("notes = ?"), args.append(notes.strip()[:NOTES_LEN])
+    if starred is not None:
+        sets.append("starred = ?"), args.append(1 if starred else 0)
+    if not sets:
+        return False
+    with _connect() as db:
+        return db.execute(f"UPDATE saved SET {', '.join(sets)} WHERE job_id = ? AND user_id = ?",
+                          (*args, job_id, user_id)).rowcount > 0
+
+
+def projects(user_id):
+    """[(project, analyses, last saved)] for this user, most recently used first."""
+    with _connect() as db:
+        rows = db.execute("SELECT project, COUNT(*) AS n, MAX(created) AS last FROM saved WHERE user_id = ? AND "
+                          "project != '' GROUP BY project ORDER BY last DESC", (user_id,)).fetchall()
+    return [(r["project"], r["n"], r["last"]) for r in rows]
+
+
+def rename_project(user_id, old, new):
+    new = " ".join((new or "").split())[:PROJECT_LEN]
+    with _connect() as db:
+        db.execute("UPDATE saved SET project = ? WHERE user_id = ? AND project = ?", (new, user_id, old))
+
+
+def all_labels(user_id):
+    labels = Counter()
+    for it in history(user_id):
+        labels.update(it["labels"])
+    return labels.most_common()
+
+
+# ---------------------------------------------------------------- your data: take it, or delete it all
+
+def export(user_id):
+    """Everything we hold about a user, as plain data (the analyses' files are added by the app)."""
+    u = get_user(user_id)
+    return {"username": u["username"], "created": u["created"], "memory_on": bool(u.get("memory_on")),
+            "goals": u.get("goals", ""), "saved": history(user_id), "feedback": list_feedback(user_id),
+            "corrections": list_corrections(user_id)}
+
+
+def delete_account(user_id):
+    """Remove the user and every row about them. Returns the job ids whose files the app must delete."""
+    with _connect() as db:
+        jobs = [r["job_id"] for r in db.execute("SELECT job_id FROM saved WHERE user_id = ?", (user_id,))]
+        for table in ("feedback", "corrections", "saved"):
+            db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return jobs
 
 
 def store_summary(job_id, summary):
