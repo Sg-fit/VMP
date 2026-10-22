@@ -91,9 +91,10 @@ CHORD = {"": [0, 4, 7], "m": [0, 3, 7], "7": [0, 4, 7, 10], "5": [0, 7]}
 
 
 def song(chords, bpm, beats_per_bar, bars_per_chord=1, loops=1, drums=True, waltz=False, melody=None,
-         soft=False, tail=1.0):
+         soft=False, tail=1.0, bass=True):
     """chords: [(root, quality)], one per bar(s). Returns float32 audio."""
     beat = 60 / bpm
+    bass_on = bass
     bars = len(chords) * bars_per_chord * loops
     total = bars * beats_per_bar * beat + tail
     y = np.zeros(int(SR * total) + SR)
@@ -106,7 +107,8 @@ def song(chords, bpm, beats_per_bar, bars_per_chord=1, loops=1, drums=True, walt
                 r = NOTE[root]
                 bass = midi(root, 2)
                 tones = [midi(root, 3) + iv for iv in CHORD[q]]
-                place(y, tone(hz(bass), beats_per_bar * beat, 0.35, attack), t0)  # bass on beat 1
+                if bass_on:
+                    place(y, tone(hz(bass), beats_per_bar * beat, 0.35, attack), t0)  # bass on beat 1
                 if waltz:  # oom-pah-pah: chord on beats 2 and 3
                     for b in (1, 2):
                         for m_ in tones:
@@ -1118,7 +1120,8 @@ def facts_checks(facts_file, tmp):
         if not f.exists():
             check("facts", f"{f.name}: file available", False, "not found - skipped")
             continue
-        r = ma.analyze(f, item.get("melody"), cache_dir=Path(tmp) / "facts-cache")
+        told = ma.clean_context(item.get("instruments"), item.get("genre"))  # as ticked when uploading
+        r = ma.analyze(f, item.get("melody"), cache_dir=Path(tmp) / "facts-cache", context=told)
         e, n = item["expect"], f.name
         if "tempo_bpm" in e:
             check("facts", f"{n}: tempo ≈ {e['tempo_bpm']}", near(r["tempo_bpm"], e["tempo_bpm"], 5), f"got {r['tempo_bpm']}")
@@ -1824,6 +1827,51 @@ def gap_checks(tmp):
           and "Filling the gaps" in rep and "**Mood**: now calm" in rep and rep.index("What's there") < rep.index("Ideas to try"))
 
 
+def lineup_checks(tmp):
+    """Drums and a bass are never assumed: each needs its own evidence, and one never implies the other."""
+    import instruments as ins
+    import musicanalyze as ma
+    print("\n== Who's playing (never assumed) ==")
+    v = ins.verdict
+    # measured on real recordings (phone memos and a full mix): hit noise-likeness, percussive share, energy below
+    # 80 Hz, tracked low notes - with the line-up the musician confirmed
+    real = {"solo guitar (Blues for Charlie)": (0.0002, False, 0.22, 0.0000, [36] * 48 + [45] * 52, ("no", False)),
+            "solo guitar (W City Ave)": (0.0000, False, 0.53, 0.0018, [45] * 100, ("no", False)),
+            "phone band, drums confirmed": (0.0030, True, 0.23, 0.0001, [38] * 6 + [45] * 94, ("yes", False)),
+            "full mix with bass (Ballad)": (0.0064, True, 0.10, 0.0734, [33] * 88 + [45] * 12, ("yes", True)),
+            "in-between hits, rumble but no low notes": (0.0013, True, 0.37, 0.0402, [33] * 1 + [45] * 99,
+                                                         ("possible", False))}
+    got = {k: (lambda o: (o["drums"], o["bass"]))(v(a, b, c, d, e)) for k, (a, b, c, d, e, _) in real.items()}
+    want = {k: x[-1] for k, x in real.items()}
+    check("lineup", "drums and bass are claimed only on their own evidence (measured on real recordings)",
+          got == want, "; ".join(f"{k}: {got[k]}" for k in got if got[k] != want[k]))
+    cache = Path(tmp) / "lineup_cache"
+    chords = [("A", "m"), ("F", ""), ("C", ""), ("G", "")]
+    no_bass = ma.analyze(write(Path(tmp) / "lu_drums_no_bass.wav", song(chords, 110, 4, loops=8, bass=False)),
+                         cache_dir=cache)
+    check("lineup", "drums without a bass: the drums are found, and no bass is assumed because of them",
+          no_bass["drums"].get("present") and not no_bass["bass"].get("present"),
+          f"drums {no_bass['drums'].get('present')}, bass {no_bass['bass'].get('present')}")
+    bass_only = ma.analyze(write(Path(tmp) / "lu_bass_no_drums.wav", song(chords, 110, 4, loops=8, drums=False)),
+                           cache_dir=cache)
+    check("lineup", "a bass without drums is still found (notes below E2 with real low energy)",
+          bass_only["bass"].get("present") and not bass_only["drums"].get("present"),
+          str(bass_only.get("evidence")))
+    guitar = ma.analyze(write(Path(tmp) / "lu_guitar.wav", guitar_blues()), cache_dir=cache)
+    rep = "\n".join(ma.track_report(guitar))
+    check("lineup", "solo guitar: no drums, no bass, and the report says the low notes are the guitar's",
+          not guitar["drums"].get("present") and not guitar["bass"].get("present") and "haven't assumed" in rep)
+    # a "possible": not reported as drums, no groove anywhere, and the musician's tick turns them on
+    r = dict(no_bass, drums={"present": False, "possible": True, "held": no_bass["drums"], "energy_share_pct": 20},
+             sections=[dict(x, drums=False, drums_heard=x["drums"]) for x in no_bass["sections"]])
+    rep = "\n".join(ma.instruments_report(r))
+    told = json.loads(json.dumps(r))
+    ma.apply_context(told, ma.clean_context(["drums", "electric_guitar"]))
+    check("lineup", "unsure drums are a question, not a claim; ticking “drums” brings their groove back",
+          "we can't tell" in rep and "Drum groove" not in rep and "grid" not in r["drums"]
+          and told["drums"].get("present") and told["drums"].get("grid") and any(x["drums"] for x in told["sections"]))
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -2065,6 +2113,10 @@ def main():
             gap_checks(tmp)
         except Exception:
             check("gaps", "gap checks ran", False, traceback.format_exc(limit=3))
+        try:
+            lineup_checks(tmp)
+        except Exception:
+            check("lineup", "line-up checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:

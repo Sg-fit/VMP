@@ -76,7 +76,33 @@ def _demucs_split(y, sr):
 
 # ---------------------------------------------------------------- drums
 
-DRUMS_SURE = 0.0015  # hits at least this noise-like are certainly drums; 0.0008-0.0015 is reported as unsure
+DRUMS_MIN = 0.0008   # hits less noise-like than this are pitched attacks (picking, strumming), not drums
+DRUMS_SURE = 0.0015  # hits at least this noise-like are certainly drums; DRUMS_MIN-DRUMS_SURE is reported as unsure
+GUITAR_LOWEST = 40   # E2 (82 Hz), a guitar's lowest open string: a bass's notes live below it
+BASS_ENERGY = 0.01   # at least 1% of the drumless audio's energy below 80 Hz, where no guitar note sounds
+BASS_NOTES = 0.2     # and at least a fifth of the tracked low notes below E2
+
+
+def verdict(hit_noise, are_drums, drum_share, below_80, low_notes, light=False):
+    """Drums and a separate bass are claimed only on their own evidence - never assumed, and never one from the
+    other (a band with drums needn't have a bass; a phone recording of solo guitar mustn't grow either).
+
+    Drums: "yes" when the percussive hits are clearly noise-like (snare, hats) and carry real energy;
+    "possible" when they're only slightly noise-like - light percussion, or the scrape of strummed strings
+    (measured on real phone recordings: confirmed drums 0.0030-0.0036, solo guitar 0.0000-0.0002, the in-between
+    cases are what this band is for); "no" otherwise. A "possible" is reported as a question, not as drums.
+    Bass: notes below a guitar's lowest string with real energy there (energy below 80 Hz AND tracked notes below
+    E2). Low notes without that energy are the main instrument's own (or pitch-tracker octave slips). In tag mode
+    (light, no note tracking) the energy alone decides. Phones lose a bass's low end, so a real bass on a phone may
+    not be claimed: the report asks the musician to tick it, which settles it."""
+    if not are_drums or hit_noise < DRUMS_MIN or drum_share < 0.03:
+        drums = "no"
+    else:
+        drums = "yes" if hit_noise >= DRUMS_SURE else "possible"
+    notes = [n for n in low_notes if n is not None]
+    below_e2 = sum(n < GUITAR_LOWEST for n in notes) / len(notes) if notes else 0.0
+    bass = below_80 >= BASS_ENERGY and (light or below_e2 >= BASS_NOTES)
+    return {"drums": drums, "bass": bass, "below_80": round(below_80, 4), "below_e2": round(below_e2, 2)}
 
 
 def hits_are_drums(drums, sr):
@@ -94,7 +120,7 @@ def hits_are_drums(drums, sr):
         return False, 0.0
     flat = librosa.feature.spectral_flatness(S=P[(f >= 1000) & (f <= 8000)])[0]
     value = float(np.median(flat[hits]))
-    return value >= 0.0008, value
+    return value >= DRUMS_MIN, value
 
 
 OFFBEAT_KICK_RATIO = 2.0  # kicks at least twice as strong halfway between the beats as on them: the grid is off

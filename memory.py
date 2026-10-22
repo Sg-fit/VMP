@@ -141,7 +141,7 @@ def close_call_notes(r, mem):
                 notes.append(f"The beat was hard to measure here, and you usually play between {tm['min']:.0f} and "
                              f"{tm['max']:.0f} BPM, so you may feel this at about {alt:.0f} BPM.")
     told = [c for c in mem.get("corrections") or [] if c["field"] == "drums" and c["value"] == "no"]
-    if (r.get("drums") or {}).get("unsure") and len(told) >= 2:
+    if (r.get("drums") or {}).get("possible") and len(told) >= 2:
         notes.append("We weren't sure about drums here. You've told us before that your recordings have none, so "
                      "it's probably the attack of the instrument.")
     return notes

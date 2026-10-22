@@ -1451,12 +1451,13 @@ def _analyze_audio(path, light=False):
     drums_anywhere = are_drums and float(np.sum(y_perc ** 2)) >= 0.03 * float(np.sum(y ** 2))
     if not drums_anywhere:
         loudest_drums = 0.0  # no real drums anywhere (same rule as instruments.drum_analysis)
-    # A separate bass instrument? On a phone recording a bass guitar and a guitar's low strings look alike
-    # (phones cut everything below ~100 Hz). So: report one only in a band (drums) or when there's real
-    # energy below 100 Hz, where a guitar can't go. Otherwise the low notes are the main instrument's own
-    # lowest part (e.g. the thumb line of fingerstyle guitar), which is still transcribed and written out.
-    below_100 = float(spec[(spec_f >= 30) & (spec_f < 100)].sum() / (spec.sum() + 1e-12))
-    separate_bass = drums_anywhere or below_100 >= 0.03
+    # A separate bass instrument? Only on its own evidence (instruments.verdict): notes below a guitar's lowest
+    # string with real energy there. Otherwise the low notes are the main instrument's own lowest part (e.g. the
+    # thumb line of fingerstyle guitar), which is still transcribed and written out.
+    below_80 = float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12))
+    found = instruments.verdict(hit_noise, are_drums, float(np.sum(y_perc ** 2)) / (float(np.sum(y ** 2)) + 1e-12),
+                                below_80, bass, light)
+    separate_bass = found["bass"]
     loudest_low = max((sec["bass_low_db"] for sec in sections), default=0.0)
     for sec in sections:
         sec["drums"] = loudest_drums > 0 and sec.pop("drums_level") >= 0.1 * loudest_drums
@@ -1500,10 +1501,15 @@ def _analyze_audio(path, light=False):
         if clear_beat else {"present": False},
         "bass": bass_summary(bass, btimes, chords, main_key, duration),
     }
-    if result["drums"].get("present") and hit_noise < instruments.DRUMS_SURE:
-        # Only slightly noise-like hits: light percussion (shaker, brushes) or a hard-picked instrument. Say so;
-        # the musician's tick ("drums" or not) settles it.
-        result["drums"]["unsure"] = True
+    result["evidence"] = found
+    if found["drums"] == "possible" and result["drums"].get("present"):
+        # Only slightly noise-like hits: light percussion (shaker, brushes) or strummed strings. Not claimed as
+        # drums - the report asks, and the musician's tick ("drums" or not) settles it.
+        # the groove we found is held back (nothing reads a grid, traits or fills from it) until a tick confirms
+        result["drums"] = {"present": False, "possible": True, "held": result["drums"],
+                           "energy_share_pct": result["drums"].get("energy_share_pct")}
+        for sec in sections:
+            sec["drums_heard"], sec["drums"] = sec["drums"], False
     if light:
         result["bass"] = {"present": any(sec["bass"] for sec in sections) and separate_bass, "light": True}
         if not separate_bass:
@@ -1554,7 +1560,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-22a"
+ANALYSIS_VERSION = "2026-10-23a"
 
 
 def _cache_key(path, light=False):
@@ -1768,6 +1774,11 @@ def apply_context(result, ctx):
             result["drums"] = {"present": False, "energy_share_pct": drums.get("energy_share_pct"), "user_said_none": True}
             for sec in result["sections"]:
                 sec["drums"] = False
+        elif "drums" in inst and drums.get("possible"):
+            # we weren't sure; they are: the drum analysis we kept back is shown
+            result["drums"] = {**drums.get("held", {}), "present": True, "from_user": True}
+            for sec in result["sections"]:
+                sec["drums"] = sec.get("drums_heard", True)
         elif "drums" in inst and not drums.get("present"):
             notes.append("You said there are drums, but they're too quiet or too blended into the mix for us to analyse here.")
         bass = result.get("bass") or {}
@@ -3918,7 +3929,8 @@ def instruments_report(r):
     melodic = [i for i in chosen if family(i) not in ("drums", "bass")]
     named = [i for i in melodic  # the solo instrument's low part is written out below, so it isn't "other"
              if not (solo and family(i) == r.get("low_part_instrument") and len(melodic) == 1)]
-    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named:
+    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named \
+            and not d.get("possible"):
         return []
     how = ("with Demucs, an AI model built for the job" if r.get("separation") == "demucs" else
            "with a lighter split that tells sharp hits from held notes")
@@ -3941,10 +3953,10 @@ def instruments_report(r):
               '<details markdown="1"><summary>As text</summary>', "", "```", *rows, "```", "", "</details>", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — they're there, but we couldn't find a clear repeating pattern.", ""]
-    if d.get("unsure"):
-        L += ["_We're not sure about these. The hits are only slightly noisy, which fits light percussion "
-              "(shaker, brushes) or a hard-picked instrument. If there aren't any drums, tick the instruments you "
-              "hear next time you upload and leave “drums” unticked._", ""]
+    if d.get("possible") and not d.get("user_said_none"):
+        L += ["**🥁 Drums** — we can't tell, so we haven't assumed any. The percussive sound is only slightly "
+              "noise-like: it could be light percussion (a shaker, brushes) or just the scrape of strummed or "
+              "hard-picked strings. If there are drums, tick “drums” when you upload and we'll show their groove.", ""]
     elif d.get("user_said_none"):
         L += ["**🥁 Drums** — none, as you said. Any percussive sound is just the attack of the notes.", ""]
     elif d.get("string_attacks"):
@@ -3953,11 +3965,11 @@ def instruments_report(r):
         L += ["**🎸 Bass** — no bass instrument, as you said. The low notes belong to the main instrument, and "
               "we've analysed them below as its lowest part.", ""]
     elif solo:
-        L += ["**🎸 Bass** — we don't think there's a separate bass. There are no drums, and nothing below "
-              "100 Hz, where a bass guitar sits. The low notes are "
+        L += ["**🎸 Bass** — we haven't assumed one. We didn't hear notes below a guitar's lowest string "
+              "(E2, 82 Hz), where a bass plays, with real sound there. The low notes are "
               f"{low_part_range(r)[1]} (like a guitarist's "
-              "thumb or a pianist's left hand), and we've analysed them below as the lowest part. If there is a "
-              "bass, tick it when you upload.", ""]
+              "thumb or a pianist's left hand), and we've analysed them below as the lowest part. Phone microphones "
+              "often lose a bass's low end, so if there is a bass, tick it when you upload.", ""]
     if solo:
         b = dict(r.get("low_part") or {}, present=True)
         if r.get("octave_raised"):
