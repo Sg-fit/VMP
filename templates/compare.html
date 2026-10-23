@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Compare · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .cmp-pick { border-top: 2px solid var(--ink); margin-top: 24px; padding-top: 14px; }
+  .cmp-pick details { margin: 0 0 12px; }
+  .cmp-pick summary { cursor: pointer; font-weight: 600; }
+  .cmp-lib { list-style: none; padding: 0; margin: 10px 0; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); }
+  .cmp-lib li { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .cmp-lib .when { color: var(--muted); font-size: .8rem; margin-left: 6px; }
+  .cmp-lib label { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 0 0; font-size: .9rem; }
+  .cmp-pick input.text { width: min(100%, 520px); font: inherit; padding: 8px 10px; border: 1px solid var(--line);
+                         border-radius: 0; background: var(--bg); color: var(--ink); margin: 4px 0; }
+  .who { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 28px 0 8px; }
+  .who span { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+  .who i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .cmp h2 { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; display: flex;
+            align-items: center; gap: 8px; margin: 36px 0 10px; }
+  .cmp h2::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+  .cmp table { width: 100%; font-size: .92rem; }
+  .cmp .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px 36px; }
+  .cmp figure { border-top: 1px solid var(--line); padding-top: 10px; }
+  .cmp figure b { display: block; margin-bottom: 6px; }
+  .pair { border-left: 3px solid var(--line); padding: 2px 0 2px 14px; margin: 14px 0; }
+  .pair h3 { font-size: 1rem; margin: 0 0 6px; }
+  .pair ul { margin: 0; padding-left: 18px; } .pair li { margin: 4px 0; }
+  .notice { border-left: 3px solid var(--ink); background: var(--faint); padding: 10px 14px; margin: 16px 0; }
+</style>
+{% endblock %}
+{% block content %}
+<p class="eyebrow">Your library</p>
+<h1>Compare tracks</h1>
+<p class="lede">Your own tracks side by side (two takes, the versions of one song, the tracks of an EP), or yours next
+  to a result another musician shared with you. We only name differences you'd hear.</p>
+
+{% if skipped %}<div class="notice">Couldn't add {{ skipped|length }} of them: they're not yours, or no longer shared.
+  Nothing about them is shown.</div>{% endif %}
+{% if too_many %}<div class="notice">Comparing the first {{ max_tracks }}: more than that gets hard to read.</div>{% endif %}
+
+{% if view %}
+<div class="cmp">
+  <div class="who">
+    {% for n in view.names %}<span><i style="background:{{ 'currentColor' if loop.first else ['var(--c1)', 'var(--c2)', 'var(--c3)'][(loop.index0 - 1) % 3] }}"></i>{{ 'ABCD'[loop.index0] }} · {{ n }}</span>{% endfor %}
+  </div>
+
+  {% if view.shared %}
+  <h2>What they have in common</h2>
+  <ul>{% for s in view.shared %}<li>{{ s }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if view.versions %}
+  <h2>What changed, version by version</h2>
+  {% for a, b, diffs in view.versions %}
+  <div class="pair"><h3>{{ a }} → {{ b }}</h3>
+    {% if diffs %}<ul>{% for d in diffs %}<li><b>{{ d.area }}:</b> {{ d.text }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">Nothing you'd hear changed.</p>{% endif %}</div>
+  {% endfor %}
+  {% endif %}
+
+  {% if view.pairs %}
+  <h2>How they differ</h2>
+  {% for a, b, diffs in view.pairs %}
+  <div class="pair"><h3>{{ a }} and {{ b }}</h3>
+    {% if diffs %}<ul>{% for d in diffs %}<li><b>{{ d.area }}:</b> {{ d.text }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">Nothing you'd hear differs.</p>{% endif %}</div>
+  {% endfor %}
+  {% endif %}
+
+  <h2>Side by side</h2>
+  <table>
+    <tr><th></th>{% for n in view.names %}<th>{{ 'ABCD'[loop.index0] }} · {{ n }}</th>{% endfor %}</tr>
+    {% for measure, values in view.table %}
+    <tr><td><b>{{ measure }}</b></td>{% for v in values %}<td>{{ v }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table>
+
+  <div class="grid" style="margin-top:24px">
+    {% if pics.measures %}<figure><b>Measure by measure</b>{{ pics.measures|safe }}<figcaption>Each row has its own
+      scale; {{ view.names[0] }}'s value is on the right.</figcaption></figure>{% endif %}
+    {% if pics.mood %}<figure><b>Energy and mood</b>{{ pics.mood|safe }}<figcaption>{{ 'The versions in order.' if view.versions
+      else 'A, B, C, D as above.' }}</figcaption></figure>{% endif %}
+    {% if pics.energy %}<figure><b>Energy over time</b>{{ pics.energy|safe }}</figure>{% endif %}
+    {% if pics.tonal %}<figure><b>Tonal balance</b>{{ pics.tonal|safe }}</figure>{% endif %}
+  </div>
+
+  {% if view.blend %}
+  <h2>Which flow into each other</h2>
+  <ul>{% for p in view.blend %}<li><b>{{ p.a }}</b> + <b>{{ p.b }}</b>: {{ p['keys'] }}, {{ p.relation }}, {{ p.tempo }}</li>{% endfor %}</ul>
+  <p class="muted small">Key-compatible on the Camelot wheel: good neighbours in a set list, an EP's running order, or a medley.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<form class="cmp-pick" method="get" action="{{ url_for('compare_page') }}">
+  <p class="eyebrow" style="margin:0 0 8px">{{ 'Compare something else' if view else 'Pick 2 to ' ~ max_tracks ~ ' tracks' }}</p>
+  <details {{ 'open' if not view }}><summary>From your library</summary>
+    {% if library %}
+    <ul class="cmp-lib">
+      {% for it in library %}{% if it.tracks %}
+      <li>{{ it.title }}<span class="when">{{ it.created|datetime(date_only=True) }}</span><br>
+        {% for i, name in it.tracks %}
+          <label><input type="checkbox" name="t" value="{{ it.job_id }}:{{ i }}" {{ 'checked' if (it.job_id ~ ':' ~ i) in chosen }}> {{ name }}</label>
+        {% endfor %}</li>
+      {% endif %}{% endfor %}
+    </ul>
+    {% else %}<p class="muted">Nothing saved yet: analyse a track while signed in and it lands here.</p>{% endif %}
+  </details>
+  <details {{ 'open' if not view }}><summary>A result another musician shared with you</summary>
+    <p class="muted small" style="margin:6px 0">Paste the link they sent you. It only works while they keep sharing it
+      on, and nothing of theirs is copied into your library.</p>
+    <input class="text" type="url" name="link" placeholder="https://…/jobs/…" aria-label="Shared result link"><br>
+    <input class="text" type="url" name="link" placeholder="another one (optional)" aria-label="Another shared result link">
+  </details>
+  <button class="btn primary" type="submit">Compare →</button>
+</form>
+{% endblock %}

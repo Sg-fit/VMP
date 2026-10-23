@@ -1040,6 +1040,33 @@ def account_checks(base, job, browser):
     check("web", "you can download everything: account data and each saved analysis's files, in one zip",
           z.ok and any(n.endswith("music_report.md") for n in names) and data.get("username") == "alice"
           and data["saved"][0]["project"] == "EP 2027", f"{len(names)} files")
+    def upload(sess, name, path):
+        r_ = sess.post(base + "/analyze", files=[("tracks", (name, open(path, "rb")))], allow_redirects=False, timeout=30)
+        j = r_.headers.get("Location", "").rsplit("/", 1)[-1]
+        t0 = time.time()
+        while time.time() - t0 < 120 and sess.get(f"{base}/jobs/{j}/status", timeout=10).json().get("state") not in ("done", "error"):
+            time.sleep(1)
+        return j
+    wav = Path(__file__).resolve().parent / "_cc_take.wav"
+    write(wav, song([("A", "m"), ("F", ""), ("C", ""), ("G", "")], 120, 4, loops=4))
+    take2 = upload(alice, "take_2.wav", wav)
+    both = alice.get(base + "/compare", params={"t": [f"{job}:0", f"{take2}:0"]}, timeout=20).text
+    alice.post(f"{base}/jobs/{take2}/organise", data={"version_of": job, "next": "/history"}, timeout=10)
+    vers = alice.get(base + "/compare", params={"song": job}, timeout=20).text
+    check("web", "compare: two of your tracks side by side; filed as versions, what changed from v1 to v2",
+          "Side by side" in both and "take_2" in both and "short_phone_clip" in both
+          and "What changed, version by version" in vers and "v1" in vers and "v2" in vers
+          and "version of" in alice.get(base + "/history", timeout=10).text)
+    bob_take = upload(bob, "bob_idea.wav", wav)
+    private = bob.get(base + "/compare", params={"t": f"{bob_take}:0", "link": f"{base}/jobs/{take2}"}, timeout=20).text
+    alice.post(f"{base}/jobs/{take2}/share", data={"on": "1"}, timeout=10)
+    shared_ = bob.get(base + "/compare", params={"t": f"{bob_take}:0", "link": f"{base}/jobs/{take2}"}, timeout=20).text
+    alice.post(f"{base}/jobs/{take2}/share", data={"on": "0"}, timeout=10)
+    sneaky = bob.get(base + "/compare", params={"t": [f"{bob_take}:0", f"{job}:0"]}, timeout=20).text
+    check("web", "compare with another musician: only a result they shared; a private one is refused, nothing shown",
+          "Couldn't add 1" in private and "Side by side" not in private and "Shared: take_2" in shared_
+          and "Side by side" in shared_ and "Couldn't add 1" in sneaky and "short_phone_clip" not in sneaky)
+    wav.unlink(missing_ok=True)
     check("web", "the privacy page explains what's kept, for how long, and what leaves the server",
           all(x in anon.get(base + "/privacy", timeout=10).text for x in ("Audio deleted at once", "What leaves our server",
                                                                           "Delete now")))
@@ -1976,6 +2003,49 @@ def model_memory_checks(tmp):
             os.environ["MUSIC_TAGGER"] = saved_env
 
 
+def crosscompare_checks(tmp):
+    """Tracks against each other: differences named only when you'd hear them, what they share, versions in order,
+    and versions filed so they can't loop or reach someone else's work."""
+    import accounts
+    import crosscompare as cc
+    import musicanalyze as ma
+    print("\n== Comparing your tracks ==")
+    cache = Path(tmp) / "cc_cache"
+    g = ma.analyze(write(Path(tmp) / "cc_g.wav", song([("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100, 4, loops=6)),
+                   cache_dir=cache)
+    e = ma.analyze(write(Path(tmp) / "cc_d.wav", song([("D", ""), ("A", ""), ("B", "m"), ("G", "")], 118, 4, loops=6)),
+                   cache_dir=cache)
+    diffs = {d["key"]: d["text"] for d in cc.differences(g, e, "Take 1", "Take 2")}
+    check("crosscompare", "two different songs: the faster tempo and the neighbouring key (they mix) are named",
+          "18% faster" in diffs.get("tempo", "") and "a fifth apart" in diffs.get("key", "")
+          and "mix smoothly" in diffs.get("key", ""), str(diffs)[:300])
+    bare = dict(g, drums={"present": False})
+    check("crosscompare", "drums in one take and not the other are named, and nothing else",
+          [d["key"] for d in cc.differences(g, bare, "Take 1", "Take 2")] == ["drums"])
+    check("crosscompare", "a track against itself: nothing differs, and the common ground is listed",
+          not cc.differences(g, g, "A", "B") and "All in G major." in cc.shared([g, g], ["A", "B"]))
+    v103 = dict(g, tempo_bpm=103.0)
+    v118 = dict(g, tempo_bpm=118.0)
+    steps = cc.versions([g, v103, v118], ["v1", "v2", "v3"])
+    check("crosscompare", "versions: a 3% nudge isn't a change you'd hear, the jump to 118 BPM is",
+          not steps[0][2] and any(d["key"] == "tempo" for d in steps[1][2]), str([(a, b, len(d)) for a, b, d in steps]))
+    rep_ = cc.report([g, e, g, e, g], ["a", "b", "c", "d", "e"])
+    check("crosscompare", "at most four tracks at once (the palette stays readable)", len(rep_["names"]) == cc.MAX_TRACKS)
+    # versions in the database
+    accounts.init(Path(tmp) / "cc_users.db")
+    uid, _ = accounts.create_user("cc_user", "selftest-pw9")
+    other, _ = accounts.create_user("cc_other", "selftest-pw8")
+    for j, owner in (("a" * 32, uid), ("b" * 32, uid), ("c" * 32, uid), ("d" * 32, other)):
+        accounts.save_job(owner, j, j[:1])
+    ok1 = accounts.set_version(uid, "b" * 32, "a" * 32)
+    ok2 = accounts.set_version(uid, "c" * 32, "b" * 32)  # a version of a version: filed under the song's first
+    loop = accounts.set_version(uid, "a" * 32, "c" * 32)  # the first version can't become a version of its own
+    theirs = accounts.set_version(uid, "c" * 32, "d" * 32)  # nor point at someone else's analysis
+    chain = [v["job_id"][:1] for v in accounts.versions(uid, "a" * 32)]
+    check("crosscompare", "versions chain under the song's first take; no loops, nothing of anyone else's",
+          ok1 and ok2 and not loop and not theirs and chain == ["a", "b", "c"], f"{ok1} {ok2} {loop} {theirs} {chain}")
+
+
 def memory_checks():
     """A musician's memory: firsts and departures are named, matching tracks say nothing, close calls are only
     notes, feedback reorders ideas - on made-up histories where the right answer is known."""
@@ -2225,6 +2295,10 @@ def main():
             model_memory_checks(tmp)
         except Exception:
             check("model", "model memory checks ran", False, traceback.format_exc(limit=3))
+        try:
+            crosscompare_checks(tmp)
+        except Exception:
+            check("crosscompare", "comparison checks ran", False, traceback.format_exc(limit=3))
         try:
             memory_checks()
         except Exception:

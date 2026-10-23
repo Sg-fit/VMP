@@ -51,7 +51,7 @@ def init(path):
         saved_cols = [c[1] for c in db.execute("PRAGMA table_info(saved)")]
         for col, kind in (("project", "TEXT NOT NULL DEFAULT ''"), ("status", "TEXT NOT NULL DEFAULT ''"),
                           ("labels", "TEXT NOT NULL DEFAULT ''"), ("notes", "TEXT NOT NULL DEFAULT ''"),
-                          ("starred", "INTEGER NOT NULL DEFAULT 0")):
+                          ("starred", "INTEGER NOT NULL DEFAULT 0"), ("version_of", "TEXT NOT NULL DEFAULT ''")):
             if col not in saved_cols:
                 db.execute(f"ALTER TABLE saved ADD COLUMN {col} {kind}")
         db.executescript("""
@@ -213,7 +213,8 @@ def saved_job_ids():
 
 def history(user_id):
     with _connect() as db:
-        rows = db.execute("SELECT job_id, title, created, summary, project, status, labels, notes, starred FROM saved "
+        rows = db.execute("SELECT job_id, title, created, summary, project, status, labels, notes, starred, version_of "
+                          "FROM saved "
                           "WHERE user_id = ? ORDER BY created DESC", (user_id,)).fetchall()
     return [{**dict(r), "summary": json.loads(r["summary"]) if r["summary"] else None,
              "labels": [x for x in (r["labels"] or "").split(",") if x], "starred": bool(r["starred"])} for r in rows]
@@ -253,6 +254,35 @@ def organise(user_id, job_id, project=None, status=None, labels=None, notes=None
     with _connect() as db:
         return db.execute(f"UPDATE saved SET {', '.join(sets)} WHERE job_id = ? AND user_id = ?",
                           (*args, job_id, user_id)).rowcount > 0
+
+
+def set_version(user_id, job_id, of_job_id):
+    """File an analysis as a version of another of the user's songs ('' to undo). Every version points at the song's
+    first one, so a chain is one level deep and can't loop; versions that pointed at this one move along with it."""
+    with _connect() as db:
+        own = {r["job_id"]: r["version_of"] for r in
+               db.execute("SELECT job_id, version_of FROM saved WHERE user_id = ?", (user_id,))}
+        if job_id not in own:
+            return False
+        root = ""
+        if of_job_id:
+            if of_job_id not in own or of_job_id == job_id:
+                return False
+            root = own[of_job_id] or of_job_id
+            if root == job_id:  # it was the first version itself: nothing to re-point
+                return False
+        db.execute("UPDATE saved SET version_of = ? WHERE job_id = ? AND user_id = ?", (root, job_id, user_id))
+        if root:  # its own versions follow it into the new song
+            db.execute("UPDATE saved SET version_of = ? WHERE version_of = ? AND user_id = ?", (root, job_id, user_id))
+    return True
+
+
+def versions(user_id, root):
+    """A song's versions, oldest first: the first one and every analysis filed as a version of it."""
+    with _connect() as db:
+        rows = db.execute("SELECT job_id, title, created FROM saved WHERE user_id = ? AND (job_id = ? OR version_of = ?) "
+                          "ORDER BY created", (user_id, root, root)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def projects(user_id):

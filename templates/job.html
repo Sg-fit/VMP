@@ -94,6 +94,8 @@
   <span class="muted">Your audio was deleted as soon as it was analysed. <a href="{{ url_for('privacy') }}">How we handle your music</a></span>
 </div>
 {% if meta %}
+<p class="small" style="margin:10px 0 0"><a href="{{ url_for('compare_page', t=job_id ~ ':0') }}">Compare with your other
+  tracks →</a></p>
 <details class="organise"><summary>Organise: {{ meta.project or 'no project' }}{{ ' · ' ~ meta.status if meta.status }}{% for lab in meta.labels %} · {{ lab }}{% endfor %}{{ ' · ★' if meta.starred }}</summary>
   <form method="post" action="{{ url_for('job_organise', job_id=job_id) }}">
     <label>Project <input name="project" value="{{ meta.project }}" maxlength="60" list="project-names" placeholder="e.g. EP 2027"></label>

@@ -33,6 +33,7 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import markdown
@@ -42,6 +43,7 @@ from werkzeug.utils import secure_filename
 
 import accounts
 import charts
+import crosscompare
 import demos
 import trends
 import memory
@@ -107,23 +109,38 @@ def get_job_dir(job_id):
     """The job's folder, for the person it belongs to (404 for everyone else, so its existence isn't revealed):
     a saved analysis opens for its owner, a temporary one for the browser that started it. A demo, or a result its
     owner chose to share by link, opens for anyone with the link."""
-    if not JOB_ID.match(job_id):
+    if not can_open(job_id):
         abort(404)
+    return DATA_DIR / job_id
+
+
+def can_open(job_id):
+    """May this visitor open this result? Its owner (saved) or the browser that made it (temporary), or anyone when
+    it's a demo or its owner shared it by link."""
+    if not JOB_ID.match(job_id or ""):
+        return False
     d = DATA_DIR / job_id
     if not d.is_dir():
-        abort(404)
+        return False
     st = read_status(d)
     if st.get("unreadable"):
-        abort(404)  # never open a result whose owner we can't check
+        return False  # never open a result whose owner we can't check
     if st.get("demo") or st.get("shared"):
-        return d
+        return True
     owner = accounts.owner_of(job_id)
     if owner is not None:
-        if owner != session.get("uid"):
-            abort(404)
-    elif st.get("visitor") and st["visitor"] != _browser_id():
-        abort(404)  # results from before this rule have no visitor and keep working by link until they expire
-    return d
+        return owner == session.get("uid")
+    # results from before the browser rule have no visitor and keep working by link until they expire
+    return not st.get("visitor") or st["visitor"] == _browser_id()
+
+
+def tracks_of(job_id):
+    """[(index, result)] of a result's own tracks (songs it was compared with and failed files left out)."""
+    try:
+        results = json.loads((DATA_DIR / job_id / "output" / "music_results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [(i, r) for i, r in enumerate(results) if r.get("role") != "reference" and "error" not in r]
 
 
 def purge_job(d):
@@ -462,6 +479,8 @@ def history():
         return url_for("history", **{k: v for k, v in args.items() if v})
     return render_template("history.html", items=items, v=view, version=ma.CODE_VERSION, f=f, hurl=hurl,
                            filtered=any(f.values()), projects=accounts.projects(u["id"]),
+                           titles={it["job_id"]: it["title"] for it in items},
+                           version_counts=Counter(it.get("version_of") for it in items if it.get("version_of")),
                            labels=accounts.all_labels(u["id"]), statuses=accounts.STATUSES)
 
 
@@ -616,6 +635,8 @@ def job_organise(job_id):
     f = request.form
     accounts.organise(u["id"], job_id, project=f.get("project"), status=f.get("status"), labels=f.get("labels"),
                       notes=f.get("notes"), starred=f.get("starred") == "1" if "starred_present" in f else None)
+    if "version_of" in f:
+        accounts.set_version(u["id"], job_id, f.get("version_of") or "")
     return redirect(_safe_next(url_for("job", job_id=job_id)))
 
 
@@ -631,6 +652,66 @@ def project_rename():
     u = _require_user()
     accounts.rename_project(u["id"], request.form.get("old", ""), request.form.get("new", ""))
     return redirect(url_for("history", project=request.form.get("new", "") or None))
+
+
+@app.get("/compare")
+def compare_page():
+    """Your tracks side by side - any of your own (?t=job:index), a song's versions (?song=first job), and results
+    other musicians shared with you (?link=their result's address). Nothing private of anyone else's can be added:
+    an address you can't open is named as unavailable, and nothing about it is shown."""
+    u = _require_user()
+    picked, names, skipped, are_versions = [], [], [], False
+    song = request.args.get("song", "")
+    if song:
+        chain = accounts.versions(u["id"], song)
+        for k, v in enumerate(chain, 1):
+            tr = tracks_of(v["job_id"]) if can_open(v["job_id"]) else []
+            if tr:
+                picked.append(tr[0][1])
+                names.append(f"v{k} · {time.strftime('%d %b', time.localtime(v['created']))}")
+        are_versions = len(picked) > 1
+    for t in request.args.getlist("t"):
+        job_id, _, idx = t.partition(":")
+        tr = dict(tracks_of(job_id)) if can_open(job_id) else {}
+        r = tr.get(int(idx) if idx.isdigit() else 0)
+        if r is None:
+            skipped.append(t)
+            continue
+        picked.append(r)
+        names.append(Path(r["file"]).stem)
+    for link in request.args.getlist("link"):
+        m = re.search(r"/jobs/([0-9a-f]{32})", link or "")
+        if not link.strip():
+            continue
+        if not m or not can_open(m.group(1)):
+            skipped.append(link.strip()[:80])
+            continue
+        for _, r in tracks_of(m.group(1))[:1]:
+            picked.append(r)
+            names.append("Shared: " + Path(r["file"]).stem)
+    names = [n[:40] for n in names]
+    for i, n in enumerate(names):  # two tracks with one name stay apart
+        if names.count(n) > 1:
+            names[i] = f"{n} ({i + 1})"
+    view = crosscompare.report(picked, names, are_versions) if len(picked) >= 2 else None
+    pics = {}
+    if view:
+        tracks = picked[:crosscompare.MAX_TRACKS]
+        others = [dict(r, file=n) for r, n in zip(tracks[1:], view["names"][1:])]
+        rows = [(m, unit, [ma._measures(r)[m][0] for r in tracks]) for m, (_, unit) in ma._measures(tracks[0]).items()]
+        pics = {"measures": charts.dumbbell(rows, view["names"]),
+                "energy": ma.energy_overlay_svg(tracks[0], others, mine_label=view["names"][0]),
+                "tonal": ma.tonal_overlay_svg(tracks[0], others, mine_label=view["names"][0]),
+                "mood": charts.mood_map([("ABCD"[i], (r.get("feel") or {}).get("valence"), (r.get("feel") or {}).get("arousal"),
+                                          f"{n}: {(r.get('feel') or {}).get('mood', '')}")
+                                         for i, (r, n) in enumerate(zip(tracks, view["names"]))],
+                                        size=220, path=are_versions, tags=True, label="Each track on the energy/mood map")}
+    library = [{"job_id": it["job_id"], "title": it["title"], "created": it["created"],
+                "tracks": [(i, Path(r["file"]).stem) for i, r in tracks_of(it["job_id"])]}
+               for it in accounts.history(u["id"])[:200] if not ((it.get("summary") or {}).get("kind") == "tags")]
+    return render_template("compare.html", view=view, pics=pics, skipped=skipped, library=library,
+                           chosen=set(request.args.getlist("t")), song=song, max_tracks=crosscompare.MAX_TRACKS,
+                           too_many=len(picked) > crosscompare.MAX_TRACKS, version=ma.CODE_VERSION)
 
 
 @app.get("/account")

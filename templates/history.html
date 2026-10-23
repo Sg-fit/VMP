@@ -66,6 +66,10 @@
   details.rename input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
                          border-radius: 0; width: min(100%, 360px); margin: 8px 6px 0 0; }
   .empty { margin-top: 32px; }
+  .trk input.pick { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+  .cmpbar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+            justify-content: space-between; padding: 12px 0; margin-top: 12px; background: var(--bg);
+            border-top: 2px solid var(--ink); }
   .projects { display: flex; gap: 8px; overflow-x: auto; margin: 28px 0 0; padding-bottom: 4px; }
   .proj { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--line);
           text-decoration: none; color: var(--ink); min-width: 140px; }
@@ -95,6 +99,7 @@
   with a summary, what changed and the trends for whatever you pick. Only you can see it.</p>
 <a class="btn primary" href="{{ url_for('index') }}">New analysis →</a>
 <a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
+<a class="btn secondary" href="{{ url_for('compare_page') }}">Compare tracks</a>
 
 {% if items %}
 {% if projects %}
@@ -178,6 +183,10 @@
         {% if it.status %} · <a class="tag st-{{ it.status }}" href="{{ hurl(status=it.status) }}">{{ it.status }}</a>{% endif %}
         {% for lab in it.labels %} <a class="tag lab" href="{{ hurl(label=lab) }}">{{ lab }}</a>{% endfor %}
         {% if it.summary and it.summary.kind == 'tags' %} · <span class="tag">tag list</span>{% endif %}
+        {% if it.version_of %} · <a class="tag" href="{{ url_for('compare_page', song=it.version_of) }}">version of
+          {{ titles.get(it.version_of, 'an earlier take') }}</a>
+        {% elif version_counts.get(it.job_id) %} · <a class="tag" href="{{ url_for('compare_page', song=it.job_id) }}">{{
+          version_counts[it.job_id] + 1 }} versions · compare</a>{% endif %}
         {% if it.state in ('queued', 'running') %} · <span class="tag live">analysing</span>
         {% elif it.state == 'error' %} · <span class="tag">failed</span>{% endif %}</div>
     </div>
@@ -195,6 +204,10 @@
                                 placeholder="e.g. EP 2027"></label>
           <label>Status <select name="status"><option value="">—</option>
             {% for st in statuses %}<option {{ 'selected' if it.status == st }}>{{ st }}</option>{% endfor %}</select></label>
+          <label>Version of <select name="version_of"><option value="">— its own song</option>
+            {% for other in items %}{% if other.job_id != it.job_id and not other.version_of and not (other.summary and other.summary.kind == 'tags') %}
+              <option value="{{ other.job_id }}" {{ 'selected' if it.version_of == other.job_id }}>{{ other.title[:60] }}</option>
+            {% endif %}{% endfor %}</select></label>
           <label>Labels <input name="labels" value="{{ it.labels|join(', ') }}" maxlength="240"
                                placeholder="comma-separated: demo, chill, needs vocals"></label>
           <label>Notes <textarea name="notes" rows="3" maxlength="2000" placeholder="Only you can see these">{{ it.notes }}</textarea></label>
@@ -219,7 +232,8 @@
     {% elif it.summary %}
     <div class="tracks">
       {% for t in it.summary.tracks %}
-        <div class="trk">{% if t.energy_curve %}<span class="spk" title="Loudness over the track">{{ charts.sparkline(t.energy_curve, width=90, height=20)|safe }}</span>{% endif %}<b>{{ t.file }}</b>
+        <div class="trk">{% if not t.error %}<input type="checkbox" class="pick" form="cmpform" name="t"
+             value="{{ it.job_id }}:{{ loop.index0 }}" aria-label="Pick {{ t.file }} to compare">{% endif %}{% if t.energy_curve %}<span class="spk" title="Loudness over the track">{{ charts.sparkline(t.energy_curve, width=90, height=20)|safe }}</span>{% endif %}<b>{{ t.file }}</b>
           {% if t.error %}<span>could not be analysed</span>{% else %}
           <span>{{ t.duration }}</span>
           {% if t.tempo_bpm %}<span>{{ t.tempo_bpm|round|int }} BPM {{ t.meter or '' }}</span>{% endif %}
@@ -235,6 +249,10 @@
   {% endfor %}
   {% endfor %}
 </ol>
+<form id="cmpform" method="get" action="{{ url_for('compare_page') }}" class="cmpbar">
+  <span class="muted small">Tick 2 to 4 tracks above to see them side by side.</span>
+  <button class="btn primary" type="submit">Compare selected →</button>
+</form>
 <datalist id="project-names">{% for name, n, last in projects %}<option value="{{ name }}">{% endfor %}</datalist>
 {% else %}
 <p class="empty muted">{% if filtered %}Nothing matches these filters{% if v.frame != 'all' %} in the last {{ v.frame_label }}{% endif %}.

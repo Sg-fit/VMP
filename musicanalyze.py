@@ -4319,9 +4319,9 @@ def _overlay_svg(series, xs_label, y_label, aria, W=720, H=150, x_ticks=None):
             f'\n\n<span class="muted small">{html.escape(y_label)}</span>')
 
 
-def energy_overlay_svg(mine, refs):
+def energy_overlay_svg(mine, refs, mine_label=None):
     """The shape of each song: loudness over time (0-1 over 40 dB), on one time axis."""
-    tracks = [(f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
+    tracks = [(mine_label or f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
                                                          for i, r in enumerate(refs)]
     tracks = [t for t in tracks if (t[1].get("sound") or {}).get("energy_line") and t[1].get("duration_sec")]
     if len(tracks) < 2:
@@ -4337,9 +4337,9 @@ def energy_overlay_svg(mine, refs):
                         "Loudness over time of your track and the songs you admire", x_ticks=ticks)
 
 
-def tonal_overlay_svg(mine, refs):
+def tonal_overlay_svg(mine, refs, mine_label=None):
     """Tonal balance in octaves, each song's own share per octave (so loudness doesn't matter)."""
-    tracks = [(f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
+    tracks = [(mine_label or f"yours: {mine['file']}", mine, "mine")] + [(r["file"], r, REF_HUES[i % len(REF_HUES)])
                                                          for i, r in enumerate(refs)]
     tracks = [t for t in tracks if (t[1].get("sound") or {}).get("octave_db")]
     if len(tracks) < 2:

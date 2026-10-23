@@ -63,6 +63,16 @@ or all at once ("Forget everything"); anonymous use is unaffected. Logic and rul
 library or the result page. Search (titles, track names, notes, labels, keys) and filter by project, status, label
 or star; the summary, what changed and the trends below follow the filters, so you can follow one project over time.
 
+**Compare tracks** (`/compare`, logic in `crosscompare.py`): pick 2-4 tracks from your library (tick them in the
+library, or from a result page) and see them side by side: what they all have in common (key family, pace, metre,
+chords they share, energy, drums), how each differs from the first, in plain words and only where you'd hear it
+(the same thresholds as the comparison with a song you admire), a table, the measure-by-measure chart, energy and
+tonal-balance overlays, the mood map, and which tracks flow into each other on the Camelot wheel (an EP's running
+order, a set list). **Versions**: file an analysis as a version of another song (Organise → Version of) and the
+song's versions are compared in order, with what changed from each one to the next. **Another musician's work**:
+paste the link to a result they shared and it's compared with yours. Only while they keep sharing it on: a private
+result is refused and named as unavailable, and nothing of theirs is copied into your library.
+
 **History over time** (signed-in accounts, `/history`; logic in `trends.py`): pick a time frame (7 days, 30 days,
 3 months, 12 months, all time) and get summary tiles (tracks, minutes, typical tempo, energy, mood, loudness, share
 in minor keys, most used key), each compared with the previous period of the same length ("▲ up from 102"); **what

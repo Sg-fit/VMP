@@ -137,7 +137,7 @@ MOOD_CORNERS = [("tense", 0.02, 0.06, "start"), ("excited", 0.98, 0.06, "end"),
                 ("sad", 0.02, 0.97, "start"), ("calm", 0.98, 0.97, "end")]
 
 
-def mood_map(points, size=200, path=True, label="Energy and mood map"):
+def mood_map(points, size=200, path=True, label="Energy and mood map", tags=False):
     """points: [(label, valence 0-100, arousal 0-100, tooltip)]. Across: darker to brighter mood; up: calmer to
     more energetic. With path=True the points are a journey (the sections in order)."""
     pad = 14
@@ -160,10 +160,10 @@ def mood_map(points, size=200, path=True, label="Energy and mood map"):
         parts.append(f'<path d="{d}" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.5" '
                      f'stroke-linejoin="round"/>')
     for i, (lab, x, y, tip) in enumerate(pts):
-        r = 8 if path else 4.5
-        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r}" style="fill:{ACCENT if path else C1}" '
+        r = 8 if path or tags else 4.5
+        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r}" style="fill:{ACCENT if path or tags else C1}" '
                      f'stroke="var(--surface, #fff)" stroke-width="2"><title>{esc(tip)}</title></circle>')
-        if path and lab:
+        if (path or tags) and lab:
             parts.append(_text(x, y + 3.5, lab, size=9, anchor="middle", weight=700,
                                extra='style="fill:var(--on-accent, #111)"'))
     return _svg(size, size, "".join(parts), label, max_w=size)
@@ -397,7 +397,7 @@ def dumbbell(rows, names, width=560):
     for i, nm in enumerate(names):
         col = "currentColor" if i == 0 else SERIES[(i - 1) % 3]
         parts.append(f'<circle cx="{lx + 5}" cy="8" r="5" style="fill:{col}"/>')
-        word = "yours" if i == 0 else nm[:24]
+        word = nm[:24]
         parts.append(_text(lx + 14, 12, word, size=10, opacity=0.85))
         lx += 26 + 6.0 * len(word)
     for k, (measure, unit, vals) in enumerate(rows):
