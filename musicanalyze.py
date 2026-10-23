@@ -3130,13 +3130,27 @@ def make_llm():
 REASONING_HINTS = {"gpt-oss": "Reasoning: low", "nemotron": "/no_think", "qwen3": "/no_think"}
 
 
-def _chat(client, model, prompt, quick=True):
+# Some reasoning models ignore the plain-text switch and spend their whole answer thinking (an empty reply); the
+# server can switch their thinking off instead (chat_template_kwargs). Used when MUSIC_THINKING_OFF=1, which
+# --bench-llm recommends when it's what made a model answer. Not for gpt-oss, which has its own switch.
+THINKING_OFF_FAMILIES = ("nemotron", "qwen3")
+
+
+def _thinks_at_server(model):
+    return any(k in model.lower() for k in THINKING_OFF_FAMILIES)
+
+
+def _chat(client, model, prompt, quick=True, thinking_off=None):
     """One chat request (OpenAI-compatible). quick=True asks reasoning models to skip long thinking
-    and gives them more room to answer."""
+    and gives them more room to answer; thinking_off (default: MUSIC_THINKING_OFF) also switches it off at the server."""
     hint = next((h for k, h in REASONING_HINTS.items() if k in model.lower()), None)
     messages = ([{"role": "system", "content": hint}] if hint and quick else []) +         [{"role": "user", "content": prompt}]
+    if thinking_off is None:
+        thinking_off = os.environ.get("MUSIC_THINKING_OFF") == "1"
+    extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} \
+        if thinking_off and _thinks_at_server(model) else {}
     r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=4096 if hint else 1200,
-                                       messages=messages)
+                                       messages=messages, **extra)
     msg = r.choices[0].message
     text = msg.content or ""
     if "{" not in text:  # some reasoning models leave the JSON in their reasoning when they run long
@@ -3326,7 +3340,9 @@ BENCH_GAP_IDS = "colour, harmony_degrees, mood"
 
 def bench_llm():
     """Time each model (the configured ones, then NVIDIA_BENCH_CANDIDATES or MUSIC_BENCH_MODELS) on the real prompt,
-    with your key, and print the .env settings for the fastest ones that give a complete answer."""
+    with your key and the app's own time limit, all at once; a reasoning model that replies empty is tried again with
+    its thinking switched off at the server (THINKING_OFF). Prints the .env settings for the fastest complete answers."""
+    import concurrent.futures as cf
     import math
     import time as _time
     if not os.environ.get("NVIDIA_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
@@ -3335,7 +3351,7 @@ def bench_llm():
         sys.exit("Set NVIDIA_API_KEY or OPENAI_API_KEY first.")
     import openai
     prompt = BRAINSTORM_PROMPT.format(key="E major", summary=BENCH_SUMMARY, gap_ids=BENCH_GAP_IDS)
-    limit = 90
+    limit = AI_DEADLINE_SECONDS  # the app's own limit: a model that answers within it works in the app
     if os.environ.get("NVIDIA_API_KEY"):
         client = openai.OpenAI(base_url=NVIDIA_BASE_URL, api_key=os.environ["NVIDIA_API_KEY"], timeout=limit, max_retries=0)
         extra = os.environ.get("MUSIC_BENCH_MODELS") or NVIDIA_BENCH_CANDIDATES
@@ -3345,38 +3361,54 @@ def bench_llm():
         client = openai.OpenAI(timeout=limit, max_retries=0)
         names = [os.environ.get("MUSIC_MODEL", OPENAI_MODEL)] + os.environ.get("MUSIC_BENCH_MODELS", "").split(",")
     models = [m for m in dict.fromkeys(n.strip() for n in names) if m]
-    print(f"Testing {len(models)} model(s), one request at a time ({len(prompt)}-character prompt, {limit} s limit "
-          "each). This takes a few minutes.\n", flush=True)
-    results = []
-    for model in models:
-        quick = True  # reasoning models with their "think less" switch, as the app uses them
+    print(f"Testing {len(models)} model(s) at the same time ({len(prompt)}-character prompt, {limit:.0f} s limit, the "
+          f"app's own). This takes up to {math.ceil(limit / 60)} minutes.\n", flush=True)
+
+    def one(model, thinking_off):
         t = _time.time()
         try:
-            text = _chat(client, model, prompt, quick=quick)
-            secs = _time.time() - t
+            text = _chat(client, model, prompt, thinking_off=thinking_off)
             usable = _complete_answer(text)
             note = ("complete answer" if usable else "EMPTY reply" if not text.strip() else
                     "incomplete answer" if _parse_json_reply(text) else "reply not usable")
         except Exception as e:
-            secs, usable = _time.time() - t, False
+            usable = False
             note = f"{type(e).__name__} {getattr(e, 'status_code', '') or ''}".strip()
             if getattr(e, "status_code", None) == 404:
                 note += " (not available for your key)"
-        print(f"  {model:50} {secs:6.1f}s   {note}", flush=True)
-        results.append((model, quick, secs, usable))
+            elif getattr(e, "status_code", None) == 400 and thinking_off:
+                note += " (this model doesn't take the thinking switch)"
+        return model, thinking_off, _time.time() - t, usable, note
+
+    def run(model):
+        first = one(model, False)
+        if not first[3] and "EMPTY" in first[4] and _thinks_at_server(model):
+            return [first, one(model, True)]  # it spent its answer thinking: switch the thinking off and ask again
+        return [first]
+    results = []
+    with cf.ThreadPoolExecutor(max_workers=len(models)) as pool:
+        for fut in cf.as_completed([pool.submit(run, m) for m in models]):
+            for model, off, secs, usable, note in fut.result():
+                print(f"  {model + ('  (thinking switched off)' if off else ''):62} {secs:6.1f}s   {note}", flush=True)
+                results.append((model, off, secs, usable))
     good = sorted([r for r in results if r[3]], key=lambda r: r[2])
     if not good:
-        print("\nNo model gave a usable answer. NVIDIA's free models may be overloaded right now - try again in a "
-              "while, try others with MUSIC_BENCH_MODELS=model1,model2, or use an OpenAI/Anthropic key.")
+        print("\nNo model gave a complete answer within the app's limit. NVIDIA's free models may be overloaded right "
+              "now - try again in a while, try others with MUSIC_BENCH_MODELS=model1,model2, or use an OpenAI or "
+              "Anthropic key.")
         return
     order = list(dict.fromkeys(r[0] for r in good))
-    # Real jobs ask for two tracks at once and free endpoints slow down under load: leave headroom.
-    deadline = min(240, max(90, math.ceil(good[0][2] * 4 / 10) * 10))
+    # the limit has to cover the slowest model recommended (a backup that needs longer would always be cut off),
+    # with headroom for a busier moment, within 90-240 s
+    slowest = max(min(r[2] for r in good if r[0] == m) for m in order[:3])
+    deadline = min(240, max(90, math.ceil(slowest * 1.3 / 10) * 10))
     print("\nRecommended .env settings (then run: docker compose up -d):\n")
     print(f"MUSIC_MODEL={order[0]}")
     if len(order) > 1:
         print(f"MUSIC_FALLBACK_MODELS={','.join(order[1:3])}")  # two backups: more just adds parallel requests
     print(f"MUSIC_AI_DEADLINE_SECONDS={deadline}")
+    if any(r[1] for r in good if r[0] in order[:3]):
+        print("MUSIC_THINKING_OFF=1")
 
 
 def _parse_json_reply(raw):

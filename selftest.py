@@ -648,6 +648,21 @@ def unit_checks():
                     return type("R", (), {"choices": [type("C", (), {"message": _Msg()})()]})()
     check("unit", "an answer a reasoning model left in its reasoning field is still used",
           ma._complete_answer(ma._chat(_Client, "nvidia/nemotron-x", "p")))
+    sent = {}
+
+    class _Spy:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(model, **k):
+                    sent[model] = "extra_body" in k
+                    return type("R", (), {"choices": [type("C", (), {"message": _Msg()})()]})()
+    for m in ("nvidia/nemotron-3.5-lightning-30b-a3b", "openai/gpt-oss-20b"):
+        ma._chat(_Spy, m, "p", thinking_off=True)
+    ma._chat(_Spy, "nvidia/nemotron-other", "p", thinking_off=False)
+    check("unit", "the server-side thinking switch goes to models that need it (nemotron), never to gpt-oss",
+          sent == {"nvidia/nemotron-3.5-lightning-30b-a3b": True, "openai/gpt-oss-20b": False,
+                   "nvidia/nemotron-other": False}, str(sent))
     ma.AI_HEDGE_SECONDS, ma.AI_DEADLINE_SECONDS = 0.3, 1.5
     t0 = time.time()
     info = {}
