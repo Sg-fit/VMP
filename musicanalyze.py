@@ -3053,7 +3053,9 @@ def _check_times(text, r, tolerance=3):
     # With a preposition in between ("add G#7 before C#m"), the second chord is a claim to check.
     # Up to five describing words may sit between the verb and the chord ("introduce a secondary dominant A7",
     # "add a bright, open Dsus4"), but no preposition: after one, the chord is what's already there.
-    suggest = re.compile(r"\b(?:insert|add|play|use|try|layer|introduce|swap|put|with|substitute|borrow)\s+"
+    # (gap ideas propose notes the track doesn't use yet: "a phrase using C, E and F# at 0:21" is a suggestion too)
+    suggest = re.compile(r"\b(?:insert|add|adding|play|use|using|try|layer|introduce|swap|put|with|substitute|borrow|"
+                         r"include|including|incorporate|featuring|bring\s+in)\s+"
                          r"(?:(?!(?:before|after|over|under|on|into|to|than|from|of|at|in|the)\b)[\w#',-]+\s+){0,5}$", re.I)
     tl = sorted(r["chord_timeline"], key=lambda c: c.get("start", _to_sec(c["time"])))
     starts = [c.get("start", _to_sec(c["time"])) for c in tl]

@@ -627,6 +627,9 @@ def unit_checks():
     check("unit", "AI timing check flags a wrong chord time", "⚠" in ma._check_times("Add G#7 before C#m at 0:35", fake))
     check("unit", "AI timing check flags a wrong section", "⚠" in ma._check_times("A sweep at 1:45 before the C section", fake))
     check("unit", "AI timing check accepts a correct claim", "⚠" not in ma._check_times("Lift into C#m at 0:47", fake))
+    gap_idea = "Add a short melodic phrase using C, E, and F# at 0:47-0:49 to explore missing scale degrees."
+    check("unit", "AI fact-check: notes the AI suggests adding (gap ideas) aren't read as claims; real claims still are",
+          "⚠" not in ma._check_times(gap_idea, fake) and "⚠" in ma._check_times("The F# at 0:47 clashes with the bass", fake))
     new_shape = json.dumps({"vibe": "v", "gap_ideas": [{"gap": "colour", "idea": "x"}, {"gap": "mood", "idea": "y"}],
                             "ideas": [{"area": "a", "idea": "z"}, {"area": "a", "idea": "w"}],
                             "alt_progressions": [{"name": "n", "chords": ["G"]}]})
