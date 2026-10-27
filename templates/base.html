@@ -1,27 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-look="pro">
 <head>
+  <script>try { if (localStorage.getItem('look') === 'studio') document.documentElement.dataset.look = 'studio'; } catch (e) {}</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Music Inspiration Analyzer{% endblock %}</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><rect width='20' height='20' fill='%23111'/><g fill='%23ff5a1f'><rect x='3' y='9' width='2' height='8'/><rect x='6.5' y='4' width='2' height='13'/><rect x='10' y='7' width='2' height='10'/><rect x='13.5' y='11' width='2' height='6'/></g></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><rect width='20' height='20' rx='4' fill='%231f3a5f'/><g fill='%23ffffff'><rect x='3' y='9' width='2' height='8'/><rect x='6.5' y='4' width='2' height='13'/><rect x='10' y='7' width='2' height='10'/><rect x='13.5' y='11' width='2' height='6'/></g></svg>">
   <style>
-    /* Style notes: docs/STYLE.md. One typeface, monochrome + one accent, square and flat. */
+    /* Style notes: docs/STYLE.md. Plain and professional: the system font, greys, one calm accent, light rules. */
     :root {
-      --bg: #f3f3f1; --surface: #ffffff; --ink: #111111;
-      --muted: rgba(17, 17, 17, .62); --line: rgba(17, 17, 17, .14); --faint: rgba(17, 17, 17, .05);
-      --accent: #ff5a1f; --on-accent: #111111; --err: #c4210b;
+      --bg: #f7f7f8; --surface: #ffffff; --ink: #1f2328;
+      --muted: rgba(31, 35, 40, .64); --line: rgba(31, 35, 40, .12); --faint: rgba(31, 35, 40, .04);
+      --accent: #1f3a5f; --on-accent: #ffffff; --err: #b42318; --radius: 6px;
       /* chart series: blue, orange, aqua - checked for colour-blind separation on these surfaces (charts.py) */
       --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a;
-      --sans: Futura, "Futura PT", "Avenir Next", Avenir, "Century Gothic", "Helvetica Neue", system-ui, sans-serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       color-scheme: light;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #191919; --surface: #222222; --ink: #ecf0f1;
-        --muted: rgba(236, 240, 241, .68); --line: rgba(236, 240, 241, .14); --faint: rgba(236, 240, 241, .06);
-        --err: #ff8a73; color-scheme: dark;
+        --bg: #16181b; --surface: #1d2024; --ink: #e6e8eb;
+        --muted: rgba(230, 232, 235, .66); --line: rgba(230, 232, 235, .12); --faint: rgba(230, 232, 235, .05);
+        --accent: #9db8de; --on-accent: #0f1b2d; --err: #ff8a73; color-scheme: dark;
         --c1: #3987e5; --c2: #d95926; --c3: #199e70;
       }
     }
@@ -34,19 +35,19 @@
     ::selection { background: var(--accent); color: var(--on-accent); }
 
     /* top bar */
-    .bar { border-bottom: 1px solid var(--line); }
+    .bar { border-bottom: 1px solid var(--line); background: var(--surface); }
     .bar-in { max-width: 1080px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center;
               justify-content: space-between; gap: 16px; }
     .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none;
-             font-weight: 700; letter-spacing: -.01em; }
+             font-weight: 600; }
     .meter { display: inline-flex; align-items: flex-end; gap: 2px; height: 18px; }
-    .meter i { display: block; width: 3px; background: var(--ink); }
-    .meter i:nth-child(1) { height: 45%; } .meter i:nth-child(2) { height: 100%; background: var(--accent); }
+    .meter i { display: block; width: 3px; background: var(--accent); border-radius: 1px; }
+    .meter i:nth-child(1) { height: 45%; } .meter i:nth-child(2) { height: 100%; }
     .meter i:nth-child(3) { height: 70%; } .meter i:nth-child(4) { height: 35%; } .meter i:nth-child(5) { height: 55%; }
     .bar nav { display: flex; gap: 18px; align-items: center; }
     .bar nav a { color: var(--muted); text-decoration: none; font-size: .92rem; }
     .bar nav a:hover { color: var(--ink); }
-    .bar nav a.me { color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--accent); }
+    .bar nav a.me { color: var(--ink); font-weight: 600; }
     @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 12px; } .bar nav a { font-size: .86rem; } }
 
     main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 56px; }
@@ -54,37 +55,37 @@
              color: var(--muted); font-size: .8rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
     /* type */
-    .eyebrow { font-size: .72rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
-               margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
-    .eyebrow::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
-    h1 { font-size: clamp(2rem, 4.6vw, 3.1rem); line-height: 1.04; letter-spacing: -.025em; font-weight: 700; margin: 0 0 10px; }
+    .eyebrow { font-size: .85rem; font-weight: 500; color: var(--muted); margin: 0 0 6px; }
+    h1 { font-size: clamp(1.7rem, 3.4vw, 2.3rem); line-height: 1.2; letter-spacing: -.01em; font-weight: 600; margin: 0 0 10px; }
     .lede { font-size: 1.05rem; max-width: 40em; color: var(--muted); margin: 0 0 18px; }
     .muted { color: var(--muted); }
     .small { font-size: .85rem; }
-    a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+    a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+    a:hover { text-decoration-thickness: 2px; }
 
-    /* controls: square, flat */
-    .btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--ink); border-radius: 0; cursor: pointer;
-           background: var(--ink); color: var(--bg); padding: 12px 20px; font: 600 .95rem/1 var(--sans);
-           text-decoration: none; letter-spacing: .01em; }
-    .btn:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    /* controls: quiet, slightly rounded */
+    .btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius);
+           cursor: pointer; background: var(--surface); color: var(--ink); padding: 10px 16px; font: 500 .92rem/1 var(--sans);
+           text-decoration: none; }
+    .btn:hover { border-color: var(--muted); }
     .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-    .btn.primary:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
-    .btn.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
-    .btn.secondary:hover { border-color: var(--ink); background: transparent; color: var(--ink); }
+    .btn.primary:hover { filter: brightness(1.12); }
+    .btn.secondary { background: var(--surface); color: var(--ink); border-color: var(--line); }
+    .btn.secondary:hover { border-color: var(--muted); }
     .btn:disabled { opacity: .55; cursor: progress; }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .error { color: var(--err); border-left: 3px solid var(--err); background: var(--faint); padding: 10px 14px; margin-bottom: 16px; }
+    .error { color: var(--err); border: 1px solid var(--err); border-radius: var(--radius); background: var(--faint);
+             padding: 10px 14px; margin-bottom: 16px; }
 
-    .panel { background: var(--surface); border: 1px solid var(--line); padding: 22px; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
+    input, select, textarea { border-radius: var(--radius); }
     code, pre { font-family: var(--mono); background: var(--faint); border-radius: 2px; }
     code { padding: 1px 5px; font-size: .86em; }
     pre { padding: 14px 16px; overflow-x: auto; font-size: .82rem; line-height: 1.45; border: 1px solid var(--line); }
     pre code { padding: 0; background: none; }
     table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; font-size: .92rem; display: block; overflow-x: auto; }
     th, td { border-bottom: 1px solid var(--line); padding: 9px 12px 9px 0; text-align: left; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
-         border-bottom-color: var(--ink); }
+    th { color: var(--muted); font-weight: 600; font-size: .8rem; }
     @media (max-width: 600px) { main { padding-top: 20px; } .panel { padding: 16px; } }
     /* Underlined terms explain themselves: hover with a mouse, tap on a phone (no hover there). */
     abbr[title] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
@@ -126,6 +127,70 @@
                           text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
   </style>
   {% block head %}{% endblock %}
+  <style>
+    /* Studio look (switch in the footer): the first design - Futura, signal orange, uppercase tracked labels with an
+       accent square, heavy ink rules, square corners. Everything else is shared with the default professional look. */
+    html[data-look="studio"] {
+      --bg: #f3f3f1; --surface: #ffffff; --ink: #111111;
+      --muted: rgba(17, 17, 17, .62); --line: rgba(17, 17, 17, .14); --faint: rgba(17, 17, 17, .05);
+      --accent: #ff5a1f; --on-accent: #111111; --radius: 0px;
+      --sans: Futura, "Futura PT", "Avenir Next", Avenir, "Century Gothic", "Helvetica Neue", system-ui, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      html[data-look="studio"] {
+        --bg: #191919; --surface: #222222; --ink: #ecf0f1;
+        --muted: rgba(236, 240, 241, .68); --line: rgba(236, 240, 241, .14); --faint: rgba(236, 240, 241, .06);
+        --accent: #ff5a1f; --on-accent: #111111;
+      }
+    }
+    html[data-look="studio"] .bar { background: transparent; }
+    html[data-look="studio"] .brand { font-weight: 700; letter-spacing: -.01em; }
+    html[data-look="studio"] .meter i { background: var(--ink); border-radius: 0; }
+    html[data-look="studio"] .meter i:nth-child(2) { background: var(--accent); }
+    html[data-look="studio"] h1 { font-size: clamp(2rem, 4.6vw, 3.1rem); line-height: 1.04; letter-spacing: -.025em; font-weight: 700; }
+    html[data-look="studio"] a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 2px;
+                                 text-underline-offset: 3px; }
+    html[data-look="studio"] .btn { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600;
+                                    padding: 12px 20px; }
+    html[data-look="studio"] .btn:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); filter: none; }
+    html[data-look="studio"] .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+    html[data-look="studio"] .btn.primary:hover { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+    html[data-look="studio"] .btn.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+    html[data-look="studio"] .btn.secondary:hover { border-color: var(--ink); color: var(--ink); background: transparent; }
+    html[data-look="studio"] .panel, html[data-look="studio"] .drop, html[data-look="studio"] .chip span,
+    html[data-look="studio"] .modes, html[data-look="studio"] .error, html[data-look="studio"] button.thumb { border-radius: 0; }
+    /* small uppercase labels with an accent square */
+    html[data-look="studio"] .eyebrow, html[data-look="studio"] th, html[data-look="studio"] label.field,
+    html[data-look="studio"] .inst-label, html[data-look="studio"] .report h3, html[data-look="studio"] .cmp h2,
+    html[data-look="studio"] .changed h2, html[data-look="studio"] .trends h2, html[data-look="studio"] .tl-head,
+    html[data-look="studio"] .pv h2, html[data-look="studio"] .stat h3, html[data-look="studio"] .style .spanel > h3,
+    html[data-look="studio"] .style .habits .area, html[data-look="studio"] .midis .label,
+    html[data-look="studio"] .downloads .menu .label, html[data-look="studio"] .tile .lab,
+    html[data-look="studio"] .readout span {
+      font-size: .72rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    html[data-look="studio"] .eyebrow, html[data-look="studio"] .report h3, html[data-look="studio"] .cmp h2,
+    html[data-look="studio"] .changed h2, html[data-look="studio"] .trends h2, html[data-look="studio"] .tl-head,
+    html[data-look="studio"] .pv h2, html[data-look="studio"] .stat h3 { display: flex; align-items: center; gap: 8px; }
+    html[data-look="studio"] .eyebrow::before, html[data-look="studio"] .report h3::before,
+    html[data-look="studio"] .cmp h2::before, html[data-look="studio"] .changed h2::before,
+    html[data-look="studio"] .trends h2::before, html[data-look="studio"] .tl-head::before,
+    html[data-look="studio"] .pv h2::before, html[data-look="studio"] .stat h3::before {
+      content: ""; width: 8px; height: 8px; background: var(--accent); flex: none; }
+    html[data-look="studio"] th { border-bottom-color: var(--ink); }
+    /* heavy ink rules */
+    html[data-look="studio"] .report h2 { border-top: 2px solid var(--ink); font-size: clamp(1.6rem, 3.6vw, 2.3rem);
+                                          font-weight: 700; letter-spacing: -.02em; }
+    html[data-look="studio"] .rhead, html[data-look="studio"] .shead, html[data-look="studio"] .report nav.tabs,
+    html[data-look="studio"] .style nav.stabs { border-bottom: 2px solid var(--ink); }
+    html[data-look="studio"] .features, html[data-look="studio"] .privacy-strip,
+    html[data-look="studio"] .peek { border-top: 2px solid var(--ink); }
+    html[data-look="studio"] .modes { border-color: var(--ink); }
+    html[data-look="studio"] .modes input:checked + span, html[data-look="studio"] .chip input:checked + span {
+      background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    footer .looks button { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+    footer .looks button[aria-pressed="true"] { color: var(--ink); font-weight: 600; text-decoration: underline;
+                                                text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  </style>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
 <header class="bar"><div class="bar-in">
@@ -304,7 +369,7 @@
     document.querySelectorAll('.report h2').forEach((h, n) => {
       if (!timedIn(n).length) return;
       const box = document.createElement('div'); box.className = 'listen';
-      box.innerHTML = '<label>🎧 Listen along<input type="file" accept="audio/*"></label>' +
+      box.innerHTML = '<label>Listen along<input type="file" accept="audio/*"></label>' +
         '<span class="muted">Pick your copy of this track: it plays here in your browser and is never uploaded. ' +
         'Then click any chart along the timeline to play from there.</span>';
       h.insertAdjacentElement('afterend', box);
@@ -375,8 +440,22 @@
   })();
 </script>
 <footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks ·
-  <a href="{{ url_for('privacy') }}">🔒 Privacy: your unreleased music stays yours</a> ·
-  <button type="button" class="limits-link" data-open-intro>What the app can't do</button></span>
+  <a href="{{ url_for('privacy') }}">Privacy: your unreleased music stays yours</a> ·
+  <button type="button" class="limits-link" data-open-intro>What the app can't do</button> ·
+  <span class="looks" role="group" aria-label="Look">Look: <button type="button" data-look="pro">Professional</button> /
+    <button type="button" data-look="studio">Studio</button></span></span>
   {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
+<script>
+  (function () {  // the look switch: remembered in this browser only
+    const btns = document.querySelectorAll('footer .looks button');
+    const mark = () => btns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.look === document.documentElement.dataset.look)));
+    btns.forEach(b => b.addEventListener('click', () => {
+      document.documentElement.dataset.look = b.dataset.look;
+      try { localStorage.setItem('look', b.dataset.look); } catch (e) {}
+      mark();
+    }));
+    mark();
+  })();
+</script>
 </body>
 </html>

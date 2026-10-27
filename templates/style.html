@@ -5,12 +5,12 @@
 {{ style_css() }}
 <style>
   .shead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end;
-           padding-bottom: 12px; border-bottom: 2px solid var(--ink); margin-bottom: 14px; }
+           padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
   @media (max-width: 760px) { .shead { grid-template-columns: 1fr; } }
   .shead h1 { margin: 0; }
   .shead .sub { margin: 6px 0 0; font-size: .9rem; color: var(--muted); }
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .filters select { font: inherit; font-size: .88rem; padding: 7px 9px; border: 1px solid var(--line); border-radius: 0;
+  .filters select { font: inherit; font-size: .88rem; padding: 7px 9px; border: 1px solid var(--line); border-radius: var(--radius);
                     background: var(--bg); color: var(--ink); }
   .empty { max-width: 40em; }
 </style>

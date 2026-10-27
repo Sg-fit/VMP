@@ -4,7 +4,7 @@
 {% block head %}
 <style>
   .working { display: inline-flex; align-items: flex-end; gap: 4px; height: 48px; margin: 0 0 24px; }
-  .working i { width: 7px; height: 100%; background: var(--ink); transform-origin: bottom; animation: level 1s ease-in-out infinite; }
+  .working i { width: 7px; height: 100%; background: var(--accent); transform-origin: bottom; animation: level 1s ease-in-out infinite; }
   .working i:nth-child(2) { background: var(--accent); animation-delay: -.2s; } .working i:nth-child(3) { animation-delay: -.5s; }
   .working i:nth-child(4) { animation-delay: -.7s; } .working i:nth-child(5) { animation-delay: -.35s; }
   @keyframes level { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
@@ -14,24 +14,23 @@
   .savebar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
   /* the results header: the title and what you can do with it, side by side */
   .rhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end;
-           padding-bottom: 12px; border-bottom: 2px solid var(--ink); }
+           padding-bottom: 12px; border-bottom: 1px solid var(--line); }
   @media (max-width: 760px) { .rhead { grid-template-columns: 1fr; } }
   .rhead h1 { margin: 0; }
   .rhead .sub { font-size: .9rem; color: var(--muted); margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px;
                 align-items: center; }
   .rhead .sub form { margin: 0; display: inline; }
   .rhead .sub .ok { color: var(--ink); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
-  .rhead .sub .ok::before { content: ""; width: 7px; height: 7px; background: var(--accent); }
   .rhead .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
   .rhead .acts .btn { padding: 9px 14px; font-size: .88rem; }
   .downloads { position: relative; }
   .downloads > summary { list-style: none; cursor: pointer; }
   .downloads > summary::-webkit-details-marker { display: none; }
   .downloads .menu { position: absolute; right: 0; z-index: 6; min-width: 260px; max-width: min(90vw, 420px);
-                     background: var(--surface); border: 1px solid var(--ink); padding: 10px 12px; display: grid; gap: 6px;
+                     background: var(--surface); border: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 6px;
                      font-size: .88rem; }
   .downloads .menu a { overflow-wrap: anywhere; }
-  .downloads .menu .label { font-size: .68rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+  .downloads .menu .label { font-size: .8rem; font-weight: 600;
                             color: var(--muted); margin-top: 4px; }
   .linkbtn { font: inherit; font-size: .88rem; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
              text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
@@ -47,14 +46,13 @@
   .organise label { display: grid; gap: 3px; font-size: .78rem; color: var(--muted); }
   .organise label.inline { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: .9rem; }
   .organise input:not([type=checkbox]), .organise select, .organise textarea { font: inherit; font-size: .9rem; padding: 6px 8px;
-      border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--ink); }
+      border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--ink); }
   .organise .btn { justify-self: start; padding: 8px 14px; }
   .savebar form { margin: 0; }
   .savebar .ok { font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
-  .savebar .ok::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .midis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
            align-items: center; }
-  .midis .label { font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  .midis .label { font-size: .82rem; font-weight: 600; color: var(--muted);
                   margin-right: 6px; }
   .midis a, a.midi { display: inline-block; border: 1px solid var(--line); color: var(--ink); text-decoration: none;
                      padding: 3px 9px; font-size: .84rem; max-width: 100%; overflow-wrap: anywhere; }
@@ -63,18 +61,17 @@
   .report { margin-top: 14px; }
   h2.style-h { margin: 26px 0 6px; font-size: clamp(1.4rem, 3vw, 1.9rem); letter-spacing: -.02em; }
   .report h1 { display: none; }  /* the page already has a title */
-  .report h2 { margin: 36px 0 6px; padding-top: 12px; border-top: 2px solid var(--ink); font-size: clamp(1.6rem, 3.6vw, 2.3rem);
-               line-height: 1.1; letter-spacing: -.02em; overflow-wrap: anywhere; }
+  .report h2 { margin: 36px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); font-size: clamp(1.3rem, 2.6vw, 1.65rem);
+               line-height: 1.25; letter-spacing: -.01em; font-weight: 600; overflow-wrap: anywhere; }
   .report h2 + p { font-size: 1.05rem; }
-  .report h3 { margin: 26px 0 8px; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  .report h3 { margin: 26px 0 8px; font-size: 1.05rem; font-weight: 600;
                display: flex; align-items: center; gap: 8px; }
-  .report h3::before { content: ""; width: 8px; height: 8px; background: var(--accent); flex: none; }
   .report ul { padding-left: 18px; } .report li { margin: 5px 0; } .report li::marker { color: var(--muted); }
   .report blockquote { margin: 0 0 12px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--faint); }
   .report details { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
   .report summary { cursor: pointer; font-weight: 600; }
   .report summary::marker { color: var(--accent); }
-  .report hr { border: 0; border-top: 2px solid var(--ink); margin: 64px 0 12px; }
+  .report hr { border: 0; border-top: 1px solid var(--line); margin: 64px 0 12px; }
   .report hr + p, .report hr + p + p { color: var(--muted); font-size: .82rem; }
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
   .report details ul { padding-left: 20px; }
@@ -90,7 +87,7 @@
                                    display: inline-flex; gap: 8px; align-items: center; }
   .report details.more > summary::-webkit-details-marker { display: none; }
   .report details.more > summary::before { content: "+"; width: 18px; height: 18px; display: inline-grid; place-items: center;
-                                           border: 1px solid var(--line); font-weight: 700; color: var(--ink); }
+                                           border: 1px solid var(--line); font-weight: 600; color: var(--ink); }
   .report details.more[open] > summary::before { content: "−"; }
   .report details.more > summary:hover { color: var(--ink); }
   /* each track: a summary with every picture, then one tab per part */
@@ -106,7 +103,7 @@
   .report button.thumb .tl b { color: var(--ink); font-weight: 600; }
   .report button.thumb svg { width: 100%; height: 78px; margin: 0 !important; pointer-events: none; }
   .report nav.tabs { position: sticky; top: 0; z-index: 4; display: flex; gap: 0 2px; overflow-x: auto; overflow-y: hidden; margin: 14px 0 0;
-                     background: var(--bg); border-bottom: 2px solid var(--ink); scrollbar-width: thin; }
+                     background: var(--bg); border-bottom: 1px solid var(--line); scrollbar-width: thin; }
   .report nav.tabs .tab { flex: none; padding: 9px 12px 7px; font-size: .86rem; font-weight: 600; color: var(--muted);
                           text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -2px; }
   .report nav.tabs .tab:hover { color: var(--ink); }
@@ -118,13 +115,14 @@
   .report .track.tabbed > section.rsec > h3 { display: none; }  /* the tab names it */
   .report svg.flash { outline: 2px solid var(--accent); outline-offset: 4px; transition: outline-color 1.5s; }
   .aibar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-           margin-top: 16px; padding: 12px 16px; background: var(--ink); color: var(--bg); font-size: .92rem; }
+           margin-top: 16px; padding: 12px 16px; background: var(--accent); color: var(--on-accent); font-size: .92rem;
+           border-radius: var(--radius); }
   .aibar .dot { width: 8px; height: 8px; background: var(--accent); flex: none; animation: blink 1.2s steps(2) infinite; }
   .aibar.done .dot { animation: none; }
   @keyframes blink { 50% { opacity: .2; } }
   @media (prefers-reduced-motion: reduce) { .aibar .dot { animation: none; } }
   .aibar .btn { padding: 7px 12px; }
-  .notify { font: inherit; font-size: .85rem; cursor: pointer; border-radius: 0; padding: 7px 12px;
+  .notify { font: inherit; font-size: .85rem; cursor: pointer; border-radius: var(--radius); padding: 7px 12px;
             background: transparent; color: inherit; border: 1px solid currentColor; display: inline-flex; gap: 8px;
             align-items: center; }
   .notify::before { content: ""; width: 8px; height: 8px; border: 1px solid currentColor; }
@@ -135,7 +133,7 @@
 {% endblock %}
 {% macro privacy_box() %}
 <div class="privacy-box" id="privacy">
-  <b>🔒 Who can see this:</b>
+  <b>Who can see this:</b>
   {% if s.demo %}<span>Everyone: it's a demo, made from generated audio.</span>
   {% elif s.shared %}<span><b>Anyone with this link</b> can open it{% if not saved %}, until {{ expires|datetime }}{% endif %}.</span>
   {% elif saved %}<span><b>Only you.</b> It's in your private history, until you delete it.</span>

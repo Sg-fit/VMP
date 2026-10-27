@@ -27,26 +27,37 @@ The rules that follow from that:
 
 ## How the app applies it
 
-- **Type:** a geometric sans stack (`Futura, "Avenir Next", Avenir, "Century Gothic", system-ui`), so it uses what is
-  installed and never loads fonts from a third party. Headlines 700 weight, -0.02em tracking, tight line height.
-  Monospace only for the drum/bass grids.
-- **Colour:** light `#f3f3f1` / ink `#111`; dark `#191919` / `#ecf0f1`. Secondary text and lines are the ink colour at
-  reduced opacity. Accent: signal orange `#ff5a1f` (a hardware-LED colour, our own rather than borrowed), always with
-  black text on it for contrast.
+**Oct 2026: plain and professional.** The first look (Futura, signal orange, uppercase labels, square black rules)
+read as a fashion or gadget site. It's now a quiet working tool: the reader's own system font, greys, one calm accent,
+light rules, small rounded corners. The rules below are the current ones.
+
+**Two looks.** Professional is the default. The first design lives on as **Studio** (Futura, signal orange,
+uppercase tracked labels with an accent square, heavy ink rules, square corners), switched in the footer
+("Look: Professional / Studio"). It's one block of `html[data-look="studio"]` overrides at the end of
+`templates/base.html`'s head, so pages are styled once and Studio only restyles them. The choice is kept in the
+browser (localStorage) and applied before the page draws, so there's no flash; it never reaches the server.
+
+- **Type:** the system UI font (`system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial`): what the
+  reader's own apps use, and nothing loaded from a third party. Headings semibold (600), never heavier; headline at most
+  2.3 rem. Sentence case everywhere: no uppercase or tracked-out labels. Monospace only for the drum/bass grids.
+- **Colour:** light `#f7f7f8` page, white surfaces, ink `#1f2328`; dark `#16181b` / `#1d2024` / `#e6e8eb`. Secondary
+  text and lines are the ink at reduced opacity. One accent, a calm navy `#1f3a5f` (dark mode `#9db8de`): the main
+  button, links, the selected tab or option, focus. It's kept apart from the chart blue so a chart never looks like a
+  button.
 - **Charts** (`charts.py`, inline SVG): your own track is always drawn in the ink colour; other series use blue
   `#2a78d6`, orange `#eb6834`, aqua `#1baf7a` (dark mode `#3987e5`, `#d95926`, `#199e70`), in that fixed order. That
   set passes a colour-blind separation check against both surfaces (worst pair ΔE 9.2 light, 9.4 dark); aqua is
   under 3:1 on white, so charts always carry labels or sit next to the numbers. Thin marks, hairline axes, 4 px
   rounded bar ends, a 2 px surface gap between touching blocks, a 2 px surface ring on dots, `<title>` tooltips on
   every mark, a legend whenever there are two or more series. Labels never wear a series colour.
-- **Shape:** 0 px corners on cards, buttons and inputs; 2 px on inline code. 1 px hairlines; a 2 px ink rule above
-  each track in the report.
-- **Logo:** five level-meter bars, drawn in CSS.
+- **Shape:** 6 px corners on buttons and inputs, 8 px on panels, round chips; 1 px grey rules only (no heavy black
+  rules, no decorative squares).
+- **Logo:** five level-meter bars in the accent, drawn in CSS.
 - **Motion:** the "analysing" spinner is a level meter that bounces; it stops for people who prefer reduced motion.
-- **Emoji** are stripped from the interface and from report headings when shown on the page (the downloaded `.md`
+- **Emoji** are kept out of the interface (no padlocks or headphones on buttons) and stripped from report headings when shown on the page (the downloaded `.md`
   report is unchanged).
 - **Density** (Oct 2026 redesign): pictures before paragraphs, and no big empty bands. Page padding 28 px, gaps
-  between blocks 12-36 px, headline at most 3.1 rem. Every report section shows its gist and folds the rest into a
+  between blocks 12-36 px, headline at most 2.3 rem. Every report section shows its gist and folds the rest into a
   **More** box; one sentence of help instead of a paragraph, longer help behind a tooltip or a fold.
 - **Interactive by default:** every chart mark has a tooltip (hover or tap); charts on a track's timeline light up
   the same moment together and play from it in **Listen along** (the musician's own file, never uploaded); drum

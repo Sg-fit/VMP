@@ -17,7 +17,7 @@ import math
 C1, C2, C3 = "var(--c1, #2a78d6)", "var(--c2, #eb6834)", "var(--c3, #1baf7a)"
 SERIES = [C1, C2, C3]
 GRID = "currentColor"  # drawn at low opacity: a recessive hairline in either theme
-ACCENT = "var(--accent, #ff5a1f)"
+ACCENT = "var(--accent, #1f3a5f)"
 esc = lambda s: html.escape(str(s), quote=True)
 
 

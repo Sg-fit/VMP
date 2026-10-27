@@ -3,21 +3,21 @@
 {% block head %}
 <style>
   .acct { max-width: 440px; }
-  .acct label { position: relative; display: flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 600; letter-spacing: .12em;
-                text-transform: uppercase; margin-bottom: 6px; }
+  .acct label { position: relative; display: flex; align-items: center; gap: 8px; font-size: .85rem; font-weight: 600;
+                margin-bottom: 6px; }
   .acct input[type=text], .acct input[type=password] { width: 100%; font: inherit; font-size: 1.05rem; padding: 11px 12px;
-      border-radius: 0; border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 16px; }
+      border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin-bottom: 16px; }
   .acct input:focus { border-color: var(--ink); outline: none; }
   .acct .btn { width: 100%; justify-content: center; margin-top: 4px; }
   .switch { margin-top: 18px; font-size: .92rem; }
 
   /* "?" next to a field: the rule and why, on hover (mouse) or tap/focus (phones and keyboards) */
   .hint { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none;
-          border: 1px solid var(--muted); color: var(--muted); font-size: .7rem; font-weight: 700; letter-spacing: 0;
+          border: 1px solid var(--muted); color: var(--muted); font-size: .7rem; font-weight: 600; letter-spacing: 0;
           text-transform: none; cursor: help; user-select: none; }
   .hint:hover, .hint:focus { border-color: var(--accent); color: var(--ink); outline: none; }
   .hint .tip { display: none; position: absolute; z-index: 10; left: 0; right: 0; top: calc(100% + 6px);
-               padding: 12px 14px; background: var(--ink); color: var(--bg);
+               padding: 12px 14px; background: var(--accent); color: var(--on-accent);
                font-size: .84rem; font-weight: 400; line-height: 1.45; text-align: left; cursor: auto; }
   .hint:hover .tip, .hint:focus .tip, .hint:focus-within .tip { display: block; }
   .tip ul { margin: 0; padding-left: 16px; } .tip li { margin: 0 0 6px; } .tip li:last-child { margin: 0; }

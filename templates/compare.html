@@ -2,7 +2,7 @@
 {% block title %}Compare · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
-  .cmp-pick { border-top: 2px solid var(--ink); margin-top: 24px; padding-top: 14px; }
+  .cmp-pick { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 14px; }
   .cmp-pick details { margin: 0 0 12px; }
   .cmp-pick summary { cursor: pointer; font-weight: 600; }
   .cmp-lib { list-style: none; padding: 0; margin: 10px 0; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); }
@@ -10,13 +10,12 @@
   .cmp-lib .when { color: var(--muted); font-size: .8rem; margin-left: 6px; }
   .cmp-lib label { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 0 0; font-size: .9rem; }
   .cmp-pick input.text { width: min(100%, 520px); font: inherit; padding: 8px 10px; border: 1px solid var(--line);
-                         border-radius: 0; background: var(--bg); color: var(--ink); margin: 4px 0; }
+                         border-radius: var(--radius); background: var(--bg); color: var(--ink); margin: 4px 0; }
   .who { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 16px 0 6px; }
   .who span { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
   .who i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-  .cmp h2 { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; display: flex;
+  .cmp h2 { font-size: 1.1rem; font-weight: 600; display: flex;
             align-items: center; gap: 8px; margin: 24px 0 8px; }
-  .cmp h2::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .cmp table { width: 100%; font-size: .92rem; }
   .cmp .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px 36px; }
   .cmp figure { border-top: 1px solid var(--line); padding-top: 10px; }
