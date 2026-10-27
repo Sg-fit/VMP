@@ -66,6 +66,12 @@ def init(path):
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 job_id TEXT NOT NULL, track TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL,
                 created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS interest (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                section TEXT NOT NULL,
+                opens INTEGER NOT NULL DEFAULT 0, reads INTEGER NOT NULL DEFAULT 0, charts INTEGER NOT NULL DEFAULT 0,
+                updated REAL NOT NULL,
+                PRIMARY KEY (user_id, section));
         """)
 
 
@@ -161,11 +167,51 @@ def delete_memory_item(user_id, table, item_id):
         db.execute(f"DELETE FROM {table} WHERE id = ? AND user_id = ?", (item_id, user_id))
 
 
+# ---------------------------------------------------------------- which parts of the report you use
+# Only the section's name and three counts are kept - never which track, when, or for how long. The report opens
+# the parts you use most and lists them first in its "jump to" bar.
+INTEREST_SECTIONS = ("admire", "harmony", "structure", "energy", "instruments", "melody", "dna", "groove",
+                     "producer", "past", "gaps", "ideas", "ai", "sheet", "midi")
+INTEREST_KINDS = {"open": "opens", "read": "reads", "chart": "charts"}  # unfolded it / read it / explored its charts
+# What each kind says about interest: unfolding a section's details is a deliberate choice, exploring its charts
+# nearly so; reading (on screen for a while) happens on the way past too.
+INTEREST_WEIGHTS = {"opens": 3, "charts": 2, "reads": 1}
+
+
+def add_interest(user_id, section, kind):
+    col = INTEREST_KINDS.get(kind)
+    if section not in INTEREST_SECTIONS or not col:
+        return False
+    with _connect() as db:
+        db.execute("INSERT INTO interest (user_id, section, updated) VALUES (?, ?, ?) "
+                   "ON CONFLICT (user_id, section) DO NOTHING", (user_id, section, time.time()))
+        db.execute(f"UPDATE interest SET {col} = {col} + 1, updated = ? WHERE user_id = ? AND section = ?",
+                   (time.time(), user_id, section))
+    return True
+
+
+def interest(user_id):
+    """{section: {"opens", "reads", "charts", "score"}}, the most used first."""
+    with _connect() as db:
+        rows = db.execute("SELECT section, opens, reads, charts FROM interest WHERE user_id = ?", (user_id,)).fetchall()
+    out = {r["section"]: {k: r[k] for k in ("opens", "reads", "charts")} for r in rows}
+    for v in out.values():
+        v["score"] = sum(INTEREST_WEIGHTS[k] * v[k] for k in INTEREST_WEIGHTS)
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["score"]))
+
+
+def forget_interest(user_id):
+    with _connect() as db:
+        db.execute("DELETE FROM interest WHERE user_id = ?", (user_id,))
+
+
 def forget_everything(user_id):
-    """Every vote, correction and goal gone, and the memory switched off. Saved analyses stay (that's History)."""
+    """Every vote, correction, goal and reading habit gone, and the memory switched off. Saved analyses stay
+    (that's History)."""
     with _connect() as db:
         db.execute("DELETE FROM feedback WHERE user_id = ?", (user_id,))
         db.execute("DELETE FROM corrections WHERE user_id = ?", (user_id,))
+        db.execute("DELETE FROM interest WHERE user_id = ?", (user_id,))
         db.execute("UPDATE users SET memory_on = 0, goals = '' WHERE id = ?", (user_id,))
 
 
@@ -313,14 +359,14 @@ def export(user_id):
     u = get_user(user_id)
     return {"username": u["username"], "created": u["created"], "memory_on": bool(u.get("memory_on")),
             "goals": u.get("goals", ""), "saved": history(user_id), "feedback": list_feedback(user_id),
-            "corrections": list_corrections(user_id)}
+            "corrections": list_corrections(user_id), "report_sections_used": interest(user_id)}
 
 
 def delete_account(user_id):
     """Remove the user and every row about them. Returns the job ids whose files the app must delete."""
     with _connect() as db:
         jobs = [r["job_id"] for r in db.execute("SELECT job_id FROM saved WHERE user_id = ?", (user_id,))]
-        for table in ("feedback", "corrections", "saved"):
+        for table in ("feedback", "corrections", "interest", "saved"):
             db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     return jobs

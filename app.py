@@ -19,6 +19,7 @@ Environment variables (all optional):
   JOB_TIMEOUT_MIN  stop a job that runs longer than this (default 30)
 """
 
+import html
 import io
 import hashlib
 import json
@@ -48,6 +49,7 @@ import demos
 import trends
 import memory
 import musicanalyze as ma
+import style
 from job_runner import read_status, write_status
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "jobs"))
@@ -327,7 +329,7 @@ def intro_seen():
 app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES)
 
 
-PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account")
+PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style")
 
 
 @app.after_request
@@ -420,7 +422,7 @@ def _job_title(d):
         names = [ln.strip() for ln in (st.get("songs") or "").splitlines() if ln.strip()]
         what = title or ", ".join(names[:2]) + (f" +{len(names) - 2} more" if len(names) > 2 else "")
         return "Tags: " + (what or ("playlist" if st.get("playlist") else "songs"))
-    return title or "Analysis"
+    return ("Style: " + title if st.get("mode") == "style" and title else title) or "Analysis"
 
 
 def _summaries(items):
@@ -519,6 +521,7 @@ def memory_page():
     if u.get("memory_on"):
         mem = user_memory(u)
     return render_template("memory.html", mem=mem, feedback=accounts.list_feedback(u["id"]),
+                           interest=accounts.interest(u["id"]), section_names=SECTION_NAMES,
                            corrections=accounts.list_corrections(u["id"]), fields=accounts.CORRECTABLE,
                            genres={k: v[0] for k, v in ma.GENRES.items()}, instruments=ma.INSTRUMENTS,
                            version=ma.CODE_VERSION)
@@ -542,6 +545,24 @@ def memory_forget():
 def memory_delete(table, item_id):
     u = _require_user()
     accounts.delete_memory_item(u["id"], table, item_id)
+    return redirect(url_for("memory_page"))
+
+
+@app.post("/interest")
+def record_interest():
+    """Which part of a report someone used: {section, kind}. Kept only for a signed-in musician with the memory
+    on (section name and counts, nothing about the track); everyone else's stays in their own browser."""
+    u = current_user()
+    data = request.get_json(silent=True) or {}
+    if u and u.get("memory_on"):
+        accounts.add_interest(u["id"], str(data.get("section", ""))[:20], str(data.get("kind", ""))[:10])
+    return "", 204
+
+
+@app.post("/memory/interest/forget")
+def interest_forget():
+    u = _require_user()
+    accounts.forget_interest(u["id"])
     return redirect(url_for("memory_page"))
 
 
@@ -787,7 +808,9 @@ def form_page(error=None, code=200):
                            instruments=ma.INSTRUMENTS, instrument_groups=ma.INSTRUMENT_GROUPS,
                            genres={k: v[0] for k, v in ma.GENRES.items()},
                            max_mb=MAX_UPLOAD_MB, exts=" ".join(sorted(ma.AUDIO_EXTS)), ttl=JOB_TTL_HOURS,
-                           mode="tags" if request.form.get("mode") == "tags" or request.path == "/find" else "musician",
+                           mode=request.form.get("mode") if request.form.get("mode") in ("tags", "style") else
+                           "tags" if request.path == "/find" else "style" if request.path == "/style/new" else "musician",
+                           library_tracks=len(style_tracks()) if current_user() else 0,
                            form=request.form, demos=demos.DEMOS, demo_pictures=demo_pictures(),
                            prefill=memory.prefill(user_memory(current_user()))), code
 
@@ -801,6 +824,57 @@ def index():
 def find():
     """The same form, opened on "Find music like this"."""
     return form_page()
+
+
+@app.get("/style/new")
+def style_new():
+    """The same form, opened on "Your style"."""
+    return form_page()
+
+
+def style_tracks(job_ids=None):
+    """[{r, name, session, when, title, project}] for the style page: every track of yours across all your upload
+    sessions - your saved analyses when you're signed in, else this browser's own results (kept a day). Songs you
+    compared with and tag lists are left out: they aren't your music."""
+    u, out = current_user(), []
+    if u:
+        items = [(it["job_id"], it["created"], it["title"], it.get("project") or "")
+                 for it in accounts.history(u["id"]) if (it.get("summary") or {}).get("kind") != "tags"]
+    else:
+        me, items = _browser_id(), []
+        if me and DATA_DIR.is_dir():
+            for d in DATA_DIR.iterdir():
+                if not JOB_ID.match(d.name):
+                    continue
+                st = read_status(d)
+                if st.get("visitor") == me and st.get("state") == "done" and st.get("mode") in ("musician", "style") \
+                        and not st.get("demo") and accounts.owner_of(d.name) is None:
+                    items.append((d.name, st.get("created") or 0, _job_title(d), ""))
+    for job_id, when, title, project in items:
+        if job_ids is not None and job_id not in job_ids:
+            continue
+        for _, r in tracks_of(job_id):
+            out.append({"r": r, "name": Path(r["file"]).stem[:60], "session": job_id, "when": when, "title": title,
+                        "project": project})
+    return out
+
+
+@app.get("/style")
+def style_page():
+    """Your style across every track and upload session, or within one project or time span."""
+    u = current_user()
+    tracks = style_tracks()
+    project, frame = request.args.get("project", ""), request.args.get("frame", "all")
+    projects = sorted({t["project"] for t in tracks if t["project"]})
+    if project:
+        tracks = [t for t in tracks if t["project"] == project]
+    if frame in trends.FRAMES and trends.FRAMES[frame][1]:
+        since = time.time() - trends.FRAMES[frame][1] * 86400
+        tracks = [t for t in tracks if t["when"] >= since]
+    view = style.profile(tracks)
+    return render_template("style.html", view=view, pics=style.pictures(view), projects=projects, project=project,
+                           frame=frame, frames=trends.FRAMES, signed_in=bool(u), min_tracks=style.MIN_TRACKS,
+                           hurl=lambda job_id: url_for("job", job_id=job_id), version=ma.CODE_VERSION)
 
 
 _demo_lock = threading.Lock()
@@ -829,6 +903,7 @@ def demo(slug):
 def analyze():
     uploads = [f for f in request.files.getlist("tracks") if f and f.filename]
     tags_mode = request.form.get("mode") == "tags"
+    style_mode = request.form.get("mode") == "style"
     playlist = (request.form.get("playlist") or "").strip()[:500]
     songs = (request.form.get("songs") or "")[:8000]
     description = (request.form.get("description") or "").strip()[:300]
@@ -839,6 +914,10 @@ def analyze():
         return form_page("Choose at least one audio file to get started." if not tags_mode else
                          "Add a few songs first (upload them, paste a playlist link or type their names), or "
                          "describe what you're after.", 400)
+    if style_mode and len(uploads) < 2:
+        return form_page("Add at least two tracks: a style is what they have in common."
+                         + (" Or open Your style to read it from the tracks you've saved." if current_user() else ""),
+                         400)
     if len(uploads) > MAX_FILES:
         return form_page(f"That's more than {MAX_FILES} files. Upload up to {MAX_FILES} at a time.", 400)
 
@@ -863,7 +942,7 @@ def analyze():
         shutil.rmtree(d, ignore_errors=True)
         return form_page("We can't read any of those files. Try mp3, wav, m4a, flac, ogg or aac.", 400)
     references = []  # songs the musician admires, to measure their tracks against (up to ma.MAX_REFERENCES)
-    ref_uploads = [f for f in request.files.getlist("reference") if f and f.filename] if not tags_mode else []
+    ref_uploads = [f for f in request.files.getlist("reference") if f and f.filename] if not (tags_mode or style_mode) else []
     if len(ref_uploads) > ma.MAX_REFERENCES:
         shutil.rmtree(d, ignore_errors=True)
         return form_page(f"Up to {ma.MAX_REFERENCES} songs you admire at a time, please.", 400)
@@ -885,10 +964,11 @@ def analyze():
                      description=description, created=time.time(),
                      message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
     else:
-        write_status(d, state="queued", mode="musician", files=saved, references=references,
+        # "style": the same analysis of every track, read together on the result page (no AI: it's per track)
+        write_status(d, state="queued", mode="style" if style_mode else "musician", files=saved, references=references,
                      visitor=_browser_id(create=True),
                      memory=user_memory(current_user()),  # None unless signed in with the memory switched on
-                     use_ai=bool(LLM and request.form.get("ai")),
+                     use_ai=bool(LLM and request.form.get("ai")) and not style_mode,
                      melody=(request.form.get("melody") or "")[:2000],
                      context=ma.clean_context(request.form.getlist("instruments"), request.form.get("genre")),
                      created=time.time(),
@@ -898,6 +978,113 @@ def analyze():
         accounts.save_job(u["id"], job_id, _job_title(d))
     job_queue.put(job_id)
     return redirect(url_for("job", job_id=job_id))
+
+
+# Each report section's key (for folding and for remembering which parts a musician uses), by a word of its title
+SECTION_WORDS = [("admire", "you admire"), ("harmony", "Harmony"), ("structure", "Structure"),
+                 ("energy", "Energy"), ("instruments", "Instruments"), ("melody", "Melody"), ("dna", "Shared DNA"),
+                 ("groove", "Groove"), ("producer", "Producer"), ("past", "earlier tracks"),
+                 ("gaps", "what's missing"), ("ideas", "Ideas to try"), ("ai", "AI brainstorm"),
+                 ("sheet", "Sheet music"), ("midi", "MIDI")]
+assert {k for k, _ in SECTION_WORDS} == set(accounts.INTEREST_SECTIONS)
+SECTION_NAMES = {"admire": "Songs you admire", "harmony": "Harmony", "structure": "Structure", "energy": "Energy & mood",
+                 "instruments": "Instruments", "melody": "Melody", "dna": "Shared DNA", "groove": "Groove & sound",
+                 "producer": "Producer's view", "past": "Earlier tracks", "gaps": "What's missing", "ideas": "Ideas",
+                 "ai": "AI ideas", "sheet": "Sheet music", "midi": "MIDI"}
+
+
+def section_key(title):
+    t = title.lower().replace("’", "'")
+    return next((k for k, w in SECTION_WORDS if w.lower() in t), None)
+
+
+def fold_sections(report_html):
+    """Each report section (an <h3> and what follows it, up to the next heading) becomes a <section> with its key.
+    Where the report marked the gist (<!--more-->, musicanalyze.MORE), what follows the mark goes into a folded
+    "More" box, so each section shows its most important part first."""
+    out = []
+    for part in re.split(r"(?=<h[23][ >])", report_html):
+        m = re.match(r"<h3[^>]*>(.*?)</h3>", part, re.S)
+        if not m:
+            out.append(part.replace(ma.MORE, ""))
+            continue
+        title = html.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip()
+        key = section_key(title) or "other"
+        body = part[m.end():]
+        if ma.MORE in body:
+            gist, rest = body.split(ma.MORE, 1)
+            rest = rest.replace(ma.MORE, "")
+            if re.sub(r"<[^>]+>|\s", "", rest) or re.search(r"<(svg|table)", rest):
+                body = (f'{gist}<details class="more" data-sec="{key}"><summary>More: '
+                        f'{html.escape(title)}</summary><div class="more-body">{rest}</div></details>')
+            else:
+                body = gist + rest
+        out.append(f'<section class="rsec" data-sec="{key}" id="sec-{key}">{m.group(0)}{body}</section>')
+    return "".join(out)
+
+
+CHART_SVG = re.compile(r'<svg class="(?:chart|timeline)"[^>]*>.*?</svg>', re.S)
+
+
+def _chart_name(svg):
+    """A short name for a chart, from the start of its accessible label ("Chords over time, coloured by..." ->
+    "Chords over time")."""
+    m = re.search(r'aria-label="([^"]*)"', svg)
+    label = html.unescape(m.group(1)) if m else ""
+    label = re.split(r"[.:,(]| with | — ", label, maxsplit=1)[0].strip()
+    return label[:42] or "Chart"
+
+
+def tab_tracks(report_html):
+    """Each track's report as a summary and tabs: its header, the few plain sentences and the at-a-glance pictures,
+    then every other chart of the report as a small picture (a click opens its part), then one tab per section
+    (fold_sections' <section>s), each with its own charts. The page script shows one tab at a time; without
+    scripts, the tabs are links to the sections, which all stay on the page."""
+    out, n = [], 0
+    for part in re.split(r"(?=<h2[ >])", report_html):
+        if not part.startswith("<h2") or '<section class="rsec"' not in part:
+            out.append(part)
+            continue
+        n += 1
+        h2_end, first = part.index("</h2>") + 5, part.index('<section class="rsec"')
+        head, intro, body = part[:h2_end], part[h2_end:first], part[first:]
+        tabs, thumbs, panels, used = [], [], [], set()
+        charts_seen = 0
+        for sec in re.split(r'(?=<section class="rsec")', body):
+            m = re.match(r'<section class="rsec" data-sec="(\w+)" id="sec-\w+">(<h3[^>]*>(.*?)</h3>)', sec, re.S)
+            if not m:
+                panels.append(sec)
+                continue
+            key = m.group(1)
+            title = html.unescape(re.sub(r"<[^>]+>", "", m.group(3))).strip()
+            name = SECTION_NAMES.get(key) or title
+            pid = f"t{n}-{key}" + (f"-{len(panels)}" if key in used else "")
+            used.add(key)
+
+            def mark(svg_m):
+                nonlocal charts_seen
+                charts_seen += 1
+                cid = f"t{n}c{charts_seen}"
+                svg = svg_m.group(0)
+                # the summary's copy is a picture only: no timeline links, no playback, nothing to tab to
+                thumb = re.sub(r' data-(?:dur|x0|x1|t0|t1|grid|hats|bpm|beats)="[^"]*"', "", svg)
+                thumbs.append(f'<button type="button" class="thumb" data-go="{pid}" data-chart="{cid}">'
+                              f'<span class="tl"><b>{html.escape(_chart_name(svg))}</b> · {html.escape(name)}</span>'
+                              f'{thumb}</button>')
+                return svg.replace("<svg ", f'<svg data-chart="{cid}" ', 1)
+            sec = CHART_SVG.sub(mark, sec)
+            sec = sec.replace(m.group(0)[:m.group(0).index(">") + 1],
+                              f'<section class="rsec" data-sec="{key}" id="{pid}" role="tabpanel" '
+                              f'aria-label="{html.escape(name)}">', 1)
+            tabs.append(f'<a class="tab" role="tab" href="#{pid}" data-go="{pid}" data-sec="{key}">{html.escape(name)}</a>')
+            panels.append(sec)
+        gallery = (f'<div class="gallery" aria-label="Every picture in this report"><p class="eyebrow">All the '
+                   f'pictures · click one to open its part</p><div class="thumbs">{"".join(thumbs)}</div></div>'
+                   if thumbs else "")
+        out.append(f'<article class="track" data-track="{n}">{head}<div class="tsum">{intro}{gallery}</div>'
+                   f'<nav class="tabs" role="tablist" aria-label="Parts of the report">{"".join(tabs)}</nav>'
+                   f'{"".join(panels)}</article>')
+    return "".join(out)
 
 
 @app.get("/jobs/<job_id>")
@@ -922,13 +1109,22 @@ def job(job_id):
         # The page's typography carries the headings (docs/STYLE.md); drop the emoji the .md report uses.
         report_html = re.sub("(<(?:h[23]|summary|strong)>)\\s*[\U0001F300-\U0001FAFF☀-➿⬀-⯿️]+\\s*",
                              r"\1", report_html)
+        report_html = tab_tracks(fold_sections(report_html))
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)
     teach = bool(u and u.get("memory_on") and owner == u["id"] and s.get("mode") != "tags" and not s.get("demo"))
     meta = next((it for it in accounts.history(u["id"]) if it["job_id"] == job_id), None) \
         if u and owner == u["id"] else None
+    used = accounts.interest(u["id"]) if u and u.get("memory_on") else {}
+    style_view = None
+    if s.get("state") == "done" and s.get("mode") == "style":  # these tracks read together, before each on its own
+        style_view = style.profile([{"r": r, "name": Path(r["file"]).stem[:60], "session": job_id,
+                                     "when": s.get("created") or 0, "title": ""} for _, r in tracks_of(job_id)])
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
+                           interest={k: v["score"] for k, v in used.items()}, remember=bool(u and u.get("memory_on")),
+                           section_names=SECTION_NAMES, style_view=style_view, style_pics=style.pictures(style_view),
+                           min_tracks=style.MIN_TRACKS,
                            version=ma.CODE_VERSION, saved=owner is not None, demos=demos.DEMOS, teach=teach,
                            creator=is_creator(job_id, s), meta=meta, statuses=accounts.STATUSES,
                            projects=accounts.projects(u["id"]) if meta else [],

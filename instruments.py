@@ -15,6 +15,9 @@ import numpy as np
 
 # auto = Demucs if installed, else simple; "demucs" = require it; "simple" = never use it.
 SEPARATION = os.environ.get("MUSIC_SEPARATION", "auto").lower()
+# Demucs's six-part model (vocals, drums, bass, guitar, piano, other) - also quicker and lighter than the
+# four-part one (measured on one CPU core: 3.4 vs 5 s per second of audio, 560 vs 760 MB)
+DEMUCS_MODEL = os.environ.get("MUSIC_DEMUCS_MODEL", "htdemucs_6s")
 DRUM_BANDS = {"Kick": (30, 120), "Snare": (180, 1200), "Hi-hat": (4000, 11000)}
 _demucs_model = None
 
@@ -29,10 +32,11 @@ def separation_method():
 
 # ---------------------------------------------------------------- separation
 
-def separate(y, sr, fast=False):
+def separate(y, sr, fast=False, stems=None):
     """Return (drums, music, method) where music is everything except the drums.
     fast=True (tag mode): a coarser harmonic/percussive split, 3-4x quicker; on the test recordings it gave the same
-    drums / no-drums verdicts as the full one."""
+    drums / no-drums verdicts as the full one.
+    stems: a dict to fill, with Demucs, with each part's level second by second ({part: [dB against the mix]})."""
     import librosa
     if fast:
         D = librosa.stft(y, n_fft=1024, hop_length=512)
@@ -41,7 +45,9 @@ def separate(y, sr, fast=False):
                 "fast")
     if SEPARATION != "simple":
         try:
-            drums, music = _demucs_split(y, sr)
+            drums, music, levels = _demucs_split(y, sr)
+            if stems is not None:
+                stems.update(levels)
             return drums, music, "demucs"
         except ImportError:
             if SEPARATION == "demucs":
@@ -58,7 +64,7 @@ def _demucs_split(y, sr):
     from demucs.pretrained import get_model
 
     if _demucs_model is None:
-        _demucs_model = get_model("htdemucs")
+        _demucs_model = get_model(DEMUCS_MODEL)
         _demucs_model.eval()
     model = _demucs_model
     y44 = librosa.resample(y, orig_sr=sr, target_sr=model.samplerate)
@@ -66,12 +72,16 @@ def _demucs_split(y, sr):
     with torch.no_grad():
         stems = apply_model(model, wav, split=True, overlap=0.1, progress=False)[0].mean(dim=1).numpy()
     drums = stems[model.sources.index("drums")]
-    music = stems.sum(axis=0) - drums  # bass + other + vocals
+    music = stems.sum(axis=0) - drums  # bass + other + vocals (+ guitar, piano)
+    sec = model.samplerate
+    per_sec = lambda x: 10 * np.log10(np.mean(x[:len(x) // sec * sec].reshape(-1, sec) ** 2, axis=1) + 1e-12)
+    mix = per_sec(y44)
+    levels = {name: [round(float(v), 1) for v in per_sec(stems[i]) - mix] for i, name in enumerate(model.sources)}
 
     def back(x):
         x = librosa.resample(x, orig_sr=model.samplerate, target_sr=sr)[:len(y)]
         return np.pad(x, (0, len(y) - len(x))).astype(np.float32)
-    return back(drums), back(music)
+    return back(drums), back(music), levels
 
 
 # ---------------------------------------------------------------- drums
@@ -81,16 +91,28 @@ DRUMS_SURE = 0.0015  # hits at least this noise-like are certainly drums; DRUMS_
 GUITAR_LOWEST = 40   # E2 (82 Hz), a guitar's lowest open string: a bass's notes live below it
 BASS_ENERGY = 0.01   # at least 1% of the drumless audio's energy below 80 Hz, where no guitar note sounds
 BASS_NOTES = 0.2     # and at least a fifth of the tracked low notes below E2
+# A drum kit is several instruments, and at least one of them moves apart from the kick: the snare on the backbeat,
+# or - where kick and clap land together, as in four-on-the-floor house - the hats between the beats. One
+# instrument struck or strummed (a guitar, a piano) lights every band at once, so all its bands move together.
+# Measured, bar by bar, as the correlation of the kick band's 16th-note attack pattern with the snare band's and
+# with the hats band's; the lower of the two (median over bars) says whether any voice moves on its own. Drum
+# kits (three phone recordings of a band, synthetic pop, synthetic house, a kit under loud strums) 0.20-0.32;
+# strummed and picked guitar, a mastered guitar-bass-and-vocal song, a waltz accompaniment 0.45-0.63. 0.4 lies
+# between the two groups.
+VOICES_APART = 0.4
 
 
-def verdict(hit_noise, are_drums, drum_share, below_80, low_notes, light=False):
+def verdict(hit_noise, are_drums, drum_share, below_80, low_notes, light=False, voices=None):
     """Drums and a separate bass are claimed only on their own evidence - never assumed, and never one from the
     other (a band with drums needn't have a bass; a phone recording of solo guitar mustn't grow either).
 
-    Drums: "yes" when the percussive hits are clearly noise-like (snare, hats) and carry real energy;
-    "possible" when they're only slightly noise-like - light percussion, or the scrape of strummed strings
-    (measured on real phone recordings: confirmed drums 0.0030-0.0036, solo guitar 0.0000-0.0002, the in-between
-    cases are what this band is for); "no" otherwise. A "possible" is reported as a question, not as drums.
+    Drums: "yes" when the percussive hits are clearly noise-like (snare, hats), carry real energy, and come from
+    separate voices (voices: how closely the other drum voices follow the kick, VOICES_APART); "possible" when
+    they're only slightly noise-like - light percussion, or the scrape of strummed strings (measured on real phone recordings: confirmed
+    drums 0.0030-0.0036, solo guitar 0.0000-0.0002, the in-between cases are what this band is for) - or when
+    they're noisy but every band hits together, as a bright or distorted guitar's strums do (a mastered strummed
+    song measured 0.014, noisier than the real drums); "no" otherwise. A "possible" is reported as a question, not
+    as drums.
     Bass: notes below a guitar's lowest string with real energy there (energy below 80 Hz AND tracked notes below
     E2). Low notes without that energy are the main instrument's own (or pitch-tracker octave slips). In tag mode
     (light, no note tracking) the energy alone decides. Phones lose a bass's low end, so a real bass on a phone may
@@ -98,11 +120,13 @@ def verdict(hit_noise, are_drums, drum_share, below_80, low_notes, light=False):
     if not are_drums or hit_noise < DRUMS_MIN or drum_share < 0.03:
         drums = "no"
     else:
-        drums = "yes" if hit_noise >= DRUMS_SURE else "possible"
+        apart = voices is None or voices < VOICES_APART  # None: too few bars to tell
+        drums = "yes" if hit_noise >= DRUMS_SURE and apart else "possible"
     notes = [n for n in low_notes if n is not None]
     below_e2 = sum(n < GUITAR_LOWEST for n in notes) / len(notes) if notes else 0.0
     bass = below_80 >= BASS_ENERGY and (light or below_e2 >= BASS_NOTES)
-    return {"drums": drums, "bass": bass, "below_80": round(below_80, 4), "below_e2": round(below_e2, 2)}
+    return {"drums": drums, "bass": bass, "below_80": round(below_80, 4), "below_e2": round(below_e2, 2),
+            **({"voices": round(voices, 2)} if voices is not None else {})}
 
 
 def hits_are_drums(drums, sr):
@@ -161,21 +185,11 @@ def onto_kicks(drums, sr, beat_frames, hop):
     return np.array(sorted(set(moved)), dtype=int)
 
 
-def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are_drums=True):
-    """Where in the bar the drums hit, and whether each spot is kick- or snare-heavy.
-
-    Rather than labelling every single hit (fragile on demos: one full-kit hit lights up every
-    band), it averages each band's attack strength at each 16th-note position across all bars,
-    then compares bands position by position. Assumes 4/4.
-    """
+def band_slots(drums, sr, hop, beat_times):
+    """Each drum band's attack strength at every 16th-note position: {band: array}, plus the slot reader and the
+    spectrogram in dB for other curves. The kick is the big low-end hit, so its band counts the rise in power, not
+    in dB (see onto_kicks); bands with under 1% of the energy are left out."""
     import librosa
-    share = float(np.sum(drums ** 2) / (total_energy + 1e-12))
-    out = {"present": share > 0.03 and are_drums, "energy_share_pct": round(100 * share)}
-    if share > 0.03 and not are_drums:
-        out["string_attacks"] = True  # percussive, but it's picking/strumming, not a drum kit
-    if not out["present"] or len(beat_times) < 17:
-        return out
-
     S = np.abs(librosa.stft(drums, n_fft=2048, hop_length=hop))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
     frame_t = librosa.times_like(S[0], sr=sr, hop_length=hop)
@@ -191,11 +205,53 @@ def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are
     for name, (lo, hi) in DRUM_BANDS.items():
         sel = (freqs >= lo) & (freqs < hi)
         if (S[sel] ** 2).sum() >= 0.01 * (S ** 2).sum():
-            if name == "Kick":  # the kick is the big low-end hit: its rise in power, not in dB (see onto_kicks)
+            if name == "Kick":
                 P = (S[sel] ** 2).sum(axis=0)
                 band[name] = at_slots(np.maximum(0.0, np.diff(P, prepend=P[0])))
             else:
                 band[name] = at_slots(librosa.onset.onset_strength(S=db[sel], sr=sr, hop_length=hop))
+    return band, at_slots, db
+
+
+def voices_apart(drums, sr, hop, beat_times, beats_per_bar=4):
+    """How closely the kit's other voices follow the kick, bar by bar: for the snare band and for the hats band,
+    the median correlation of its attack pattern with the kick band's over the bars where both play; the lower of
+    the two (see VOICES_APART). None when neither has 4 such bars."""
+    if len(beat_times) < 17:
+        return None
+    band, _, _ = band_slots(drums, sr, hop, beat_times)
+    kick = band.get("Kick")
+    if kick is None:
+        return None
+    slots = 4 * beats_per_bar
+    n = len(kick) // slots
+    found = []
+    for other in ("Snare", "Hi-hat"):
+        if band.get(other) is None:
+            continue
+        pairs = [(k, o) for k, o in zip(kick[:n * slots].reshape(n, slots), band[other][:n * slots].reshape(n, slots))
+                 if k.std() > 0 and o.std() > 0]
+        if len(pairs) >= 4:
+            found.append(float(np.median([np.corrcoef(k, o)[0, 1] for k, o in pairs])))
+    return min(found) if found else None
+
+
+def drum_analysis(drums, sr, hop, beat_times, total_energy, beats_per_bar=4, are_drums=True):
+    """Where in the bar the drums hit, and whether each spot is kick- or snare-heavy.
+
+    Rather than labelling every single hit (fragile on demos: one full-kit hit lights up every
+    band), it averages each band's attack strength at each 16th-note position across all bars,
+    then compares bands position by position. Assumes 4/4.
+    """
+    import librosa
+    share = float(np.sum(drums ** 2) / (total_energy + 1e-12))
+    out = {"present": share > 0.03 and are_drums, "energy_share_pct": round(100 * share)}
+    if share > 0.03 and not are_drums:
+        out["string_attacks"] = True  # percussive, but it's picking/strumming, not a drum kit
+    if not out["present"] or len(beat_times) < 17:
+        return out
+
+    band, at_slots, db = band_slots(drums, sr, hop, beat_times)
     # Each drum voice counts equally: an onset curve over all frequencies is ruled by whatever covers the most
     # bins - the hi-hats - so a kick (a few low bins) could vanish from the grid of a house track.
     scaled = [v / (np.percentile(v, 90) + 1e-9) for v in band.values()]

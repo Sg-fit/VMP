@@ -11,6 +11,8 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **🎛️ Producer's view** (electronic and other produced tracks) | For tracks with drums played to a grid, or when you pick an electronic genre or tick synth: **sidechain pumping** (how far the pads duck after each kick, judged on the shape of the beat: fast duck, slow swell), the **dance arrangement** (intro, build, drop, breakdown, outro, each in bars, with how many dB the drop lands above its lead-in and whether sections fall on 8-bar phrases), a **mono low end** check below 120 Hz (club systems and phones play bass in mono), **punch** as peak-to-loudness ratio, and a DJ's **mixing range** (tempos within ~6% and Camelot neighbour keys). Ideas follow from the gaps: sidechain a four-on-the-floor track that doesn't pump, mono a wide low end, add a breakdown, make the drop land, give DJs a drums-only intro. Genres now include house, techno, trance, dubstep, UK garage, drum & bass, trap, synthwave and lo-fi. Rules and thresholds: `electronic.py` |
 | **For guitar** | A capo position that turns the song's chords into open shapes, with fingerings (only suggested when it clearly helps; power chords left out) |
 | **Instruments we hear** | Where the style model is installed (see below), a trained instrument model (Essentia, MTG-UPF: 40 instruments) lists which instruments it hears in each track and how sure it is, and points out a sure one you didn't tick. It's a second opinion: shown, and compared with the songs you admire ("theirs features saxophone; in yours it hardly registers"), never used to change a result. Drums and bass are compared from our own measurements. `MUSIC_HEAR=0` switches it off |
+| **Who plays when** | One lane per instrument, one block per section: the vocals from the model's second-by-second voice/instrumental answer, the drums, bass and chords from our own measurements, or every part from Demucs's six separated stems (vocals, drums, bass, guitar, piano, other) when Demucs is installed. Each block says on hover what the evidence is |
+| **Drums only on evidence** | A drum kit is several instruments: its kick and snare hit at different moments of the bar. A strummed or picked instrument lights every band at once, and a bright or distorted guitar's strums are as noise-like as a snare. So noisy hits are called drums only when some voice moves apart from the kick: the snare, or the hats between the beats in four-on-the-floor (bar-by-bar correlation under 0.4: real and synthetic kits, house included, measured 0.20–0.32; strummed guitar and a guitar-bass-vocal song 0.45–0.63); otherwise the report asks |
 | **Who's playing (never assumed)** | Drums and a separate bass are each claimed only on their own evidence, never assumed and never one from the other (`instruments.verdict`). **Drums**: the percussive hits must be clearly noise-like (snare, hats); hits only slightly noise-like (light percussion, or strummed strings) are reported as a question, with no groove shown, until you tick “drums”. **Bass**: notes below a guitar's lowest string (E2, 82 Hz) with real sound there; otherwise the low notes are the main instrument's own. Phone microphones lose a bass's low end, so on a phone memo a real bass may not be claimed: tick it and it is. Thresholds were checked against real recordings (solo guitar, phone memos of a band, a full mix) |
 | **Instruments** | Drums separated from the rest: the main drum groove as a 16-step grid (kick/snare/cymbal; each drum voice counts equally, and the kick is judged by its power, so a house track's off-beat hats and bass can't drown it out), how repetitive it is, likely fills, and which sections have drums. Bass line: main notes, range, style (pedal, roots, riff, walking), how often it plays the chord root, and slash chords (A/E) in the chord timeline. The bass is transcribed note by note and written out as **sheet music** (bars of the detected meter, chord symbols above); its rhythm analysis (note lengths, off-beat and syncopated share, the most common bar rhythm) is read from that sheet |
 | **Groove & sound** | Pulse steadiness, how busy the rhythm is, syncopation, percussive vs. tonal balance, tone and texture, energy arc, biggest build, quietest moment, frequency balance from sub to air. **Loudness as streaming services measure it**: integrated LUFS and true peak (ITU-R BS.1770), loudness range (EBU Tech 3342) and stereo correlation, plus what Spotify's published normalisation would do to the track (turned down to −14 LUFS, or lifted only as far as a −1 dBTP true peak allows) and warnings for clipping, hot peaks and phase problems |
@@ -22,12 +24,13 @@ Analyzes instrumental tracks (no vocals needed) and turns the analysis into brai
 | **🤖 AI brainstorm** (optional) | A description of the feel, 6–8 specific ideas tied to times and chords, 2–3 alternative chord progressions, and title ideas |
 | **🎼 Sheet music** | The bass part as MusicXML (opens in MuseScore, Sibelius, Dorico and most DAWs) and as an engraved page to view or print to PDF |
 | **🎹 MIDI sketches** | `.mid` files of the bass (as played, and as written on the sheet), each detected chord loop, a variation of each loop, and the AI's progressions. Drag them into any DAW. |
+| **Your style** | Its own tab (home page and top bar). Upload several of your tracks at once, or keep analysing them session by session: `style.py` reads every saved track together (signed in), or this browser's results of the last day. It shows habits (a choice two thirds of your tracks make, or a measure whose middle half of tracks sits within one audible step, the same just-noticeable differences the comparisons use; nothing from fewer than 3 tracks), your chords as Roman numerals across keys with the loops you come back to, how your first and latest sessions differ, your most typical track and your outlier, and ground no track covers yet. Every track is a dot on every measure; hover one to find it across the page. Filter by project or time span |
 | **🔗 Tracks that blend well** | With several files: which tracks are key-compatible (on the Camelot wheel) and close in tempo, for medleys, mashups or set lists |
 
 **Pictures, not just words** (`charts.py`, inline SVG, so they show on the page and in the downloaded report, in
 light and dark mode, with hover tooltips): each track opens with **at a glance** (its key on the Camelot wheel with
 the keys it mixes with, its tempo on a ruler with half and double time and the genre's usual range, its sections on
-an energy/mood map, its loudness against Spotify's level); then the **chords over time** coloured by what they do
+an energy/mood map, its loudness against Spotify's level); **who plays when**; then the **chords over time** coloured by what they do
 (home, away, tension, borrowed), time in each key and the frequency balance as bars, the **drum groove** as a grid of
 dots, the **bass as a piano roll**, the **dance arrangement** as role blocks and the **pumping** as one beat's level.
 Next to the songs you admire: a **measure-by-measure chart** (your dot against theirs on each measure) and the energy
@@ -98,7 +101,9 @@ then search with those words to reach artists the big sites' recommendations rar
   type song names (`Artist - Title`, one per line). Up to 100 songs.
 - **Uploaded songs are listened to** (weight 1.0): a quicker "light" analysis (tempo, time signature, energy and
   mood, drums or not, blues forms) plus, when installed, a trained **style model** — Essentia's Discogs-EffNet
-  (400 Discogs styles, moods/themes, instruments, vocals or not).
+  (400 Discogs styles, moods/themes, instruments, vocals or not). It runs as MTG's ONNX files under onnxruntime
+  (`tagger.py`, any OS, no TensorFlow), with the network's mel-spectrogram input rebuilt as Essentia makes it; on
+  a 4-minute song its averages match the TensorFlow version to the second decimal.
 - **Songs from a link or a list are looked up by name** (weight 0.4) on MusicBrainz (and Last.fm when
   `LASTFM_API_KEY` is set). Those are listeners' tags, mostly for the artist, so they count for less. Only the names
   are read from a playlist page, never the audio.
@@ -170,10 +175,10 @@ Use **one** worker. Analysis runs in a background thread inside that process, so
 | `MUSIC_LLM_BASE_URL` | NVIDIA's API | Any OpenAI-compatible endpoint, for example a self-hosted model |
 | `MUSIC_CACHE_DIR` | `DATA_DIR/cache` (web), `~/.cache/music-analyzer` (CLI) | Cached analyses. A re-upload of the same recording skips the slow analysis. Entries unused for 30 days are deleted |
 | `CPU_LIMIT` / `MEM_LIMIT` | 1.0 / 1500m | Docker only: caps on CPU cores and memory for the analyzer, so jobs can't slow down other sites on the server. A job that needs more memory fails with a message instead of freezing the machine |
-| `WITH_STYLE_MODEL` | 1 | Docker build only: installs the Essentia style model for "Find music like this" in its own Python environment (Linux x86-64; a failed install only turns style tags off). `0` = smaller image |
+| `WITH_STYLE_MODEL` | 1 | Docker build only: downloads the Essentia style and instrument models (ONNX, about 25 MB) for "Find music like this", "Instruments we hear" and the vocals in "Who plays when" (a failed download only turns them off). `0` = leave them out |
 | `LASTFM_API_KEY` | — | Optional: also look songs up on Last.fm (richer listener tags than MusicBrainz) |
 | `MUSIC_OFFLINE` | — | `1` turns off looking songs up by name and reading playlist links |
-| `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI drum separation (about 1 GB larger image, 1–2 min of CPU per track). Rebuild with `docker compose up -d --build` after changing it |
+| `WITH_DEMUCS` | 0 | Docker build only: `1` installs Demucs AI separation, six parts (htdemucs_6s: about 1 GB larger image; on one CPU core about 3 s per second of audio and 560 MB of memory). Rebuild with `docker compose up -d --build` after changing it |
 
 ### Behind a domain (nginx)
 
@@ -264,14 +269,23 @@ python musicanalyze.py ./music_folder --melody "copy 4: A E F E A E D E"   # one
 
 The report explains itself. Underlined terms show a plain-English explanation on hover (tap on a phone), and the **📖 How to read this report** section at the top covers every column (Camelot, Mode, Form, Energy, the drum grid and so on).
 
+On the web page each section shows its most important part and folds the rest into a **More** box. Charts are
+interactive: hover or tap any mark for its numbers; hovering a moment lights it up in every chart along that
+track's timeline; **🎧 Listen along** plays your own copy of the track (picked from your device, never uploaded) and a
+click on any timeline chart plays from that moment, with a playhead following the music. The page notes which
+sections you unfold, explore and read (section names and counts only, nothing about the track): the ones you use
+most open by themselves and lead the "jump to" bar. That stays in your browser; with your memory on it's also kept
+on your account, listed on *What we remember*, in your data download, and deleted with **Forget these**.
+
 ## How accurate is it?
 
-- **Key:** the tool compares the song's pitch-class energy against all 24 major/minor key profiles (Krumhansl-Schmuckler), using a 10-second window every 2 seconds. On real music, expect about 70–80% accuracy. The usual mistakes are relative keys (B minor ↔ D major) or the dominant key. Check the **runner-up** key when the result looks wrong.
+- **Key:** the tool compares the song's pitch-class energy against all 24 major/minor key profiles (Krumhansl-Schmuckler), using a 10-second window every 2 seconds. On real music, expect about 70–80% accuracy. The usual mistakes are relative keys (B minor ↔ D major) or the dominant key. Check the **runner-up** key when the result looks wrong. Two minor keys a fifth apart (A minor and D minor) can score almost level; the key whose own dominant chord plays (E major in A minor, whose G# no nearby minor key has) wins.
 - **Key-change times** are accurate to about ±4 s. Key sections shorter than 8 s are merged into the surrounding key, so a passing chord isn't counted as a modulation. To catch shorter changes, adjust `STEP`, `WINDOW`, and `MIN_SECTION` at the top of the script.
-- **Tempo** can come out at half or double the felt tempo (for example 70 vs 140).
+- **Tempo** can come out at half or double the felt tempo (for example 70 vs 140). With drums, a reading above ~170 BPM whose every second counted beat has no kick or snare is halved: busy hi-hats had been counted as the beat.
 - **Chords** are detected once per beat, using major, minor, 7 and m7 shapes only. Detection works best on clear, sustained harmony. Dense mixes, distortion and extended jazz chords will be simplified or misread. Two related chords can be confused when they share notes (for example B and G#m).
 - **Mode** is guessed from how strongly characteristic notes appear (for example the major 6th means Dorian). Treat it as a hint.
-- **Drums** are not transcribed hit by hit. The tool averages where kick-heavy and snare-heavy hits land across all bars, which is robust on demos but assumes 4/4. Demucs (optional) separates the drums more cleanly than the built-in split.
+- **Drums** are not transcribed hit by hit. The tool averages where kick-heavy and snare-heavy hits land across all bars, which is robust on demos but assumes 4/4. Demucs (optional) separates the drums more cleanly than the built-in split. Without Demucs, a strummed guitar is never called a kit, but a kit whose kick and snare always hit together (rare) is reported as "maybe": tick “drums” and it's used.
+- **Vocals** come from the trained model's voice/instrumental answer each second. An expressive lead instrument (a bowed or bent solo line) can read as singing; with Demucs installed the separated vocal stem decides instead.
 - **Bass** is pitch-tracked from the lowest line once the drums are removed. If another low instrument (left-hand piano, low guitar strings) plays along, it's counted as bass.
 - **Melody** can't be reliably extracted automatically from a full-band phone recording, because the chords and any held notes dominate. That's why you can type it. The check against the recording confirms which notes are present. It often can't confirm their order, and it says so.
 - **Sections** come from automatic segmentation. The letters are a rough guide to which parts repeat.

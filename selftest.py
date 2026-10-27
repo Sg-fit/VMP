@@ -184,6 +184,29 @@ def pluck(freq, dur, amp=0.3):
     return amp * np.minimum(1, t / 0.002) * sig
 
 
+def noisy_strums(chords, bpm, loops=6, seed=0):
+    """Eighth-note strums of a bright or distorted guitar, no drums: the chord's strings from the root (in the
+    guitar's range) up, and with each strum the scrape of the pick - a burst of broadband noise - at the same
+    instant; downstrokes on the beat louder. One instrument, so every band gets its attack at the same moment, and
+    its hits are as noise-like as a snare's."""
+    rng = np.random.default_rng(seed)
+    beat = 60 / bpm
+    bars = len(chords) * loops
+    y = np.zeros(int(SR * (bars * 4 * beat + 1)) + SR)
+    for b in range(bars):
+        root, q = chords[b % len(chords)]
+        low = midi(root, 2) + (12 if midi(root, 2) < 40 else 0)  # E2 is a guitar's lowest string
+        notes = [low] + [midi(root, 3) + iv for iv in CHORD[q]]
+        for k in range(8):
+            t0 = (b * 4 + k / 2) * beat
+            amp = 0.3 if k % 2 == 0 else 0.18
+            for j, m in enumerate(notes):  # a strum sweeps the strings over ~15 ms
+                place(y, pluck(hz(m), beat * 0.6, amp), t0 + 0.004 * j)
+            place(y, noise(0.06, amp * 0.9, 45, seed=int(rng.integers(1_000_000))), t0)
+    y = y / (np.abs(y).max() + 1e-9) * 0.8
+    return y.astype(np.float32)
+
+
 def guitar_blues(bpm=140, choruses=3, minor=False):
     """Solo fingerstyle guitar, 12-bar blues in A: a thumb line on the low strings (root and fifth, nothing
     below 100 Hz, like a real guitar on a phone) and chords on 2 and 4. No drums, no bass instrument.
@@ -703,6 +726,18 @@ def unit_checks():
           and not ok_("The bright, ringing secondary dominant A7 at 0:10 lifts the chorus.")
           and not ok_("Play softly. The A7 at 0:10 already lifts it.")
           and not ok_("Add a fill before the A7 at 0:10."))
+    # a chord change named by its two chords: right when the time falls on the first chord or just into the second
+    fake5 = {"chord_timeline": [{"time": "0:00", "start": 0.0, "chord": "G"}, {"time": "0:02", "start": 2.4, "chord": "D"},
+                                {"time": "0:04", "start": 4.8, "chord": "Em"}, {"time": "0:07", "start": 7.2, "chord": "C"},
+                                {"time": "0:09", "start": 9.6, "chord": "G"}, {"time": "0:12", "start": 12.0, "chord": "D"}],
+             "sections": [], "drums": {}, "sound": {}, "duration_sec": 14.4}
+    ok5 = lambda s_: "⚠" not in ma._check_times(s_, fake5)
+    check("unit", "AI fact-check: “between G and D at 0:10” is the move from G to D (right); the wrong move or time isn't",
+          ok5("Introduce C (scale degree 4) as a passing note between G and D at 0:10, filling the unused note gap.")
+          and ok5("Slide from G to D at 0:12.")
+          and not ok5("A passing note between G and D at 0:06.")
+          and not ok5("A passing note between D and G at 0:10.")
+          and not ok5("Extend the final G chord at 0:06."))
     notation_checks(ma)
 
 
@@ -909,6 +944,7 @@ def web_checks(tmp, files):
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
         account_checks(base, job4, browser)
         memory_web_checks(base, files)
+        style_web_checks(base, files)
         home = browser.get(base + "/", timeout=10).text
         check("web", "the upload form offers single instruments, grouped (cello, synth bass, drum machine…)",
               all(x in home for x in ('value="cello"', 'value="synth_bass"', 'value="drum_machine"', "Wind &amp; brass")))
@@ -1119,6 +1155,47 @@ def account_checks(base, job, browser):
           alice.get(base + "/history", timeout=10).text)
 
 
+def style_web_checks(base, files):
+    """The Your style tab end to end: a style upload reads its tracks together; the style page gathers every session
+    (signed in) or this browser's own results (not signed in), and shows nobody else's."""
+    import requests
+    cara, stranger = requests.Session(), requests.Session()
+
+    def upload(sess, paths, mode="style"):
+        up = [("tracks", (Path(x).name, open(x, "rb"))) for x in paths]
+        r_ = sess.post(base + "/analyze", files=up, data={"mode": mode}, allow_redirects=False, timeout=60)
+        if r_.status_code != 302:
+            return None, r_
+        job = r_.headers["Location"].rsplit("/", 1)[-1]
+        t0 = time.time()
+        while time.time() - t0 < 300 and sess.get(f"{base}/jobs/{job}/status", timeout=10).json()["state"] not in ("done", "error"):
+            time.sleep(1)
+        return job, r_
+
+    _, one = upload(cara, [files["pop4"]])
+    check("web", "Your style needs at least two tracks, and says why", one.status_code == 400
+          and "a style is what they have in common" in one.text)
+    job, _ = upload(cara, [files["pop4"], files["power"], files["bassline"]])
+    words = lambda h: re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h))  # the page's text as it reads
+    page = cara.get(f"{base}/jobs/{job}", timeout=20).text
+    mine = cara.get(base + "/style", timeout=20)
+    theirs = words(stranger.get(base + "/style", timeout=20).text)
+    check("web", "a style upload reads its tracks together, then shows each on its own",
+          "Your style in these 3 tracks" in page and 'id="st-habits"' in page and "Each track on its own" in page
+          and "Harmony" in page)
+    check("web", "the style page: this browser's own results only, private to the web",
+          "3 tracks from 1 upload session" in words(mine.text) and "nothing to read yet" in theirs
+          and "noindex" in mine.headers.get("X-Robots-Tag", ""), words(mine.text)[words(mine.text).find("Your style ·"):][:160])
+    cara.post(base + "/signup", data={"username": "cara", "password": "selftest-pw6", "password2": "selftest-pw6"}, timeout=10)
+    upload(cara, [files["pop4"], files["waltz3"]])
+    upload(cara, [files["modulate"]], mode="musician")
+    signed = words(cara.get(base + "/style", timeout=20).text)
+    home = cara.get(base + "/style/new", timeout=10).text
+    check("web", "signed in: every saved session counts (a style upload and a single analysis), and the tab says so",
+          "3 tracks from 2 upload sessions" in signed and 'value="style" checked' in home
+          and "You've saved 3 tracks" in words(home), signed[signed.find("Your style ·"):][:160])
+
+
 def memory_web_checks(base, files):
     """The musician's memory end to end: off by default, switched on, learns from saved uploads, ratings and
     corrections, pre-fills the form, compares a new track with earlier ones, and forgets on request."""
@@ -1164,10 +1241,35 @@ def memory_web_checks(base, files):
           and not any(i["idea"] == idea["idea"] for i in res3["ideas"]), str(res3.get("past")))
     anon_home = requests.get(base + "/", timeout=10).text
     check("memory", "anonymous visitors get no pre-fill and no memory", "Ticked from your earlier uploads" not in anon_home)
+    anon = requests.Session()
+    anon.post(base + "/interest", json={"section": "harmony", "kind": "open"}, timeout=10)
+    for kind in ("open", "open", "chart", "read"):
+        dana.post(base + "/interest", json={"section": "instruments", "kind": kind}, timeout=10)
+    dana.post(base + "/interest", json={"section": "../users", "kind": "open"}, timeout=10)
+    dana.post(base + "/interest", json={"section": "melody", "kind": "drop table"}, timeout=10)
+    used = dana.get(base + "/memory", timeout=10).text
+    eve_page = eve.get(base + "/memory", timeout=10).text
+    page1 = dana.get(f"{base}/jobs/{j1}", timeout=10).text
+    check("memory", "the parts of the report you use: counted for you (memory on), shown and used to open them; "
+          "nothing from anyone else, nothing that isn't a section",
+          "unfolded 2× · charts explored 1× · read 1×" in used and "Melody" not in used and "../users" not in used
+          and "Instruments" in used and '"instruments": 9' in page1 and "Nothing yet" in eve_page,
+          re.sub(r"\s+", " ", used[used.find("parts of the report you use"):][:300]))
+    exported = dana.get(base + "/account/export", timeout=20)
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(exported.content)) as z:
+        data = json.loads(z.read(next(n for n in z.namelist() if n.endswith(".json") and "account" in n)))
+    check("memory", "your data download includes them", data.get("report_sections_used", {}).get("instruments", {}).get("opens") == 2,
+          str(data.get("report_sections_used"))[:200])
+    dana.post(base + "/memory/interest/forget", timeout=10)
+    check("memory", "“Forget these” clears them", "unfolded 2×" not in dana.get(base + "/memory", timeout=10).text)
+    dana.post(base + "/interest", json={"section": "instruments", "kind": "open"}, timeout=10)
     dana.post(base + "/memory/forget", timeout=10)
     gone = dana.get(base + "/memory", timeout=10).text
-    check("memory", "Forget everything deletes ratings, corrections and goals and switches it off",
+    check("memory", "Forget everything deletes ratings, corrections, goals and reading habits, and switches it off",
           idea["idea"][:40] not in gone and "is 3/4" not in gone and "more odd meters please" not in gone
+          and "unfolded 1×" not in gone
           and 'value="1" checked' not in gone and "Ticked from your earlier uploads" not in
           dana.get(base + "/", timeout=10).text)
 
@@ -1914,13 +2016,16 @@ def lineup_checks(tmp):
     v = ins.verdict
     # measured on real recordings (phone memos and a full mix): hit noise-likeness, percussive share, energy below
     # 80 Hz, tracked low notes - with the line-up the musician confirmed
-    real = {"solo guitar (Blues for Charlie)": (0.0002, False, 0.22, 0.0000, [36] * 48 + [45] * 52, ("no", False)),
-            "solo guitar (W City Ave)": (0.0000, False, 0.53, 0.0018, [45] * 100, ("no", False)),
-            "phone band, drums confirmed": (0.0030, True, 0.23, 0.0001, [38] * 6 + [45] * 94, ("yes", False)),
-            "full mix with bass (Ballad)": (0.0064, True, 0.10, 0.0734, [33] * 88 + [45] * 12, ("yes", True)),
-            "in-between hits, rumble but no low notes": (0.0013, True, 0.37, 0.0402, [33] * 1 + [45] * 99,
+    # and how closely the other drum voices follow the kick (None: not measured). The Ballad is a strummed guitar, bass and vocals - no
+    # kit (Demucs's drum stem: -32 dB against the mix, nothing above 250 Hz) - so its noisy hits are a question.
+    real = {"solo guitar (Blues for Charlie)": (0.0002, False, 0.22, 0.0000, [36] * 48 + [45] * 52, None, ("no", False)),
+            "solo guitar (W City Ave)": (0.0000, False, 0.53, 0.0018, [45] * 100, None, ("no", False)),
+            "phone band, drums confirmed": (0.0030, True, 0.23, 0.0001, [38] * 6 + [45] * 94, 0.21, ("yes", False)),
+            "full mix, strummed guitar + bass, no kit (Ballad)": (0.0064, True, 0.10, 0.0734, [33] * 88 + [45] * 12,
+                                                                   0.45, ("possible", True)),
+            "in-between hits, rumble but no low notes": (0.0013, True, 0.37, 0.0402, [33] * 1 + [45] * 99, None,
                                                          ("possible", False))}
-    got = {k: (lambda o: (o["drums"], o["bass"]))(v(a, b, c, d, e)) for k, (a, b, c, d, e, _) in real.items()}
+    got = {k: (lambda o: (o["drums"], o["bass"]))(v(a, b, c, d, e, voices=f)) for k, (a, b, c, d, e, f, _) in real.items()}
     want = {k: x[-1] for k, x in real.items()}
     check("lineup", "drums and bass are claimed only on their own evidence (measured on real recordings)",
           got == want, "; ".join(f"{k}: {got[k]}" for k in got if got[k] != want[k]))
@@ -1946,6 +2051,43 @@ def lineup_checks(tmp):
     rep = "\n".join(ma.instruments_report(r))
     told = json.loads(json.dumps(r))
     ma.apply_context(told, ma.clean_context(["drums", "electric_guitar"]))
+    strum_chords = [("G", ""), ("D", ""), ("E", "m"), ("C", "")]
+    strums = noisy_strums(strum_chords, 92)
+    bright = ma.analyze(write(Path(tmp) / "lu_strums.wav", strums), cache_dir=cache)
+    kit = song(strum_chords, 92, 4, loops=6, bass=False)
+    n_ = min(len(kit), len(strums))
+    band = ma.analyze(write(Path(tmp) / "lu_kit_strums.wav", kit[:n_] + 0.5 * strums[:n_]), cache_dir=cache)
+    ev_b, ev_k = bright["evidence"], band["evidence"]
+    check("lineup", "noisy strums (every band hits at once) aren't called a kit; a kit under the same strums is",
+          ev_b["drums"] == "possible" and not bright["drums"].get("present")
+          and ev_b.get("voices", 0) >= ins.VOICES_APART and ev_k["drums"] == "yes"
+          and ev_k.get("voices", 1) < ins.VOICES_APART,
+          f"strums {ev_b}; kit + strums {ev_k}")
+    rep_b = "\n".join(ma.instruments_report(bright))
+    check("lineup", "the report says why: every band hits together, as one instrument's strums do",
+          "every frequency band hits at the same moment" in rep_b and "Drum groove" not in rep_b)
+    # who plays when: vocals from the model's second-by-second answer, the rest measured; nothing assumed
+    secs = [{"label": "A", "start": 0.0, "end": 20.0, "harmony_db": 30.0, "loudness_db": -28.0, "drums": False, "bass": True},
+            {"label": "B", "start": 20.0, "end": 50.0, "harmony_db": 42.0, "loudness_db": -16.0, "drums": True, "bass": True},
+            {"label": "C", "start": 50.0, "end": 60.0, "harmony_db": 20.0, "loudness_db": -15.0, "drums": True, "bass": False}]
+    voice = [0.2] * 19 + [0.95] * 30 + [0.3] * 10  # singing from 0:20 to 0:50
+    r_ = {"sections": secs, "drums": {"present": True}, "bass": {"present": True}, "duration_sec": 60.0,
+          "heard": {"timeline": {"patch_sec": 1.0, "voice": voice},
+                    "instruments": [{"key": "electric_guitar", "name": "electric guitar", "p": 0.4}]}}
+    rows = {rw["key"]: [c["on"] for c in rw["cells"]] for rw in ma.lineup(r_)}
+    check("lineup", "who plays when: vocals where the model hears singing, a quiet section keeps its guitar, a "
+          "drums-only break loses it", rows == {"vocals": [False, True, False], "drums": [False, True, True],
+                                                "bass": [True, True, False], "harmony": [True, True, False]}, str(rows))
+    bare = dict(r_, heard={}, drums={"present": False}, bass={"present": False})
+    rows = {rw["key"] for rw in ma.lineup(bare)}
+    check("lineup", "without the model there's no vocals row, and no drums or bass row unless they were found",
+          rows == {"harmony"}, str(rows))
+    stems = {"vocals": [-60.0] * 20 + [-6.0] * 40, "drums": [-45.0] * 60, "bass": [-8.0] * 60, "guitar": [-4.0] * 60,
+             "piano": [-62.0] * 60, "other": [-35.0] * 60}
+    rows = {rw["key"]: [c["on"] for c in rw["cells"]] for rw in ma.lineup(dict(r_, stems=stems))}
+    check("lineup", "with Demucs's separated parts: each part where it's loud enough; bleed into empty stems "
+          "(drums, piano here) isn't a part", rows == {"vocals": [False, True, True], "bass": [True, True, True],
+                                                      "guitar": [True, True, True]}, str(rows))
     check("lineup", "unsure drums are a question, not a claim; ticking “drums” brings their groove back",
           "we can't tell" in rep and "Drum groove" not in rep and "grid" not in r["drums"]
           and told["drums"].get("present") and told["drums"].get("grid") and any(x["drums"] for x in told["sections"]))
@@ -1978,7 +2120,7 @@ def model_memory_checks(tmp):
           got == (300, 1500, 1953, None), str(got))
     saved = (tagger.backend, tagger.free_memory_mb)
     try:
-        tagger.backend, tagger.free_memory_mb = (lambda: "essentia"), (lambda *a, **k: 300)
+        tagger.backend, tagger.free_memory_mb = (lambda: "onnx"), (lambda *a, **k: 300)
         try:
             tagger.predict(["x.wav"], ma.load_audio)
             refused = False
@@ -2044,6 +2186,141 @@ def crosscompare_checks(tmp):
     chain = [v["job_id"][:1] for v in accounts.versions(uid, "a" * 32)]
     check("crosscompare", "versions chain under the song's first take; no loops, nothing of anyone else's",
           ok1 and ok2 and not loop and not theirs and chain == ["a", "b", "c"], f"{ok1} {ok2} {loop} {theirs} {chain}")
+
+
+def report_ui_checks(tmp):
+    """The model's input is built as Essentia builds it; each report section leads with its gist and folds the
+    rest; timeline charts carry what the page needs to link them."""
+    import librosa
+    import charts
+    import musicanalyze as ma
+    import tagger
+    print("\n== Report: model input, folding, interactive charts ==")
+    # the network's mel input: a 1 kHz tone peaks in the mel band that holds 1 kHz, the loudness is log-compressed,
+    # and there's one 128-frame patch every 62 frames (~1 s)
+    t = np.arange(tagger.SR * 10) / tagger.SR
+    patches = tagger.mel_patches(0.5 * np.sin(2 * np.pi * 1000 * t))
+    edges = librosa.mel_frequencies(n_mels=tagger.MELS + 2, fmin=0, fmax=tagger.SR / 2, htk=False)
+    want = int(np.argmin(np.abs(edges[1:-1] - 1000)))
+    got = int(np.argmax(patches[0].mean(axis=0)))
+    n_frames = 1 + (len(t) + tagger.FRAME - tagger.FRAME) // tagger.HOP
+    check("model", "the network's input: a 1 kHz tone lands in the 1 kHz mel band, one patch a second",
+          patches.shape[1:] == (128, 96) and abs(got - want) <= 1
+          and len(patches) == 1 + (n_frames - tagger.PATCH) // tagger.PATCH_HOP and patches.max() < 10,
+          f"band {got} (want {want}), {patches.shape}")
+    short = tagger.mel_patches(np.zeros(tagger.SR // 2, np.float32))
+    check("model", "a clip shorter than one patch is padded, not dropped", short.shape == (1, 128, 96), str(short.shape))
+
+    # folding: what's above the mark shows, the rest goes in a "More" box; nothing to fold, no box
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import app as webapp
+    h = webapp.fold_sections("<h2>Song</h2><p>intro</p><h3>Harmony</h3><ul><li>Key</li></ul>" + ma.MORE
+                             + "<ul><li>Scale</li></ul><h3>Structure</h3><p>A B A</p>" + ma.MORE + "\n<h3>Melody</h3><p>x</p>")
+    check("report", "each section leads with its gist; the details fold into “More”, with the section's key",
+          '<section class="rsec" data-sec="harmony"' in h and '<details class="more" data-sec="harmony">' in h
+          and h.index("Key") < h.index("<details") < h.index("Scale") and h.count("<details") == 1
+          and '<section class="rsec" data-sec="melody"' in h and ma.MORE not in h and "<p>intro</p>" in h, h[:400])
+    r = ma.analyze(write(Path(tmp) / "ui_song.wav", song([("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100, 4, loops=6)),
+                   cache_dir=Path(tmp) / "ui_cache")
+    import markdown
+    page = webapp.fold_sections(markdown.markdown("\n".join(ma.track_report(r)), extensions=["tables", "fenced_code", "md_in_html"]))
+    folds = re.findall(r'<details class="more" data-sec="(\w+)"', page)
+    secs = re.findall(r'<section class="rsec" data-sec="(\w+)"', page)
+    check("report", "the analysis sections fold their details (harmony, structure, energy, instruments, groove, ideas)",
+          {"harmony", "structure", "energy", "instruments", "groove"} <= set(folds) and "other" not in secs,
+          f"sections {secs}; folded {folds}")
+    tabbed = webapp.tab_tracks(page)
+    tabs = re.findall(r'<a class="tab" role="tab" href="#(t1-\w+)"', tabbed)
+    panels = re.findall(r'<section class="rsec" data-sec="\w+" id="(t1-\w+)" role="tabpanel"', tabbed)
+    thumbs = re.findall(r'<button type="button" class="thumb" data-go="(t1-\w+)" data-chart="(t1c\d+)">(.*?)</button>', tabbed, re.S)
+    charts_in = len(re.findall(r'<svg class="(?:chart|timeline)"', page[page.index('<section class="rsec"'):]))
+    ok_links = all(f'id="{go}"' in tabbed and f'<svg data-chart="{cid}"' in tabbed[tabbed.index(f'id="{go}"'):]
+                   for go, cid, _ in thumbs)
+    check("report", "a summary with every chart as a small picture (each opens its tab), then one tab per section",
+          tabs == panels and len(tabs) == len(secs) and len(thumbs) == charts_in and ok_links
+          and not any("data-dur" in t or "data-grid" in t for _, _, t in thumbs)
+          and tabbed.index('class="gallery"') < tabbed.index('<nav class="tabs"') < tabbed.index('role="tabpanel"'),
+          f"{len(tabs)} tabs, {len(panels)} panels, {len(thumbs)} pictures of {charts_in} charts")
+    gist = page[page.index('data-sec="harmony"'):page.index('<details class="more" data-sec="harmony"')]
+    check("report", "harmony's gist is the key, the mode, the chords and the chord picture",
+          "Key" in gist and "Mode" in gist and "Chords used most" in gist and "<svg" in gist and "Scale" not in gist)
+
+    # timeline charts carry their scale, and their marks the seconds they cover
+    strip = charts.chord_strip(r["chord_timeline"], r["duration_sec"])
+    lu = charts.lineup_map(ma.lineup(r), r["duration_sec"])
+    tl = ma.timeline_svg(r)
+    spans = re.findall(r'data-t0="([\d.]+)" data-t1="([\d.]+)"', strip)
+    check("charts", "timeline charts say where 0:00 and the end are, and each chord its seconds",
+          all('data-dur="' in x and 'data-x0="' in x for x in (strip, lu, tl)) and len(spans) == len(r["chord_timeline"])
+          and float(spans[1][0]) == r["chord_timeline"][1]["start"], f"{len(spans)} spans")
+    check("charts", "who plays when: one lane per instrument found, each block a section with its evidence",
+          lu.count("<title>") == sum(len(rw["cells"]) for rw in ma.lineup(r)) and "Drums" in lu and "Bass" in lu
+          and "Vocals" not in lu, re.sub(r"<[^>]+>", " ", lu)[:200])
+
+
+def style_checks(tmp):
+    """Your style across tracks and sessions: habits only where the tracks agree (and never from too few), the same
+    loop counted in any key, the outlier found, drift between sessions, and unexplored ground."""
+    import musicanalyze as ma
+    import style
+    print("\n== Your style ==")
+    cache = Path(tmp) / "style_cache"
+    minor_loop = [("E", "m"), ("A", "m"), ("B", ""), ("C", "")]      # i - iv - V - VI in E minor
+    same_in_fs = [("B", "m"), ("C#", ""), ("D", ""), ("F#", "m")]   # the same loop in F# minor, played from iv
+    res = [ma.analyze(write(Path(tmp) / f"st_{i}.wav", song(ch, bpm, 4, loops=6)), cache_dir=cache)
+           for i, (ch, bpm) in enumerate([(minor_loop, 90), (same_in_fs, 92), (minor_loop, 93), (same_in_fs, 91)])]
+    odd = ma.analyze(write(Path(tmp) / "st_odd.wav", song([("D", ""), ("G", ""), ("A", ""), ("D", "")], 128, 3,
+                                                          loops=6, drums=False, waltz=True)), cache_dir=cache)
+    day = 86400
+    tracks = [{"r": r, "name": f"t{i}", "session": "s1" if i < 2 else "s2", "when": 1e9 + (0 if i < 2 else 30 * day)}
+              for i, r in enumerate(res)]
+    p = style.profile(tracks + [{"r": odd, "name": "waltz", "session": "s2", "when": 1e9 + 30 * day}])
+    areas = dict(p["signatures"])
+    tempo = next((x for x in p["ranges"] if x["key"] == "tempo"), {})
+    check("style", "habits where the tracks agree: minor keys, and a tempo you can't tell apart by ear (90-93 BPM)",
+          "Keys" in areas and "minor" in areas["Keys"].lower() and tempo.get("steady"),
+          f"{p['signatures']}; tempo {tempo.get('q1')}-{tempo.get('q3')}")
+    loops = dict(p["progressions"])
+    check("style", "the same chord loop in two keys, read from different chords, counts as one signature loop",
+          any(n >= 4 for n in loops.values()), str(p["progressions"]))
+    check("style", "the 3/4 major waltz without drums is the outlier; a 4/4 minor track is the most typical",
+          p["outlier"] and p["outlier"]["name"] == "waltz" and p["typical"]["name"] != "waltz",
+          f"outlier {p['outlier'] and p['outlier']['name']}: {p['diffs'].get('waltz')}")
+    check("style", "two upload sessions, in order", [s_["session"] for s_ in p["sessions"]] == ["s1", "s2"])
+    four = style.profile(tracks)
+    tried = dict(four["unexplored"])
+    check("style", "ground no track covers is offered (a major key, another time signature, a key change)",
+          {"Major key", "Time signature", "Key change"} <= set(tried), str(list(tried)))
+    two = style.profile(tracks[:2])
+    check("style", "two tracks: no habits and no gaps claimed (a habit needs three examples)",
+          not two["signatures"] and not two["unexplored"] and not two["enough"] and "Add 1 more" in two["in_short"],
+          two["in_short"])
+    pics = style.pictures(p)
+    check("style", "the style pictures: every track on every measure, keys, mood, chords, and change over time",
+          all(pics.get(k) for k in ("strips", "keys", "mood", "vocab", "tempo_time"))
+          and pics["strips"].count("data-trk=") == sum(len(x["values"]) for x in p["ranges"]))
+
+
+def misread_checks(tmp):
+    """Two near-ties settled by musical evidence: minor keys a fifth apart (by the key's own dominant chord), and
+    hi-hat eighths counted as beats (by where the kick and snare hit) - with the cases each rule must leave alone."""
+    import musicanalyze as ma
+    print("\n== Near-ties: minor keys a fifth apart, eighths counted as beats ==")
+    cache = Path(tmp) / "misread_cache"
+    an = lambda name, ch, bpm: ma.analyze(write(Path(tmp) / f"mr_{name}.wav", song(ch, bpm, 4, loops=6)), cache_dir=cache)
+    a_min = an("am", [("A", "m"), ("D", "m"), ("E", ""), ("F", "")], 92)
+    d_min = an("dm", [("D", "m"), ("G", "m"), ("A", ""), ("Bb", "")], 92)
+    g_maj = an("g", [("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100)
+    check("analysis", "Am - Dm - E - F is A minor: E major is A minor's dominant, and isn't in D minor at all",
+          a_min["key"] == "A minor", f"{a_min['key']} (runner-up {a_min['runner_up_key']})")
+    check("analysis", "the dominant rule leaves a minor key with its own dominant, and major keys, alone",
+          d_min["key"] == "D minor" and g_maj["key"] == "G major", f"{d_min['key']}, {g_maj['key']}")
+    fs = [("B", "m"), ("C#", ""), ("D", ""), ("F#", "m")]
+    slow, fast = an("fs94", fs, 94), an("fs150", fs, 150)
+    check("analysis", "a 94 BPM groove with eighth-note hats isn't read as 188 (the kick and snare mark the beat)",
+          abs(slow["tempo_bpm"] - 94) < 2, str(slow["tempo_bpm"]))
+    check("analysis", "a real 150 BPM groove (kick or snare on every beat) isn't halved",
+          abs(fast["tempo_bpm"] - 150) < 3, str(fast["tempo_bpm"]))
 
 
 def memory_checks():
@@ -2199,7 +2476,7 @@ def tag_checks(tmp, online=False):
 
     # The real style model (on the server)
     kind = tagger.backend()
-    if kind == "essentia":
+    if kind == "onnx":
         try:
             t0 = time.time()
             pred = tagger.predict([str(blues), str(edm)], ma.load_audio)
@@ -2212,9 +2489,15 @@ def tag_checks(tmp, online=False):
                      str(pe.get("styles", [])[:3]))
             print(f"    model says: guitar blues → {[x for x, _ in pb.get('styles', [])[:3]]}; "
                   f"electronic → {[x for x, _ in pe.get('styles', [])[:3]]}")
+            tl = pb.get("timeline") or {}
+            secs_ = ma.load_audio(str(blues))[0].size / ma.load_audio(str(blues))[1]
+            n_ = len((tl.get("voice") or {}).get("voice") or [])
+            check("tags", "the model also answers second by second (vocals and instruments), one answer a second",
+                  abs(n_ - (secs_ - 2.05) / tagger.PATCH_SEC) <= 2 and bool(tl.get("instruments")),
+                  f"{n_} answers for {secs_:.0f} s")
         except Exception as e:
             check("tags", "the style model runs and names styles", False, str(e)[:300])
-    elif os.environ.get("MUSIC_ESSENTIA_PYTHON"):
+    elif Path("/.dockerenv").exists():
         warn("tags", "the style model isn't installed (the Docker build skipped it); tags still work without styles "
              "from the audio", "")
     else:
@@ -2295,6 +2578,18 @@ def main():
             model_memory_checks(tmp)
         except Exception:
             check("model", "model memory checks ran", False, traceback.format_exc(limit=3))
+        try:
+            report_ui_checks(tmp)
+        except Exception:
+            check("report", "report UI checks ran", False, traceback.format_exc(limit=3))
+        try:
+            misread_checks(tmp)
+        except Exception:
+            check("analysis", "near-tie checks ran", False, traceback.format_exc(limit=3))
+        try:
+            style_checks(tmp)
+        except Exception:
+            check("style", "style checks ran", False, traceback.format_exc(limit=3))
         try:
             crosscompare_checks(tmp)
         except Exception:

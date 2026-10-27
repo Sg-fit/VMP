@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_style.html" import style_css, style_report %}
 {% block title %}{% if s.state == 'done' %}Results{% else %}Analysing…{% endif %} · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
@@ -8,10 +9,35 @@
   .working i:nth-child(4) { animation-delay: -.7s; } .working i:nth-child(5) { animation-delay: -.35s; }
   @keyframes level { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
   @media (prefers-reduced-motion: reduce) { .working i { animation: none; transform: scaleY(.6); } }
-  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 0; align-items: center; }
-  .savebar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 16px; }
-  .privacy-box { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-top: 14px; padding: 10px 14px;
-                 border: 1px solid var(--line); border-left: 4px solid var(--ink); font-size: .88rem; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; align-items: center; }
+  .toolbar .btn { padding: 9px 14px; font-size: .88rem; }
+  .savebar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
+  /* the results header: the title and what you can do with it, side by side */
+  .rhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end;
+           padding-bottom: 12px; border-bottom: 2px solid var(--ink); }
+  @media (max-width: 760px) { .rhead { grid-template-columns: 1fr; } }
+  .rhead h1 { margin: 0; }
+  .rhead .sub { font-size: .9rem; color: var(--muted); margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px;
+                align-items: center; }
+  .rhead .sub form { margin: 0; display: inline; }
+  .rhead .sub .ok { color: var(--ink); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .rhead .sub .ok::before { content: ""; width: 7px; height: 7px; background: var(--accent); }
+  .rhead .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+  .rhead .acts .btn { padding: 9px 14px; font-size: .88rem; }
+  .downloads { position: relative; }
+  .downloads > summary { list-style: none; cursor: pointer; }
+  .downloads > summary::-webkit-details-marker { display: none; }
+  .downloads .menu { position: absolute; right: 0; z-index: 6; min-width: 260px; max-width: min(90vw, 420px);
+                     background: var(--surface); border: 1px solid var(--ink); padding: 10px 12px; display: grid; gap: 6px;
+                     font-size: .88rem; }
+  .downloads .menu a { overflow-wrap: anywhere; }
+  .downloads .menu .label { font-size: .68rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+                            color: var(--muted); margin-top: 4px; }
+  .linkbtn { font: inherit; font-size: .88rem; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
+             text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  .privacy-box { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin-top: 10px; padding: 6px 0;
+                 font-size: .82rem; color: var(--muted); }
+  .privacy-box b { color: var(--ink); }
   .privacy-box form { margin: 0; }
   .privacy-box .linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
                           text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
@@ -34,16 +60,17 @@
                      padding: 3px 9px; font-size: .84rem; max-width: 100%; overflow-wrap: anywhere; }
   .midis a:hover, a.midi:hover { border-color: var(--accent); background: var(--faint); }
 
-  .report { margin-top: 24px; }
+  .report { margin-top: 14px; }
+  h2.style-h { margin: 26px 0 6px; font-size: clamp(1.4rem, 3vw, 1.9rem); letter-spacing: -.02em; }
   .report h1 { display: none; }  /* the page already has a title */
-  .report h2 { margin: 64px 0 8px; padding-top: 18px; border-top: 2px solid var(--ink); font-size: clamp(1.6rem, 3.6vw, 2.3rem);
+  .report h2 { margin: 36px 0 6px; padding-top: 12px; border-top: 2px solid var(--ink); font-size: clamp(1.6rem, 3.6vw, 2.3rem);
                line-height: 1.1; letter-spacing: -.02em; overflow-wrap: anywhere; }
   .report h2 + p { font-size: 1.05rem; }
-  .report h3 { margin: 40px 0 12px; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  .report h3 { margin: 26px 0 8px; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
                display: flex; align-items: center; gap: 8px; }
   .report h3::before { content: ""; width: 8px; height: 8px; background: var(--accent); flex: none; }
   .report ul { padding-left: 18px; } .report li { margin: 5px 0; } .report li::marker { color: var(--muted); }
-  .report blockquote { margin: 0 0 16px; padding: 10px 16px; border-left: 3px solid var(--accent); background: var(--faint); }
+  .report blockquote { margin: 0 0 12px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--faint); }
   .report details { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
   .report summary { cursor: pointer; font-weight: 600; }
   .report summary::marker { color: var(--accent); }
@@ -52,11 +79,44 @@
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
   .report details ul { padding-left: 20px; }
   .report svg.chart { margin: 8px 0 4px; }
-  .report .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px 28px;
-                    align-items: start; margin: 18px 0 26px; padding: 18px 0; border-top: 1px solid var(--line);
+  .report .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px;
+                    align-items: start; margin: 10px 0 14px; padding: 12px 0; border-top: 1px solid var(--line);
                     border-bottom: 1px solid var(--line); }
   .report .glance svg.chart { margin: 0 auto; }
   .report .muted.small { font-size: .8rem; }
+  /* each section shows its gist; the rest is one click away */
+  .report details.more { margin: 14px 0 0; border-top: 1px dashed var(--line); padding-top: 8px; }
+  .report details.more > summary { font-weight: 600; font-size: .85rem; color: var(--muted); list-style: none;
+                                   display: inline-flex; gap: 8px; align-items: center; }
+  .report details.more > summary::-webkit-details-marker { display: none; }
+  .report details.more > summary::before { content: "+"; width: 18px; height: 18px; display: inline-grid; place-items: center;
+                                           border: 1px solid var(--line); font-weight: 700; color: var(--ink); }
+  .report details.more[open] > summary::before { content: "−"; }
+  .report details.more > summary:hover { color: var(--ink); }
+  /* each track: a summary with every picture, then one tab per part */
+  .report .tsum { padding-bottom: 6px; }
+  .report .gallery { margin: 6px 0 4px; }
+  .report .gallery .eyebrow { margin: 0 0 6px; }
+  .report .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+  .report button.thumb { display: grid; gap: 4px; align-content: start; text-align: left; font: inherit; color: inherit;
+                         background: var(--surface); border: 1px solid var(--line); padding: 8px 10px; cursor: pointer; }
+  .report button.thumb:hover, .report button.thumb:focus-visible { border-color: var(--accent); }
+  .report button.thumb .tl { font-size: .74rem; color: var(--muted); white-space: nowrap; overflow: hidden;
+                             text-overflow: ellipsis; }
+  .report button.thumb .tl b { color: var(--ink); font-weight: 600; }
+  .report button.thumb svg { width: 100%; height: 78px; margin: 0 !important; pointer-events: none; }
+  .report nav.tabs { position: sticky; top: 0; z-index: 4; display: flex; gap: 0 2px; overflow-x: auto; overflow-y: hidden; margin: 14px 0 0;
+                     background: var(--bg); border-bottom: 2px solid var(--ink); scrollbar-width: thin; }
+  .report nav.tabs .tab { flex: none; padding: 9px 12px 7px; font-size: .86rem; font-weight: 600; color: var(--muted);
+                          text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .report nav.tabs .tab:hover { color: var(--ink); }
+  .report nav.tabs .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .report nav.tabs .tab.fav::after { content: "●"; color: var(--accent); font-size: .6rem; margin-left: 5px;
+                                     vertical-align: 2px; }
+  .report .track.tabbed > section.rsec { display: none; padding-top: 6px; }
+  .report .track.tabbed > section.rsec.on { display: block; }
+  .report .track.tabbed > section.rsec > h3 { display: none; }  /* the tab names it */
+  .report svg.flash { outline: 2px solid var(--accent); outline-offset: 4px; transition: outline-color 1.5s; }
   .aibar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
            margin-top: 16px; padding: 12px 16px; background: var(--ink); color: var(--bg); font-size: .92rem; }
   .aibar .dot { width: 8px; height: 8px; background: var(--accent); flex: none; animation: blink 1.2s steps(2) infinite; }
@@ -75,7 +135,7 @@
 {% endblock %}
 {% macro privacy_box() %}
 <div class="privacy-box" id="privacy">
-  <b>🔒 Who can see this</b>
+  <b>🔒 Who can see this:</b>
   {% if s.demo %}<span>Everyone: it's a demo, made from generated audio.</span>
   {% elif s.shared %}<span><b>Anyone with this link</b> can open it{% if not saved %}, until {{ expires|datetime }}{% endif %}.</span>
   {% elif saved %}<span><b>Only you.</b> It's in your private history, until you delete it.</span>
@@ -91,7 +151,7 @@
       <button type="submit" class="linkish">Delete now</button></form>
     {% endif %}
   {% endif %}
-  <span class="muted">Your audio was deleted as soon as it was analysed. <a href="{{ url_for('privacy') }}">How we handle your music</a></span>
+  <span>Your audio's already deleted. <a href="{{ url_for('privacy') }}">How we handle your music</a></span>
 </div>
 {% if meta %}
 <p class="small" style="margin:10px 0 0"><a href="{{ url_for('compare_page', t=job_id ~ ':0') }}">Compare with your other
@@ -227,43 +287,44 @@
 
 {% elif s.state == 'done' %}
   <div>
-    <p class="eyebrow">{{ 'Demo' if s.demo else 'Results' }}</p>
-    <h1>{{ demos[s.demo].title if s.demo and s.demo in demos else 'Your analysis' }}</h1>
-    {% if s.demo %}
-    <div class="muted" style="max-width:46em">This is a demo report, made from computer-generated audio, so it sounds
-      simpler than a real recording and has no AI ideas (those come with your own uploads). Everything else is what
-      you'd get for your track. <a href="{{ url_for('index') }}">Upload yours →</a></div>
-    {% else %}
-    <div class="muted">{{ s.files|length }} track{{ 's' if s.files|length != 1 }}{% if not saved %} · these results are temporary, so save or download anything you want to keep{% endif %}</div>
-    {% endif %}
-    <div class="toolbar">
-      <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}"
-         title="One file with the report, the data, all MIDI files and the sheet music.">Download everything (.zip) ↓</a>
-      {% if s.ai_pending %}<span class="muted small">The AI ideas aren't in the download yet. Wait until they're ready to get everything in one go.</span>{% endif %}
-      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}"
-         title="{{ glossary['Report file'] }}">Report (.md)</a>
-      <a class="btn secondary" href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}"
-         title="{{ glossary['Data file'] }}">Data (.json)</a>
-      <a class="btn secondary" href="{{ url_for('index') }}">Analyse more</a>
+    <div class="rhead">
+      <div>
+        <p class="eyebrow">{{ 'Demo' if s.demo else 'Results' }}</p>
+        <h1>{{ demos[s.demo].title if s.demo and s.demo in demos else 'Your style' if s.mode == 'style' else 'Your analysis' }}</h1>
+        <p class="sub">
+        {% if s.demo %}
+          <span>This is a demo report, made from computer-generated audio: simpler than a real recording, and no AI
+            ideas. <a href="{{ url_for('index') }}">Try yours →</a></span>
+        {% else %}
+          <span>{{ s.files|length }} track{{ 's' if s.files|length != 1 }}</span>
+          {% if saved %}
+            <span class="ok">Saved in your history</span> <a href="{{ url_for('history') }}">Library</a>
+          {% elif user %}
+            <form method="post" action="{{ url_for('job_save', job_id=job_id) }}"><button class="linkbtn" type="submit">Save to history</button></form>
+            <span>otherwise it's gone in a day</span>
+          {% else %}
+            <span>Kept for a day. <a href="{{ url_for('login', next=request.path) }}">Sign in</a> or
+              <a href="{{ url_for('signup', next=request.path) }}">make a free account</a> to keep it.</span>
+          {% endif %}
+        {% endif %}
+        </p>
+      </div>
+      <div class="acts">
+        <a class="btn primary" href="{{ url_for('job_zip', job_id=job_id) }}"
+           title="One file with the report, the data, every MIDI file and the sheet music.">Download all ↓</a>
+        <details class="downloads"><summary class="btn secondary">Files ▾</summary>
+          <div class="menu">
+            <a href="{{ url_for('job_file', job_id=job_id, name='music_report.md') }}" title="{{ glossary['Report file'] }}">The report (.md)</a>
+            <a href="{{ url_for('job_file', job_id=job_id, name='music_results.json') }}" title="{{ glossary['Data file'] }}">Every number (.json)</a>
+            {% if midi_files %}<span class="label"><abbr title="{{ glossary['MIDI'] }}">MIDI for your DAW</abbr></span>
+            {% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}{% endif %}
+          </div>
+        </details>
+        <a class="btn secondary" href="{{ url_for('index') }}">Analyse another</a>
+      </div>
     </div>
-    {% if not s.demo %}
-    <div class="savebar">
-      {% if saved %}
-        <span class="ok">Saved in your history</span> · <a href="{{ url_for('history') }}">History</a>
-      {% elif user %}
-        <form method="post" action="{{ url_for('job_save', job_id=job_id) }}"><button class="btn secondary" type="submit">Save to history</button></form>
-        <span class="muted small">If you don't, we'll delete them after a day.</span>
-      {% else %}
-        <span class="muted small">We'll delete these results after a day.
-          <a href="{{ url_for('login', next=request.path) }}">Sign in</a> or
-          <a href="{{ url_for('signup', next=request.path) }}">create a free account</a> to keep them.</span>
-      {% endif %}
-    </div>
-    {% endif %}
+    {% if s.ai_pending %}<p class="muted small" style="margin:8px 0 0">The AI ideas aren't in the download yet: wait for them to get everything in one go.</p>{% endif %}
     {{ privacy_box() }}
-    {% if midi_files %}
-      <div class="midis"><span class="label"><abbr title="{{ glossary['MIDI'] }}">MIDI</abbr></span>{% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}</div>
-    {% endif %}
   </div>
   {% if not s.ai_pending %}
     <script>document.addEventListener('DOMContentLoaded', () => aiNotify.finished('Your music analysis is ready.'));</script>
@@ -304,10 +365,6 @@
       if (y) { sessionStorage.removeItem('scroll-{{ job_id }}'); window.addEventListener('load', () => window.scrollTo(0, +y)); }
     } catch (e) {}
   </script>
-  <p class="muted small" style="margin:32px 0 0;max-width:46em">Where to start: the table shows every track at a
-    glance. Below it, each track has its own sections: harmony, structure, energy and mood, instruments, melody,
-    well-known music it shares something with, groove and sound, ideas and downloads. Hover over (or tap) any
-    underlined word for a quick explanation. There's a full guide under “How to read this report”.</p>
   {% if teach %}
   <details class="limits" style="margin-top:18px;max-width:46em" {{ 'open' if corrected }}>
     <summary>Something wrong? Tell us, and your memory learns from it</summary>
@@ -325,7 +382,104 @@
   {% elif user and saved and s.mode != 'tags' and not s.demo %}
   <p class="muted small" style="margin-top:14px">Want the app to learn from your feedback? <a href="{{ url_for('memory_page') }}">Switch on your memory</a>.</p>
   {% endif %}
+  {% if style_view %}
+  {{ style_css() }}
+  <h2 class="style-h">Your style in these {{ style_view.tracks }} tracks</h2>
+  <p class="muted small" style="margin:0 0 10px">What they have in common, and where they differ.
+    <a href="{{ url_for('style_page') }}">Your style across every session →</a> · each track on its own is further down.</p>
+  {{ style_report(style_view, style_pics, min_tracks) }}
+  <h2 class="style-h">Each track on its own</h2>
+  {% endif %}
   <div class="report">{{ report_html|safe }}</div>
+  <script>
+    (function () {
+      // Which parts of the report you use: unfolding a section's details, exploring its charts, reading it for a
+      // while. Kept as section names and counts only - in this browser, and on your account when your memory is
+      // on. The part you use most is the tab each track opens on, its details unfolded.
+      const report = document.querySelector('.report');
+      const secs = Array.from(report.querySelectorAll('section.rsec'));
+      if (!secs.length) return;
+      const remember = {{ 'true' if remember else 'false' }};
+      const server = {{ interest|tojson }};
+      const W = {opens: 3, charts: 2, reads: 1}, KEY = 'vmp-interest';
+      const NAMES = {{ section_names|tojson }};
+      let local = {};
+      try { local = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { local = {}; }
+      const score = k => remember ? (server[k] || 0)
+        : Object.entries(W).reduce((n, [c, w]) => n + w * ((local[k] || {})[c] || 0), 0);
+      const sent = new Set();
+      function note(k, kind) {  // once per section and kind on each visit
+        if (!k || k === 'other' || sent.has(k + kind)) return;
+        sent.add(k + kind);
+        const col = {open: 'opens', read: 'reads', chart: 'charts'}[kind];
+        local[k] = local[k] || {}; local[k][col] = (local[k][col] || 0) + 1;
+        try { localStorage.setItem(KEY, JSON.stringify(local)); } catch (e) {}
+        if (remember) fetch("{{ url_for('record_interest') }}", {method: 'POST', keepalive: true,
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({section: k, kind})}).catch(() => {});
+      }
+      report.addEventListener('toggle', e => {
+        if (e.target.matches('details.more') && e.target.open) note(e.target.dataset.sec, 'open');
+      }, true);
+      document.addEventListener('chart-used', e => {
+        const s = e.detail.closest && e.detail.closest('section.rsec');
+        if (s) note(s.dataset.sec, 'chart');
+      });
+      if ('IntersectionObserver' in window) {  // on screen for 8 s in all: read
+        const seen = new Map();
+        const io = new IntersectionObserver(entries => entries.forEach(en => {
+          const k = en.target.dataset.sec, now = Date.now(), v = seen.get(en.target) || {t: 0, since: null};
+          if (en.isIntersecting) v.since = now;
+          else if (v.since) { v.t += now - v.since; v.since = null; }
+          seen.set(en.target, v);
+          if (v.t >= 8000) note(k, 'read');
+        }), {threshold: 0.5});
+        secs.forEach(s => io.observe(s));
+        setInterval(() => seen.forEach((v, el) => {
+          if (v.since && v.t + Date.now() - v.since >= 8000) note(el.dataset.sec, 'read');
+        }), 2000);
+      }
+      // One tab at a time for each track. It opens on the part you use most (or the link's part, or the first),
+      // and that part's details come unfolded.
+      const ranked = Array.from(new Set(secs.map(s => s.dataset.sec))).filter(k => k !== 'other')
+        .sort((a, b) => score(b) - score(a));
+      const favs = ranked.filter(k => score(k) >= 3).slice(0, 2);
+      report.querySelectorAll('article.track').forEach(art => {
+        const tabs = Array.from(art.querySelectorAll('nav.tabs .tab'));
+        const panels = Array.from(art.querySelectorAll(':scope > section.rsec'));
+        if (!tabs.length) return;
+        art.classList.add('tabbed');
+        const nav = art.querySelector('nav.tabs');
+        function show(pid, how) {
+          const panel = panels.find(p => p.id === pid) || panels[0];
+          panels.forEach(p => p.classList.toggle('on', p === panel));
+          tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.go === panel.id)));
+          if (how === 'click') {
+            note(panel.dataset.sec, 'open');
+            try { history.replaceState(null, '', '#' + panel.id); } catch (e) {}
+            if (nav.getBoundingClientRect().top < 0) nav.scrollIntoView({behavior: 'smooth'});
+          }
+          return panel;
+        }
+        tabs.forEach(t => {
+          if (favs.includes(t.dataset.sec)) t.classList.add('fav');
+          t.addEventListener('click', e => { e.preventDefault(); show(t.dataset.go, 'click'); });
+        });
+        art.querySelectorAll('button.thumb').forEach(b => b.addEventListener('click', () => {
+          const panel = show(b.dataset.go, 'click');
+          const chart = panel.querySelector(`svg[data-chart="${b.dataset.chart}"]`);
+          if (!chart) return;
+          const fold = chart.closest('details'); if (fold) fold.open = true;
+          chart.scrollIntoView({behavior: 'smooth', block: 'center'});
+          chart.classList.add('flash'); setTimeout(() => chart.classList.remove('flash'), 1600);
+        }));
+        panels.forEach(p => { if (favs.includes(p.dataset.sec)) p.querySelectorAll('details.more').forEach(d => { d.open = true; }); });
+        const fromLink = panels.find(p => '#' + p.id === location.hash);
+        const fav = favs.map(k => panels.find(p => p.dataset.sec === k)).find(Boolean);
+        show((fromLink || fav || panels[0]).id);
+        if (fromLink) nav.scrollIntoView();
+      });
+    })();
+  </script>
   {% if teach %}
   <style>
     .vote { margin-left: 8px; white-space: nowrap; }
@@ -339,10 +493,9 @@
       const url = "{{ url_for('job_feedback', job_id=job_id) }}";
       document.querySelectorAll('.report h3').forEach(h => {
         if (!/Ideas to try|AI brainstorm/.test(h.textContent)) return;
-        let track = h; while (track && track.tagName !== 'H2') track = track.previousElementSibling;
-        const lists = [];
-        for (let el = h.nextElementSibling; el && el.tagName !== 'H3' && el.tagName !== 'H2'; el = el.nextElementSibling)
-          if (el.tagName === 'UL') lists.push(el);
+        const sec = h.closest('section.rsec') || h.parentElement;  // the section, folded part included
+        let track = sec; while (track && track.tagName !== 'H2') track = track.previousElementSibling;
+        const lists = Array.from(sec.querySelectorAll('ul')).filter(ul => !ul.parentElement.closest('li'));
         lists.forEach(ul => ul.querySelectorAll(':scope > li').forEach(li => {
           const strong = li.querySelector('strong');
           const area = strong ? strong.textContent.replace(/:$/, '').trim() : 'idea';

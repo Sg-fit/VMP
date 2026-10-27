@@ -21,27 +21,23 @@ RUN pip install -r requirements.txt
 RUN if [ "$WITH_DEMUCS" = "1" ]; then \
       pip install torch --index-url https://download.pytorch.org/whl/cpu && pip install demucs; \
     fi
-# The style model (Essentia + TensorFlow, CC BY-NC-SA 4.0) gets its own Python environment so its pinned
-# libraries can't clash with ours; tagger.py runs it in a short-lived subprocess. A failed install only turns
-# the style tags off (the self-test reports it); it doesn't fail the build.
+# The style and instrument models (Essentia's, by MTG-UPF, CC BY-NC-SA 4.0) run as ONNX files under onnxruntime
+# (in requirements.txt). A failed download only turns the model's tags off (the self-test reports it); it doesn't
+# fail the build.
 COPY tagger.py .
 RUN if [ "$WITH_STYLE_MODEL" = "1" ]; then \
-      (python -m venv /opt/essentia && /opt/essentia/bin/pip install essentia-tensorflow==2.1b6.dev1389 \
-       && (/opt/essentia/bin/python -c "import essentia.standard" 2>/dev/null \
-           || /opt/essentia/bin/pip install "numpy<2") \
-       && /opt/essentia/bin/python -c "import essentia.standard" \
-       && python tagger.py --download) || echo "!! style model not installed - tags will come from measurements and names only"; \
+      (python tagger.py --download && python tagger.py --check | grep -q onnx) \
+      || echo "!! style model not installed - tags will come from measurements and names only"; \
     fi
-ENV MUSIC_ESSENTIA_PYTHON=/opt/essentia/bin/python
 
-COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py memory.py electronic.py charts.py trends.py gaps.py crosscompare.py ./
+COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py memory.py electronic.py charts.py trends.py gaps.py crosscompare.py style.py ./
 COPY templates ./templates
 
 RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data
 USER appuser
 # Download the Demucs model at build time so the first job doesn't have to.
 RUN if [ "$WITH_DEMUCS" = "1" ]; then \
-      python -c "from demucs.pretrained import get_model; get_model('htdemucs')"; \
+      python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s')"; \
     fi
 VOLUME /data
 EXPOSE 8000

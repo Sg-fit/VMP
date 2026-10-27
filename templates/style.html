@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_style.html" import style_css, style_report %}
+{% block title %}Your style · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+{{ style_css() }}
+<style>
+  .shead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 24px; align-items: end;
+           padding-bottom: 12px; border-bottom: 2px solid var(--ink); margin-bottom: 14px; }
+  @media (max-width: 760px) { .shead { grid-template-columns: 1fr; } }
+  .shead h1 { margin: 0; }
+  .shead .sub { margin: 6px 0 0; font-size: .9rem; color: var(--muted); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filters select { font: inherit; font-size: .88rem; padding: 7px 9px; border: 1px solid var(--line); border-radius: 0;
+                    background: var(--bg); color: var(--ink); }
+  .empty { max-width: 40em; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="shead">
+  <div>
+    <p class="eyebrow">Your style · only you can see it</p>
+    <h1>Your style</h1>
+    <p class="sub">{% if view %}{{ view.tracks }} track{{ 's' if view.tracks != 1 }} from {{ view.sessions|length }}
+      upload session{{ 's' if view.sessions|length != 1 }}{% if project %}, project “{{ project }}”{% endif %}{% if frame != 'all' %},
+      the last {{ frames[frame][0] }}{% endif %}.{% endif %}
+      {% if signed_in %}Everything you've saved counts.{% else %}From this browser's results of the last day:
+      <a href="{{ url_for('signup', next=request.path) }}">a free account</a> keeps your tracks, so your style builds
+      up across sessions.{% endif %}</p>
+  </div>
+  <div class="filters">
+    {% if signed_in %}
+    <form method="get" class="filters">
+      {% if projects %}<select name="project" aria-label="Project" onchange="this.form.submit()">
+        <option value="">All projects</option>
+        {% for p in projects %}<option {{ 'selected' if p == project }}>{{ p }}</option>{% endfor %}</select>{% endif %}
+      <select name="frame" aria-label="Time span" onchange="this.form.submit()">
+        {% for k, (label, days) in frames.items() %}<option value="{{ k }}" {{ 'selected' if k == frame }}>{{ 'All time' if not days else 'Last ' ~ label }}</option>{% endfor %}</select>
+      <noscript><button class="btn secondary" type="submit">Show</button></noscript>
+    </form>
+    {% endif %}
+    <a class="btn primary" href="{{ url_for('style_new') }}">Add tracks →</a>
+  </div>
+</div>
+{% if view %}
+  {{ style_report(view, pics, min_tracks, hurl) }}
+{% else %}
+  <div class="empty">
+    <p class="lede">Your style is what your tracks have in common: the keys and tempos you come back to, the chords
+      you lean on, how your tracks build, and how all that changes from one session to the next.</p>
+    <p>There's nothing to read yet{% if project or frame != 'all' %} for this project or time span{% endif %}. Upload a
+      few of your tracks at once, or analyse them one at a time over several sessions: every one you
+      {{ 'save' if signed_in else 'analyse in this browser' }} counts.</p>
+    <a class="btn primary" href="{{ url_for('style_new') }}">Upload your tracks →</a>
+  </div>
+{% endif %}
+{% endblock %}

@@ -9,7 +9,7 @@
   .promise b { display: block; font-size: 1.05rem; margin-bottom: 4px; }
   .promise span { color: var(--muted); font-size: .92rem; }
   .pv h2 { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; display: flex; align-items: center;
-           gap: 8px; margin: 36px 0 10px; }
+           gap: 8px; margin: 24px 0 8px; }
   .pv h2::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .pv table { width: 100%; font-size: .92rem; }
   .pv li { margin: 6px 0; }
@@ -46,6 +46,10 @@
     <tr><td>The analysis cache (numbers worked out from your audio, so re-analysing the same file is instant)</td>
         <td>Up to {{ cache_hours|round|int }} hours, and deleted with the result</td><td>No one: it's never shown</td></tr>
     <tr><td>Your memory (ratings, corrections, goals)</td><td>Off unless you switch it on; until you clear it</td><td>Only you</td></tr>
+    <tr><td>Which parts of a report you use (the section and how often you unfold it, explore its charts or read
+        it: nothing about the track)</td><td>In your own browser; on your account too only with your memory on,
+        until you clear it</td><td>Only you</td></tr>
+    <tr><td>A track you load into “Listen along”</td><td>Never uploaded: it plays from your own device</td><td>No one</td></tr>
     <tr><td>Your account</td><td>Until you delete it: a username and a hashed password, no email</td><td>Only you</td></tr>
   </table>
 

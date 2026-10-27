@@ -3,7 +3,7 @@
 {% block head %}
 <style>
   .mem { max-width: 760px; }
-  .mem h2 { font-size: 1.25rem; margin: 36px 0 10px; }
+  .mem h2 { font-size: 1.15rem; margin: 24px 0 8px; }
   .mem ul.items { list-style: none; padding: 0; margin: 0; }
   .mem ul.items li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
                      padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -89,10 +89,28 @@
 <p class="muted">None yet. Use the 👍 and 👎 next to each idea on your results.</p>
 {% endif %}
 
+<h2>The parts of the report you use</h2>
+{% if interest %}
+<p class="muted small" style="margin-top:0">Counted when you unfold a section's details, explore its charts or read it for a while.
+  The ones you use most open by themselves and come first. We keep only the section and these counts: nothing about
+  which track, or when.</p>
+<ul class="items">
+  {% for k, v in interest.items() %}
+  <li><span><b>{{ section_names.get(k, k) }}</b>
+    <span class="muted small">· unfolded {{ v.opens }}× · charts explored {{ v.charts }}× · read {{ v.reads }}×</span></span></li>
+  {% endfor %}
+</ul>
+<form method="post" action="{{ url_for('interest_forget') }}" style="margin-top:10px">
+  <button class="danger" type="submit">Forget these</button></form>
+{% else %}
+<p class="muted">Nothing yet.{% if user.memory_on %} As you use your results, the sections you open and explore are counted here.{% else %}
+  With your memory off, this stays in your own browser only.{% endif %}</p>
+{% endif %}
+
 <form method="post" action="{{ url_for('memory_forget') }}" style="margin-top:40px"
-      onsubmit="return confirm('Delete every correction, rating and goal, and switch the memory off? Your saved analyses stay in History.')">
+      onsubmit="return confirm('Delete every correction, rating, goal and reading habit, and switch the memory off? Your saved analyses stay in History.')">
   <button class="danger" type="submit">Forget everything</button>
-  <span class="muted small">Deletes your corrections, ratings and goals and switches the memory off. Your saved analyses stay in History.</span>
+  <span class="muted small">Deletes your corrections, ratings, goals and the parts of the report you use, and switches the memory off. Your saved analyses stay in History.</span>
 </form>
 </div>
 {% endblock %}

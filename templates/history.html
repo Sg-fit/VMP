@@ -3,7 +3,7 @@
 {% block head %}
 <style>
   .frames { display: flex; flex-wrap: wrap; width: max-content; max-width: 100%; border: 1px solid var(--ink);
-            margin: 28px 0 0; }
+            margin: 18px 0 0; }
   .frames a { padding: 8px 14px; font-size: .88rem; font-weight: 600; text-decoration: none; color: var(--ink); }
   .frames a + a { border-left: 1px solid var(--ink); }
   .frames a[aria-current="page"] { background: var(--ink); color: var(--bg); }
@@ -18,23 +18,23 @@
   .tile .sub { font-size: .8rem; color: var(--muted); }
   .tile .note { font-size: .82rem; margin-top: 4px; }
 
-  .changed { margin: 28px 0 0; }
+  .changed { margin: 18px 0 0; }
   .changed h2, .trends h2, .tl-head { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
                                       display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
   .changed h2::before, .trends h2::before, .tl-head::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .changed ul { margin: 0; padding-left: 18px; } .changed li { margin: 4px 0; }
 
-  .trends { margin: 36px 0 0; }
+  .trends { margin: 22px 0 0; }
   .trends .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px 36px; }
   .trends figure { padding-top: 10px; border-top: 1px solid var(--line); }
   .trends figure b { display: block; font-size: .95rem; margin-bottom: 6px; }
 
   /* the timeline: a line down the left, a dot per saved analysis, grouped by day, week or month */
-  .tl-head { margin: 48px 0 0; }
+  .tl-head { margin: 28px 0 0; }
   .tl { list-style: none; margin: 0; padding: 0 0 0 26px; position: relative; }
   .tl::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
   .tl .group { font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
-               margin: 26px 0 8px; position: relative; }
+               margin: 18px 0 6px; position: relative; }
   .tl .group::before { content: ""; position: absolute; left: -26px; top: 2px; width: 14px; height: 14px;
                        background: var(--bg); border: 2px solid var(--ink); }
   .tl .entry { position: relative; padding: 12px 0 14px; border-bottom: 1px solid var(--line); display: grid;
@@ -65,7 +65,7 @@
   details.rename[open] { grid-column: 1 / -1; }
   details.rename input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
                          border-radius: 0; width: min(100%, 360px); margin: 8px 6px 0 0; }
-  .empty { margin-top: 32px; }
+  .empty { margin-top: 20px; }
   .trk input.pick { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
   .cmpbar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
             justify-content: space-between; padding: 12px 0; margin-top: 12px; background: var(--bg);
@@ -93,10 +93,10 @@
 </style>
 {% endblock %}
 {% block content %}
-<p class="eyebrow">Saved analyses</p>
-<h1>History</h1>
-<p class="lede">Your library: every saved analysis, filed by project, where it's at, and your own labels and notes,
-  with a summary, what changed and the trends for whatever you pick. Only you can see it.</p>
+<p class="eyebrow">Your library · only you can see it</p>
+<h1>Your tracks</h1>
+<p class="lede">Everything you've saved, filed your way. Pick a project or a time span to see how your music is
+  changing.</p>
 <a class="btn primary" href="{{ url_for('index') }}">New analysis →</a>
 <a class="btn secondary" href="{{ url_for('profile') }}">Your profile</a>
 <a class="btn secondary" href="{{ url_for('compare_page') }}">Compare tracks</a>

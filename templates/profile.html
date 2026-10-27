@@ -3,7 +3,7 @@
 {% block head %}
 <style>
   h1 { overflow-wrap: anywhere; }
-  .readout { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 2px solid var(--ink); margin: 28px 0 8px; }
+  .readout { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 2px solid var(--ink); margin: 16px 0 6px; }
   .readout div { padding: 14px 12px 0 0; }
   .readout b { display: block; font-size: clamp(1.7rem, 4vw, 2.6rem); line-height: 1; letter-spacing: -.02em; }
   .readout span { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
@@ -12,9 +12,9 @@
           align-items: end; margin: 8px 0 24px; padding: 20px 0; border-top: 1px solid var(--line);
           border-bottom: 1px solid var(--line); }
   .pics svg { margin: 0 auto; }
-  .sentence { font-size: clamp(1.2rem, 2.6vw, 1.6rem); line-height: 1.3; letter-spacing: -.01em; max-width: 32em; margin: 32px 0; }
+  .sentence { font-size: clamp(1.2rem, 2.6vw, 1.6rem); line-height: 1.3; letter-spacing: -.01em; max-width: 32em; margin: 18px 0; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 40px; }
-  .stat h3 { font-size: .74rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; margin: 28px 0 10px;
+  .stat h3 { font-size: .74rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; margin: 18px 0 8px;
              display: flex; align-items: center; gap: 8px; }
   .stat h3::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .bars { list-style: none; padding: 0; margin: 0; }
@@ -29,7 +29,7 @@
   .recent li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
   .recent a { overflow-wrap: anywhere; }
   .recent span { color: var(--muted); font-size: .85rem; white-space: nowrap; }
-  .signout { margin-top: 48px; }
+  .signout { margin-top: 28px; }
   .signout button { font: inherit; background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline;
                     cursor: pointer; }
 </style>
@@ -72,8 +72,8 @@
     {% if p.tempo_list %}<figure>{{ charts.tempo_dots(p.tempo_list, width=300)|safe }}<figcaption>Every track's
       tempo: where your music usually sits.</figcaption></figure>{% endif %}
   </div>
-  <p class="muted small" style="max-width:46em">Everything below sums up all the tracks in your history. Numbers are
-    how many tracks each item appears in; the bars compare them. Underlined terms explain themselves.</p>
+  <p class="muted small" style="max-width:46em">All your saved tracks at once. The numbers count tracks; hover over
+    anything underlined for what it means.</p>
   <div class="grid2">
     <div class="stat"><h3><abbr title="{{ glossary['Key'] }}">Keys you use</abbr></h3>{{ bars(p['keys']) }}</div>
     <div class="stat"><h3><abbr title="{{ glossary['Mode'] }}">Modes</abbr></h3>{{ bars(p.modes) }}</div>

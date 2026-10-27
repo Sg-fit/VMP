@@ -1,206 +1,241 @@
 {% extends "base.html" %}
-{% block bodyclass %}{{ 'tags-mode' if mode == 'tags' }}{% endblock %}
+{% block bodyclass %}mode-{{ mode }}{% endblock %}
 {% block head %}
 <style>
-  .hero { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 48px; align-items: start; }
-  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; gap: 28px; } }
-  .readout { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 2px solid var(--ink); margin-top: 8px; }
-  .readout div { padding: 14px 12px 0 0; }
-  .readout b { display: block; font-size: clamp(1.6rem, 3.4vw, 2.3rem); line-height: 1; letter-spacing: -.02em; }
-  .readout span { font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px 32px; align-items: start;
+          grid-template-areas: "pitch form" "peek form"; }
+  .hero > .pitch { grid-area: pitch; } .hero > .panel { grid-area: form; } .hero > .peek { grid-area: peek; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; grid-template-areas: "pitch" "form" "peek"; gap: 16px; } }
+  .hero h1 { max-width: 13em; }
 
-  .drop { display: block; border: 1px dashed var(--muted); padding: 40px 20px; text-align: center; cursor: pointer;
-          transition: border-color .15s, background .15s; margin: 0 0 16px; background: var(--bg); }
+  /* a look inside a report: four pictures to flip through and hover */
+  .peek { border-top: 2px solid var(--ink); margin-top: 4px; }
+  .peek .tabs { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 12px; }
+  .peek .tabs button { font: inherit; font-size: .85rem; font-weight: 600; background: none; color: var(--muted);
+                       border: 0; border-bottom: 2px solid transparent; padding: 9px 12px 7px 0; margin-right: 14px;
+                       cursor: pointer; }
+  .peek .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .peek .tabs button:hover { color: var(--ink); }
+  .peek figure { display: none; min-height: 150px; }
+  .peek figure.on { display: block; }
+  .peek figcaption { font-size: .9rem; color: var(--ink); margin-top: 8px; max-width: 34em; }
+  .peek .hint { font-size: .76rem; color: var(--muted); margin: 6px 0 0; }
+  .peek .dots { display: flex; gap: 6px; margin-top: 10px; }
+  .peek .dots i { width: 18px; height: 3px; background: var(--line); }
+  .peek .dots i.on { background: var(--accent); }
+
+  .drop { display: flex; gap: 14px; align-items: center; border: 1px dashed var(--muted); padding: 18px; cursor: pointer;
+          transition: border-color .15s, background .15s; margin: 0 0 12px; background: var(--bg); }
   .drop:hover, .drop.over { border: 1px solid var(--accent); background: var(--faint); }
   .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .drop .plus { display: inline-grid; place-items: center; width: 44px; height: 44px; margin-bottom: 12px;
-                background: var(--accent); color: var(--on-accent); font-size: 1.6rem; font-weight: 400; line-height: 1; }
-  .drop .title { font-weight: 700; font-size: 1.1rem; }
-  #chosen { list-style: none; padding: 0; margin: 0 0 20px; font-size: .92rem; }
-  #chosen li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
-  #chosen li span { color: var(--muted); white-space: nowrap; }
+  .drop .plus { flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px;
+                background: var(--accent); color: var(--on-accent); font-size: 1.5rem; line-height: 1; }
+  .drop .title { font-weight: 700; }
+  /* each chosen file, with its waveform drawn here in the browser (nothing is sent until you press Analyse) */
+  #chosen { list-style: none; padding: 0; margin: 0 0 12px; font-size: .88rem; }
+  #chosen li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #chosen li .meta { color: var(--muted); white-space: nowrap; }
+  #chosen li canvas { grid-column: 1 / -1; width: 100%; height: 28px; display: block; }
+  #chosen li .name { overflow-wrap: anywhere; }
   label.field { display: block; font-size: .72rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
-                margin-bottom: 6px; }
-  textarea { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
-             background: var(--bg); color: var(--ink); margin-bottom: 6px; resize: vertical; }
+                margin-bottom: 5px; }
+  label.field .opt, legend.field .opt { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); }
+  textarea { width: 100%; font: inherit; padding: 9px 11px; border-radius: 0; border: 1px solid var(--line);
+             background: var(--bg); color: var(--ink); margin-bottom: 4px; resize: vertical; }
   textarea:focus { border-color: var(--ink); outline: none; }
-  .about { border: 0; padding: 0; margin: 0 0 20px; min-width: 0; }
-  .about legend { padding: 0; margin-bottom: 8px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .inst-group .chips { margin-bottom: 8px; gap: 4px; }
-  .inst-group .chip span { padding: 4px 9px; font-size: .82rem; }
-  .inst-label { display: block; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .inst-label { display: block; font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
                 margin: 0 0 3px; }
   .chip { position: relative; cursor: pointer; }
   .chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-  .chip span { display: inline-block; padding: 6px 11px; border: 1px solid var(--line); font-size: .86rem; user-select: none; }
+  .chip span { display: inline-block; padding: 4px 9px; border: 1px solid var(--line); font-size: .82rem; user-select: none; }
   .chip input:checked + span { background: var(--ink); color: var(--bg); border-color: var(--ink); }
   .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .about select { width: 100%; font: inherit; font-size: .92rem; padding: 9px 10px; border: 1px solid var(--line);
-                  border-radius: 0; background: var(--bg); color: var(--ink); }
-  .limits { margin-top: 8px; font-size: .84rem; }
-  .limits summary { cursor: pointer; color: var(--muted); }
-  .limits summary::marker { color: var(--accent); }
-  .limits ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
-  .limits li { margin: 0 0 6px; } .limits b { color: var(--ink); font-weight: 600; }
-  .modes { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--ink); margin: 0 0 20px; }
+  select { width: 100%; font: inherit; font-size: .9rem; padding: 8px 10px; border: 1px solid var(--line);
+           border-radius: 0; background: var(--bg); color: var(--ink); margin-bottom: 10px; }
+  .extra { border-top: 1px solid var(--line); margin: 0 0 12px; }
+  .extra > summary { cursor: pointer; padding: 10px 0; font-weight: 600; font-size: .92rem; list-style: none;
+                     display: flex; justify-content: space-between; gap: 10px; }
+  .extra > summary::-webkit-details-marker { display: none; }
+  .extra > summary::after { content: "+"; font-weight: 700; color: var(--accent); }
+  .extra[open] > summary::after { content: "−"; }
+  .extra > summary .opt { font-weight: 400; color: var(--muted); font-size: .82rem; }
+  .extra .help { font-size: .8rem; color: var(--muted); margin: 0 0 10px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--ink); margin: 0 0 12px; }
   .modes label { position: relative; cursor: pointer; }
   .modes input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-  .modes span { display: block; padding: 10px 12px; text-align: center; font-weight: 600; font-size: .92rem; }
+  .modes span { display: block; padding: 9px 10px; text-align: center; font-weight: 600; font-size: .9rem; }
   .modes label + label span { border-left: 1px solid var(--ink); }
   .modes input:checked + span { background: var(--ink); color: var(--bg); }
   .modes input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -4px; }
-  #form.tags [data-only="musician"], #form:not(.tags) [data-only="tags"],
-  body.tags-mode .hero [data-only="musician"], body:not(.tags-mode) .hero [data-only="tags"],
-  body.tags-mode .features[data-only="musician"], body:not(.tags-mode) .features[data-only="tags"],
-  body.tags-mode .demos[data-only="musician"] { display: none; }
-  .demos { margin-top: 56px; }
-  .private-note { font-size: .84rem; color: var(--muted); margin: 12px 0 0; }
-  .notice { border-left: 3px solid var(--ink); background: var(--faint); padding: 10px 14px; margin-bottom: 16px; }
-  .privacy-strip { margin-top: 64px; border-top: 2px solid var(--ink); padding-top: 16px; }
-  .privacy-strip .row4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 24px; }
-  .privacy-strip .row4 div { padding: 10px 0; }
-  .privacy-strip b { display: block; margin-bottom: 4px; }
-  .privacy-strip span { color: var(--muted); font-size: .9rem; }
-  .example { margin: 28px 0 0; max-width: 520px; }
-  .features .pic { display: block; height: 100px; margin-bottom: 14px; color: var(--ink); }
-  .features .pic svg { max-height: 100px; width: auto; max-width: 100%; }
-  .demos a.demo .thumb { display: block; margin: -4px 0 10px; color: var(--ink); }
-  .admire { border: 1px solid var(--ink); border-left: 4px solid var(--accent); padding: 14px 16px; margin: 0 0 20px; }
+  /* three tabs on one form: each part says which tabs it belongs to (data-only="musician style") */
+  body.mode-musician [data-only]:not([data-only~="musician"]),
+  body.mode-style [data-only]:not([data-only~="style"]),
+  body.mode-tags [data-only]:not([data-only~="tags"]) { display: none; }
+  .library-note { font-size: .85rem; margin: 0 0 12px; padding: 8px 12px; background: var(--faint); }
+  .private-note { font-size: .8rem; color: var(--muted); margin: 10px 0 0; }
+  .notice { border-left: 3px solid var(--ink); background: var(--faint); padding: 10px 14px; margin-bottom: 12px; }
+  .admire { border-left: 3px solid var(--accent); padding: 2px 0 2px 12px; margin: 0 0 12px; }
   .admire input.text { margin-bottom: 4px; }
-  #chosen-refs { list-style: none; padding: 0; margin: 0 0 6px; font-size: .9rem; }
-  #chosen-refs li { padding: 4px 0; border-bottom: 1px solid var(--line); }
-  .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
-  @media (max-width: 860px) { .demos .row3 { grid-template-columns: 1fr; } }
-  .demos a.demo { display: block; padding: 16px 18px; border: 1px solid var(--line); color: inherit;
-                  text-decoration: none; transition: border-color .15s, background .15s; }
-  .demos a.demo:hover, .demos a.demo:focus-visible { border-color: var(--accent); background: var(--faint); }
-  .demos a.demo b { display: block; font-size: 1.05rem; margin-bottom: 6px; }
-  .demos a.demo span { color: var(--muted); font-size: .9rem; }
-  input.text { width: 100%; font: inherit; padding: 10px 12px; border-radius: 0; border: 1px solid var(--line);
-               background: var(--bg); color: var(--ink); margin-bottom: 6px; }
+  #chosen-refs { list-style: none; padding: 0; margin: 0; font-size: .86rem; }
+  #chosen-refs li { padding: 3px 0; }
+  input.text { width: 100%; font: inherit; padding: 9px 11px; border-radius: 0; border: 1px solid var(--line);
+               background: var(--bg); color: var(--ink); margin-bottom: 4px; }
   input.text:focus { border-color: var(--ink); outline: none; }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
-         padding-top: 18px; border-top: 1px solid var(--line); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between;
+         padding-top: 12px; border-top: 1px solid var(--line); }
   .row input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; vertical-align: -3px; }
+  .limits { margin-top: 6px; font-size: .82rem; }
+  .limits summary { cursor: pointer; color: var(--muted); }
+  .limits ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+  .limits li { margin: 0 0 5px; } .limits b { color: var(--ink); font-weight: 600; }
 
-  .features { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 72px; border-top: 2px solid var(--ink); }
-  .features div { padding: 18px 20px 0 0; font-size: .92rem; color: var(--muted); }
-  .features div + div { padding-left: 20px; border-left: 1px solid var(--line); }
-  .features .n { display: block; font-size: .72rem; letter-spacing: .12em; color: var(--muted); margin-bottom: 18px; }
-  .features b { display: block; color: var(--ink); font-size: 1.15rem; letter-spacing: -.01em; margin-bottom: 6px; }
+  /* what's in a report, then the demos, then privacy: three compact bands */
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 36px; border-top: 2px solid var(--ink); }
+  .features > div { padding: 14px 16px 0 0; font-size: .88rem; color: var(--muted); }
+  .features > div + div { padding-left: 16px; border-left: 1px solid var(--line); }
+  .features .pic { display: block; height: 78px; margin-bottom: 8px; color: var(--ink); }
+  .features .pic svg { max-height: 78px; width: auto; max-width: 100%; }
+  .features b { display: block; color: var(--ink); font-size: 1rem; letter-spacing: -.01em; margin-bottom: 3px; }
   @media (max-width: 860px) {
     .features { grid-template-columns: 1fr 1fr; }
-    .features div, .features div + div { padding: 18px 16px 18px 0; border-left: 0; border-bottom: 1px solid var(--line); }
+    .features > div, .features > div + div { padding: 12px 12px 12px 0; border-left: 0; border-bottom: 1px solid var(--line); }
   }
   @media (max-width: 480px) { .features { grid-template-columns: 1fr; } }
+  .demos { margin-top: 32px; }
+  .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 860px) { .demos .row3 { grid-template-columns: 1fr; } }
+  .demos a.demo { display: block; padding: 12px 14px; border: 1px solid var(--line); color: inherit;
+                  text-decoration: none; transition: border-color .15s, background .15s; }
+  .demos a.demo:hover, .demos a.demo:focus-visible { border-color: var(--accent); background: var(--faint); }
+  .demos a.demo b { display: block; font-size: 1rem; margin-bottom: 2px; }
+  .demos a.demo span { color: var(--muted); font-size: .85rem; }
+  .demos a.demo .thumb { display: block; margin: -4px 0 6px; color: var(--ink); }
+  .privacy-strip { margin-top: 32px; border-top: 2px solid var(--ink); padding-top: 10px;
+                   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 20px; }
+  .privacy-strip > p { grid-column: 1 / -1; margin: 0 0 4px; }
+  .privacy-strip div { padding: 6px 0; font-size: .85rem; color: var(--muted); }
+  .privacy-strip b { display: block; color: var(--ink); font-size: .92rem; }
+  .account-note { margin-top: 18px; font-size: .85rem; color: var(--muted); max-width: 52em; }
 </style>
 {% endblock %}
 {% block content %}
 <section class="hero">
-  <div>
+  <div class="pitch">
     <div data-only="musician">
-    <p class="eyebrow">For musicians and producers · band, acoustic and electronic</p>
-    <h1>Hear what the songs you love do differently.</h1>
-    <p class="lede">Upload your track with up to three songs you admire. We measure them all the same way and show
-      where you're already close, what they share that yours doesn't, and what to try. You also get your key, chords,
-      structure, groove and mix read back to you, with the bass as sheet music and MIDI for your DAW.</p>
+    <p class="eyebrow">For musicians and producers</p>
+    <h1>Hear what your favourite songs do differently.</h1>
+    <p class="lede">Drop in your track, plus up to three songs you love. We'll lay them side by side, show you where
+      you're already close, and suggest what to try next.</p>
+    </div>
+    <div data-only="style">
+    <p class="eyebrow">Across everything you make</p>
+    <h1>See your style, track after track.</h1>
+    <p class="lede">Drop in a few of your tracks (or keep adding them, session by session). We'll show what they have in
+      common, what you always do, how it's changing, and the ground you haven't covered yet.</p>
+    <figure class="style-example">{{ charts.example_style(width=560)|safe }}
+      <figcaption>An example: every track a dot on every measure. Shaded: your usual range. “Habit”: where you hardly
+        vary.</figcaption></figure>
     </div>
     <div data-only="tags">
-    <p class="eyebrow">For listeners · playlists and favourite songs</p>
-    <h1>Find music like the music you love.</h1>
-    <p class="lede">Tell us which songs you love (upload them, paste a playlist link or type their names) and we'll
-      work out what they have in common: styles, moods, sound and rhythm, in the words music sites search by. Search
-      with those and you'll reach artists the big recommendation engines tend to skip.</p>
+    <p class="eyebrow">For listeners</p>
+    <h1>Find more music like the music you love.</h1>
+    <p class="lede">Give us a few songs (files, a playlist link or just their names). We'll work out what they have in
+      common and turn it into searches that reach artists the big apps tend to skip.</p>
     </div>
-    <div class="readout" data-only="musician">
-      <div><b><abbr title="Your track beside the songs you admire: tempo, arrangement, groove, loudness, tone,
-        sidechain and drops, with only the differences big enough to hear.">vs.</abbr></b><span>songs you admire</span></div>
-      <div><b><abbr title="{{ glossary['Key'] }} {{ glossary['Tempo'] }}">Key</abbr></b><span>BPM & chords</span></div>
-      <div><b><abbr title="{{ glossary['Sidechain'] }} {{ glossary['Drop'] }}">Drops</abbr></b><span>& the mix</span></div>
-    </div>
-    <figure class="example" data-only="musician">{{ charts.example_overlay(width=520, height=150)|safe }}
-      <figcaption>What you get: your track laid over the songs you admire, here their energy over time. Theirs
-        drops harder; the report says what to try.</figcaption></figure>
   </div>
+    <div class="peek" data-only="musician" aria-label="A look inside a report">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-peek="0">Side by side</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="1">Who plays when</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="2">Chords</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="3">Groove</button>
+      </div>
+      <figure class="on" role="tabpanel">{{ charts.example_overlay(width=520, height=150)|safe }}
+        <figcaption>Your track's energy over the song you admire. Theirs hits harder at the drop, so that's where
+          we'd start.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.example_lineup(width=520)|safe }}
+        <figcaption>Every instrument, section by section. We only show drums or a bass when we can actually hear
+          them.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.example_chords(width=520)|safe }}
+        <figcaption>Your chords along the song, coloured by what they do: home, moving away, or pulling back
+          home.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=520, bpm=96)|safe }}
+        <figcaption>One bar of the beat: where the kick and snare land, and the hats on top.</figcaption></figure>
+      <div class="dots" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i></div>
+      <p class="hint">An example. Hover over (or tap) the pictures for the details: every chart in a report works the
+        same way.</p>
+    </div>
 
   <div class="panel">
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     {% if request.args.deleted == 'account' %}<div class="notice">Your account and everything in it have been deleted.</div>
-    {% elif request.args.deleted %}<div class="notice">Deleted: that result and everything made from it are gone.</div>{% endif %}
+    {% elif request.args.deleted %}<div class="notice">Deleted. That result and everything made from it are gone.</div>{% endif %}
     <form id="form" method="post" action="{{ url_for('analyze') }}" enctype="multipart/form-data"
           class="{{ 'tags' if mode == 'tags' }}">
       <div class="modes" role="radiogroup" aria-label="What do you want to do?">
-        <label><input type="radio" name="mode" value="musician" {{ 'checked' if mode != 'tags' }}><span>Analyse my music</span></label>
-        <label><input type="radio" name="mode" value="tags" {{ 'checked' if mode == 'tags' }}><span>Find music like this</span></label>
+        <label><input type="radio" name="mode" value="musician" {{ 'checked' if mode == 'musician' }}><span>Analyse</span></label>
+        <label><input type="radio" name="mode" value="style" {{ 'checked' if mode == 'style' }}><span>Your style</span></label>
+        <label><input type="radio" name="mode" value="tags" {{ 'checked' if mode == 'tags' }}><span>Find music</span></label>
       </div>
       <label class="drop" id="drop">
         <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
         <span class="plus" aria-hidden="true">+</span>
-        <div class="title">Choose audio files<span data-only="tags" class="muted" style="font-weight:400"> — optional</span></div>
-        <div class="muted small">or drop them here · <abbr title="Most audio files work: phone voice memos (.m4a),
-          mp3, wav, flac, ogg and aac. Instrumental recordings give the clearest results. If there's singing, the
-          melody we find will usually be the voice.">{{ exts }}</abbr> · up to {{ max_files }} files, {{ max_mb }} MB total</div>
+        <span><span class="title">Choose your tracks<span data-only="tags" class="muted" style="font-weight:400"> (optional)</span><span data-only="style" class="muted" style="font-weight:400"> (two or more)</span></span><br>
+          <span class="muted small">or drop them here · <abbr title="Most audio files work: phone voice memos (.m4a),
+          mp3, wav, flac, ogg and aac.">{{ exts }}</abbr> · up to {{ max_files }}, {{ max_mb }} MB in all</span></span>
       </label>
-      <ul id="chosen"></ul>
+      <ul id="chosen" aria-live="polite"></ul>
       <div class="admire" data-only="musician">
-        <label class="field" for="reference"><abbr title="Finished songs you'd like yours to feel like, from any
-          genre. We analyse them the same way and put yours beside each one (tempo, arrangement and drops, groove,
-          sidechain, loudness, punch, tone and stereo), pointing out only the differences big enough to hear, with
-          things to try. With two or three, we also show what they all have in common. They get no ideas, MIDI or
-          sheet music of their own, and they're deleted with your audio.">Songs you admire</abbr>
-          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, up to 3</span></label>
+        <label class="field" for="reference"><abbr title="Finished songs you'd like yours to feel like, in any genre.
+          We measure them the same way as yours and point out only the differences you'd actually hear, with things
+          to try. With two or three, what they all share is the strongest lead. They're deleted along with your
+          audio.">Songs you love</abbr> <span class="opt">optional, up to 3</span></label>
         <input class="text" type="file" id="reference" name="reference" multiple
-               accept="{{ exts.replace(' ', ',') }},audio/*" style="padding:8px">
+               accept="{{ exts.replace(' ', ',') }},audio/*" style="padding:7px">
         <ul id="chosen-refs"></ul>
-        <p class="muted small" style="margin:0">We'll show where you're already close, what they do differently, and
-          what to try. With more than one, what they all share is the strongest lead.</p>
       </div>
       <div data-only="tags">
         <label class="field" for="playlist"><abbr title="A public Spotify playlist, album or track, or a YouTube
-          playlist. We only read the song names from it, not the audio, so these songs count for less than the ones
-          you upload.">Playlist link</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+          playlist. We only read the song names, never the audio, so these count for less than songs you upload.">Playlist
+          link</abbr> <span class="opt">optional</span></label>
         <input class="text" id="playlist" name="playlist" type="url" maxlength="500" value="{{ form.get('playlist', '') }}"
                placeholder="https://open.spotify.com/playlist/…  or  https://www.youtube.com/playlist?list=…">
-        <label class="field" for="songs" style="margin-top:14px">Song names <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, one per line</span></label>
-        <textarea id="songs" name="songs" rows="4" maxlength="8000"
+        <label class="field" for="songs" style="margin-top:10px">Song names <span class="opt">optional, one per line</span></label>
+        <textarea id="songs" name="songs" rows="3" maxlength="8000"
           placeholder="Massive Attack - Teardrop&#10;Khruangbin - Maria También">{{ form.get('songs', '') }}</textarea>
-        <label class="field" for="description" style="margin-top:14px"><abbr title="A few words, separated by commas,
-          for the sound you're after. Each phrase is used as a tag of its own: it leads the searches and the
-          lesser-known artists we look for. Works on its own too, with no songs at all.">Describe what you're
-          after</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
+        <label class="field" for="description" style="margin-top:10px"><abbr title="A few words, separated by commas,
+          for the sound you're after. Each one becomes a tag and leads the searches. Works with no songs at all.">The
+          sound you're after</abbr> <span class="opt">optional</span></label>
         <input class="text" id="description" name="description" maxlength="300" value="{{ form.get('description', '') }}"
                placeholder="melancholic, trip hop, female vocals">
-        <p class="muted small" style="margin:0 0 6px">We'll also find lesser-known artists with this sound: ones far fewer
-          people play than the artists you already know.</p>
         <details class="limits">
           <summary>How we come up with the tags</summary>
           <ul>
-            <li><b>Songs you upload, we listen to:</b> tempo, time signature, mood and energy, whether there are drums,
-              blues forms and, where the style model is installed, styles from 400 categories, moods and instruments.
-              These count in full.</li>
-            <li><b>Songs from a link or a list, we look up by name</b> on MusicBrainz, using the tags listeners gave the
-              song or, more often, the artist. That describes the artist's music in general rather than this exact
-              song, so each one counts for less (0.4 against 1). Upload the audio too and we'll listen to it as well.</li>
-            <li><b>A few limits:</b> up to 100 songs, and we can't open private playlists. Lesser-known songs may not be
-              on MusicBrainz yet, and the style model is surer about broad families than close neighbours. We show
-              broad tags like “rock” but leave them out of the searches, because they lead straight back to the
+            <li><b>Songs you upload, we listen to:</b> tempo, time signature, mood and energy, drums or not, blues forms
+              and, where the style model is installed, styles, moods and instruments. These count in full.</li>
+            <li><b>Songs from a link or a list, we look up by name</b> on MusicBrainz. Those tags usually describe the
+              artist rather than the song, so each counts 0.4 against 1. Upload the audio too and we'll listen to it.</li>
+            <li><b>Limits:</b> up to 100 songs; no private playlists; very new or obscure songs may not be on
+              MusicBrainz yet. Broad tags like “rock” are shown but not searched: they lead straight back to the
               biggest names.</li>
             <li>Style model: Essentia by MTG, Universitat Pompeu Fabra — CC BY-NC-SA 4.0, non-commercial use.</li>
           </ul>
         </details>
-        <div class="row" style="margin-top:20px">
-          <span class="muted small">No AI, MIDI or sheet music here, just tags and searches.</span>
+        <div class="row" style="margin-top:14px">
+          <span class="muted small">Tags and searches only: no AI, MIDI or sheet music.</span>
           <button class="btn primary" type="submit">Find tags →</button>
         </div>
       </div>
-      <fieldset class="about" data-only="musician">
-        <legend class="field"><abbr title="Optional, but it helps. From a phone recording alone we can't tell a bass guitar
-          from a guitar's low strings, and we sometimes count the beat at half or double speed. Your answers settle
-          both. They also pick the sounds for the MIDI files, write a guitar part in guitar notation, label a sung
-          melody, and give the AI some context.">About the music</abbr>
-          <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional, for every track you upload</span></legend>
+      {% if library_tracks %}
+      <p class="library-note" data-only="style">You've saved {{ library_tracks }} track{{ 's' if library_tracks != 1 }}
+        already. <a href="{{ url_for('style_page') }}">Read your style from them →</a> Anything you add here joins them.</p>
+      {% endif %}
+      <details class="extra" data-only="musician style" {{ 'open' if prefill.instruments or prefill.genre }}>
+        <summary><span>Tell us about the music <span class="opt">instruments, genre, the tune</span></span></summary>
+        <p class="help">Optional, but it helps. A phone can't tell a bass from a guitar's low strings, and we sometimes
+          count the beat at double speed. Your answers settle that.</p>
         {% for group, keys in instrument_groups %}
         <div class="inst-group" role="group" aria-label="{{ group }}">
           <span class="inst-label">{{ group }}</span>
@@ -212,115 +247,133 @@
         </div>
         {% endfor %}
         <select name="genre" aria-label="Genre">
-          <option value="">Genre — not sure / mixed</option>
+          <option value="">Genre — not sure, or a mix</option>
           {% for key, label in genres.items() %}<option value="{{ key }}" {{ 'selected' if key == prefill.genre }}>{{ label }}</option>{% endfor %}
         </select>
         {% if prefill.instruments or prefill.genre %}
-        <p class="muted small" style="margin:6px 0 0">Ticked from your earlier uploads (your memory is on). Change
-          anything that's different this time. <a href="{{ url_for('memory_page') }}">What we remember</a></p>
+        <p class="help">Ticked from your earlier uploads (your memory is on). Change whatever's different this time.
+          <a href="{{ url_for('memory_page') }}">What we remember</a></p>
         {% endif %}
-        <p class="muted small" style="margin:6px 0 0">Tick the instruments you can hear, or leave it all blank and we'll
-          make our best guess.</p>
+        <div data-only="musician">
+        <label class="field" for="melody"><abbr title="Picking a tune out of a full band is hit and miss, so you can
+          type it: note names with spaces (C D E, F# Bb …), octaves if you like (A3 E4). For several tracks, start each
+          line with part of the file name and a colon.">The tune or riff</abbr> <span class="opt">type the notes you hear</span></label>
+        <textarea id="melody" name="melody" rows="2" maxlength="2000"
+          placeholder="A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"></textarea>
+        </div>
         <details class="limits">
           <summary>What ticking a box changes</summary>
           <ul>
-            <li><b>Drums and bass</b> decide whether you get a drum grid and a bass line. This matters most on phone
-              recordings, where a bass guitar and a guitar's low strings sound alike.</li>
-            <li><b>One instrument on its own</b> (say, solo guitar, piano or cello): we write its lowest notes out as
-              their own part, in guitar notation for a guitar, with that instrument's range and sound in the MIDI
-              file. A double bass or synth bass gets its own sound too.</li>
+            <li><b>Drums and bass</b> decide whether you get a drum grid and a bass line.</li>
+            <li><b>One instrument on its own</b> (solo guitar, piano, cello): its lowest notes get written out as their
+              own part, in guitar notation for a guitar, with that instrument's sound in the MIDI file.</li>
             <li><b>Voice, or one lead instrument:</b> we label the melody line as theirs.</li>
-            <li><b>What it can't do:</b> apart from the drums and the lowest part, we don't write out each instrument
-              separately. A guitar or piano in a band shows up in the chords and the melody line. Ticking it still
-              helps: we know it's there, and so does the AI.</li>
+            <li><b>What it can't do:</b> apart from the drums and the lowest part, instruments aren't written out one
+              by one. A guitar or piano in a band shows up in the chords and the melody.</li>
           </ul>
         </details>
-      </fieldset>
+      </details>
+      <div data-only="style">
+      <div class="row">
+        <span class="muted small">Each track is analysed in full, then read together.</span>
+        <button class="btn primary" type="submit">Read my style →</button>
+      </div>
+      <p class="private-note">🔒 Only you can see your style{% if not user %} (in this browser, for a day:
+        <a href="{{ url_for('signup') }}">a free account</a> keeps building it, session after session){% endif %}.
+        We delete your audio as soon as we've listened.</p>
+      </div>
       <div data-only="musician">
-      <label class="field" for="melody"><abbr title="Picking a tune out of a full band automatically is hit and
-        miss, so you can type it instead: note names with spaces between them (C D E, F# Bb …), with octaves if you
-        like (A3 E4). For several tracks, start each line with part of the file name and a colon.">Melody or riff</abbr> <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">— optional</span></label>
-      <textarea id="melody" name="melody" rows="2" maxlength="2000"
-        placeholder="A E F E A E D E — or one line per track:  copy 4: A E F E A E D E"></textarea>
-      <p class="muted small" style="margin:0 0 20px">Type the notes you hear and we'll analyse the melody, turn it into
-        variations you can download as MIDI, and check each note against the recording.</p>
       <div class="row">
         {% if ai_label %}
           <label class="small"><input type="checkbox" name="ai" value="1" checked>
             <abbr title="{{ glossary['AI brainstorm'] }} It turns up 20 seconds to 3 minutes after the analysis, and you
-            can read your results in the meantime.">AI brainstorm</abbr>
+            can read your results in the meantime.">AI ideas too</abbr>
             <span class="muted">({{ ai_label }})</span></label>
         {% else %}
           <span class="muted small">AI ideas are switched off on this server.</span>
         {% endif %}
         <button class="btn primary" id="go" type="submit">Analyse →</button>
       </div>
-      <p class="private-note">🔒 Private: only you can open the result{% if not user %} (on this browser){% endif %}, and your
-        audio is deleted as soon as it's analysed. <a href="{{ url_for('privacy') }}">How we handle your music</a></p>
+      <p class="private-note">🔒 Only you can open the result{% if not user %} (in this browser){% endif %}, and we
+        delete your audio as soon as we've listened. <a href="{{ url_for('privacy') }}">How we handle your music</a></p>
       </div>
     </form>
   </div>
 </section>
 
 <section class="features" data-only="tags">
-  <div><span class="n">01</span><b>Listened to</b>We measure the songs you upload: tempo, rhythm, mood, energy,
-    sound and style.</div>
-  <div><span class="n">02</span><b>Looked up</b>We match playlist songs by name to the tags listeners gave them
-    on MusicBrainz.</div>
-  <div><span class="n">03</span><b>Weighed</b>Every tag gets a share of your list. What we heard counts for more
-    than what others wrote.</div>
-  <div><span class="n">04</span><b>Searched</b>Specific tags and two-tag combos, linked straight to Bandcamp,
-    Last.fm, RYM, YouTube and Spotify.</div>
+  <div><b>Listened to</b>We measure the songs you upload: tempo, rhythm, mood, energy, sound and style.</div>
+  <div><b>Looked up</b>Playlist songs are matched by name to the tags listeners gave them on MusicBrainz.</div>
+  <div><b>Weighed</b>Every tag gets a share of your list. What we heard counts for more than what others wrote.</div>
+  <div><b>Searched</b>Specific tags and pairs of tags, linked straight to Bandcamp, Last.fm, RYM, YouTube and Spotify.</div>
+</section>
+<section class="features" data-only="musician style" aria-label="What's in a report">
+  <div><span class="pic" aria-hidden="true">{{ charts.example_overlay(width=260, height=90)|safe }}</span><b>Next to songs you love</b>Tempo,
+    arrangement, groove, loudness and tone on one scale, and what they all share.</div>
+  <div><span class="pic" aria-hidden="true">{{ charts.camelot_wheel(camelot_names, highlight="8A", size=78)|safe }}</span><b>Harmony &amp; shape</b>Your
+    key, chord loops and sections, and how the energy and mood move.</div>
+  <div><span class="pic" aria-hidden="true">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=260)|safe }}</span><b>Who plays, and how</b>Who
+    plays when, the beat as a grid, the bass as sheet music, and the mix for producers.</div>
+  <div><span class="pic" aria-hidden="true">{{ charts.example_roll(width=260, height=78)|safe }}</span><b>Ideas to take away</b>What
+    your track leaves out, things to try, and MIDI and sheet music for your DAW.</div>
 </section>
 <section class="demos" data-only="musician" aria-labelledby="demos-title">
-  <p class="eyebrow" id="demos-title">Not ready to upload? See a finished report first</p>
+  <p class="eyebrow" id="demos-title">Not ready to upload? Open a finished report</p>
   <div class="row3">
     {% for slug, d in demos.items() %}
       <a class="demo" href="{{ url_for('demo', slug=slug) }}">{% if demo_pictures.get(slug) %}<span class="thumb" aria-hidden="true">{{ demo_pictures[slug]|safe }}</span>{% endif %}<b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
     {% endfor %}
   </div>
-  <p class="muted small" style="margin:10px 0 0">Made from computer-generated audio, so they sound simpler than a real
-    recording. The first visitor waits a minute or so while one is made; after that it opens straight away.</p>
-</section>
-<section class="features" data-only="musician">
-  <div><span class="pic" aria-hidden="true">{{ charts.example_overlay(width=260, height=90)|safe }}</span><span class="n">01</span><b>Next to the songs you admire</b>Side by side on one scale: tempo, arrangement,
-    groove, loudness and tone, the energy curves and tonal balance laid over each other, and what they all share.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.camelot_wheel(camelot_names, highlight="8A", size=96)|safe }}</span><span class="n">02</span><b>Harmony &amp; structure</b>Where the key moves, your chord loops in Roman numerals,
-    the sections, and the energy and mood of each one.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=260)|safe }}</span><span class="n">03</span><b>Groove &amp; production</b>The drums as a grid and the bass as sheet music. For
-    electronic tracks: sidechain pumping, the drops in bars, a mono low end and punch.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.example_roll(width=260, height=80)|safe }}</span><span class="n">04</span><b>Ideas &amp; exports</b>Things to try, songs that share your track's DNA, and MIDI,
-    sheet music and the full report to take away.</div>
+  <p class="muted small" style="margin:6px 0 0">Made from computer-generated audio, so they sound simpler than a real
+    recording. The first visit takes a minute while one is made.</p>
 </section>
 <section class="privacy-strip" aria-labelledby="privacy-h">
   <p class="eyebrow" id="privacy-h">Private by default · made for unreleased music</p>
-  <div class="row4">
-    <div><b>Audio gone at once</b><span>Deleted as soon as it's analysed, songs you compare with too.</span></div>
-    <div><b>Only you can open it</b><span>A result opens only {% if user %}in your account{% else %}in this browser{% endif %}.
-      Sharing by link is a switch you turn on, and “Delete now” is always there.</span></div>
-    <div><b>No titles leave the server</b><span>The optional AI sees the analysis numbers only: no audio, no file names.</span></div>
-    <div><b>No ads, no trackers</b><span>Nothing from other sites, nothing sold, nothing used for training.
-      <a href="{{ url_for('privacy') }}">Read how →</a></span></div>
-  </div>
+  <div><b>Your audio is deleted at once</b>As soon as we've listened, songs you compare with too.</div>
+  <div><b>Only you can open it</b>{% if user %}It's in your account.{% else %}In this browser.{% endif %} Sharing is a
+    switch you turn on, and “Delete now” is always there.</div>
+  <div><b>No titles leave the server</b>The optional AI sees numbers only: no audio, no file names.</div>
+  <div><b>No ads, no trackers</b>Nothing sold, nothing used for training. <a href="{{ url_for('privacy') }}">Read how →</a></div>
 </section>
-<p class="muted small" style="margin-top:24px;max-width:46em">You don't need an account. Without one, results stay for
-  {{ ttl|round|int }} hours, on this browser only. {% if user %}You're signed in, so this goes into your private
-  <a href="{{ url_for('history') }}">library</a>, filed by project, status and your own labels.{% else %}<a href="{{ url_for('signup') }}">Create
-  a free account</a> (no email needed) to keep everything in a private library, filed by project, status and your own
-  labels, with a profile that sums up your music.{% endif %}</p>
+<p class="account-note">No account needed: without one, results stay {{ ttl|round|int }} hours, in this browser.
+  {% if user %}You're signed in, so this goes straight into your private <a href="{{ url_for('history') }}">library</a>.{% else %}<a href="{{ url_for('signup') }}">A free
+  account</a> (no email) keeps everything in a private library, filed by project, with a profile of your music.{% endif %}</p>
 
 <script>
   const input = document.getElementById('tracks'), drop = document.getElementById('drop'),
         list = document.getElementById('chosen'), form = document.getElementById('form'), go = document.getElementById('go');
+  const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  // Draw each chosen file's waveform right here: the file is read by this browser only, nothing is sent yet.
+  async function wave(f, li) {
+    if (f.size > 120 * 1048576 || !(window.AudioContext || window.webkitAudioContext)) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+      ctx.close && ctx.close();
+      li.querySelector('.meta').textContent = `${mmss(buf.duration)} · ${(f.size / 1048576).toFixed(1)} MB`;
+      const c = document.createElement('canvas');
+      li.appendChild(c);
+      const w = c.width = c.clientWidth * (window.devicePixelRatio || 1), h = c.height = 28 * (window.devicePixelRatio || 1);
+      const data = buf.getChannelData(0), step = Math.max(1, Math.floor(data.length / w)), g = c.getContext('2d');
+      g.fillStyle = getComputedStyle(document.body).color;
+      for (let x = 0; x < w; x += 2) {
+        let peak = 0;
+        for (let i = x * step, end = Math.min(data.length, (x + 1) * step); i < end; i += 16) peak = Math.max(peak, Math.abs(data[i]));
+        const bh = Math.max(1, peak * h);
+        g.fillRect(x, (h - bh) / 2, 1.2, bh);
+      }
+    } catch (e) { /* this browser can't decode it: the server still can */ }
+  }
   function show() {
     list.innerHTML = '';
-    for (const f of input.files) {
-      const li = document.createElement('li'), size = document.createElement('span');
-      li.textContent = f.name;
-      size.textContent = `${(f.size / 1048576).toFixed(1)} MB`;
-      li.appendChild(size);
+    [...input.files].forEach((f, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="name"></span><span class="meta"></span>';
+      li.querySelector('.name').textContent = f.name;
+      li.querySelector('.meta').textContent = `${(f.size / 1048576).toFixed(1)} MB`;
       list.appendChild(li);
-    }
+      if (i < 10) wave(f, li);
+    });
   }
   input.addEventListener('change', show);
   const refs = document.getElementById('reference'), refList = document.getElementById('chosen-refs');
@@ -335,31 +388,54 @@
   ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', ev => { input.files = ev.dataTransfer.files; show(); });
+  const URLS = {musician: "{{ url_for('index') }}", style: "{{ url_for('style_new') }}", tags: "{{ url_for('find') }}"};
+  let mode = 'musician';
   function setMode() {
-    const tags = form.querySelector('input[name=mode]:checked').value === 'tags';
-    form.classList.toggle('tags', tags);
-    document.body.classList.toggle('tags-mode', tags);
-    try { history.replaceState(null, '', tags ? "{{ url_for('find') }}" : "{{ url_for('index') }}"); } catch (e) {}
+    mode = form.querySelector('input[name=mode]:checked').value;
+    ['musician', 'style', 'tags'].forEach(m => document.body.classList.toggle('mode-' + m, m === mode));
+    try { history.replaceState(null, '', URLS[mode]); } catch (e) {}
   }
   form.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', setMode));
   setMode();
   form.addEventListener('submit', ev => {
-    const tags = form.classList.contains('tags');
+    const tags = mode === 'tags';
+    if (mode === 'style' && input.files.length < 2) {
+      ev.preventDefault();
+      alert('Choose at least two of your tracks: a style is what they have in common.');
+      return;
+    }
     const named = document.getElementById('playlist').value.trim() || document.getElementById('songs').value.trim()
                   || document.getElementById('description').value.trim();
     if (!input.files.length && !(tags && named)) {
       ev.preventDefault();
-      alert(tags ? 'Add some songs (upload them, paste a playlist link or type their names), or describe what you\'re after.'
-                 : 'Please choose at least one audio file.');
+      alert(tags ? 'Add some songs (upload them, paste a playlist link or type their names), or describe the sound you\'re after.'
+                 : 'Choose at least one track first.');
       return;
     }
-    if (!tags && refs.files.length > {{ max_refs }}) {
+    if (mode === 'musician' && refs.files.length > {{ max_refs }}) {
       ev.preventDefault();
-      alert('Please choose up to {{ max_refs }} songs you admire.');
+      alert('Choose up to {{ max_refs }} songs you love.');
       return;
     }
     const btn = ev.submitter || go;
     btn.disabled = true; btn.textContent = input.files.length ? 'Uploading…' : 'Starting…';
   });
+  // the look inside a report: tabs, and it moves on by itself until you touch it
+  (function () {
+    const peek = document.querySelector('.peek');
+    if (!peek) return;
+    const tabs = [...peek.querySelectorAll('[data-peek]')], figs = [...peek.querySelectorAll('figure')],
+          dots = [...peek.querySelectorAll('.dots i')];
+    let at = 0, timer = null;
+    const pick = n => {
+      at = n;
+      tabs.forEach((t, i) => t.setAttribute('aria-selected', String(i === n)));
+      figs.forEach((f, i) => f.classList.toggle('on', i === n));
+      dots.forEach((d, i) => d.classList.toggle('on', i === n));
+    };
+    tabs.forEach((t, i) => t.addEventListener('click', () => { clearInterval(timer); pick(i); }));
+    peek.addEventListener('pointerenter', () => clearInterval(timer));
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) timer = setInterval(() => pick((at + 1) % figs.length), 6000);
+  })();
 </script>
 {% endblock %}

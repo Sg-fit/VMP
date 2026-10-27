@@ -35,7 +35,7 @@
 
     /* top bar */
     .bar { border-bottom: 1px solid var(--line); }
-    .bar-in { max-width: 1040px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center;
+    .bar-in { max-width: 1080px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center;
               justify-content: space-between; gap: 16px; }
     .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none;
              font-weight: 700; letter-spacing: -.01em; }
@@ -47,18 +47,18 @@
     .bar nav a { color: var(--muted); text-decoration: none; font-size: .92rem; }
     .bar nav a:hover { color: var(--ink); }
     .bar nav a.me { color: var(--ink); font-weight: 600; border-bottom: 2px solid var(--accent); }
-    @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 14px; } }
+    @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 12px; } .bar nav a { font-size: .86rem; } }
 
-    main { max-width: 1040px; margin: 0 auto; padding: 48px 16px 80px; }
-    footer { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
+    main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 56px; }
+    footer { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
              color: var(--muted); font-size: .8rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
     /* type */
-    .eyebrow { font-size: .74rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
-               margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+    .eyebrow { font-size: .72rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+               margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
     .eyebrow::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
-    h1 { font-size: clamp(2.3rem, 6vw, 4rem); line-height: 1.02; letter-spacing: -.025em; font-weight: 700; margin: 0 0 16px; }
-    .lede { font-size: 1.15rem; max-width: 40em; color: var(--muted); margin: 0 0 32px; }
+    h1 { font-size: clamp(2rem, 4.6vw, 3.1rem); line-height: 1.04; letter-spacing: -.025em; font-weight: 700; margin: 0 0 10px; }
+    .lede { font-size: 1.05rem; max-width: 40em; color: var(--muted); margin: 0 0 18px; }
     .muted { color: var(--muted); }
     .small { font-size: .85rem; }
     a { color: var(--ink); text-decoration-color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
@@ -76,7 +76,7 @@
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .error { color: var(--err); border-left: 3px solid var(--err); background: var(--faint); padding: 10px 14px; margin-bottom: 16px; }
 
-    .panel { background: var(--surface); border: 1px solid var(--line); padding: 28px; }
+    .panel { background: var(--surface); border: 1px solid var(--line); padding: 22px; }
     code, pre { font-family: var(--mono); background: var(--faint); border-radius: 2px; }
     code { padding: 1px 5px; font-size: .86em; }
     pre { padding: 14px 16px; overflow-x: auto; font-size: .82rem; line-height: 1.45; border: 1px solid var(--line); }
@@ -85,12 +85,28 @@
     th, td { border-bottom: 1px solid var(--line); padding: 9px 12px 9px 0; text-align: left; vertical-align: top; }
     th { color: var(--muted); font-weight: 600; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
          border-bottom-color: var(--ink); }
-    @media (max-width: 600px) { main { padding-top: 32px; } .panel { padding: 20px; } }
+    @media (max-width: 600px) { main { padding-top: 20px; } .panel { padding: 16px; } }
     /* Underlined terms explain themselves: hover with a mouse, tap on a phone (no hover there). */
     abbr[title] { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
     #tip { position: absolute; z-index: 20; max-width: min(340px, calc(100vw - 32px)); padding: 10px 12px;
            background: var(--ink); color: var(--bg); font-size: .85rem; line-height: 1.45; display: none;
-           text-transform: none; letter-spacing: 0; font-weight: 400; }
+           text-transform: none; letter-spacing: 0; font-weight: 400; pointer-events: none; }
+    /* Charts you can explore: hover (or tap) a mark for its numbers; marks on the track's timeline light up the
+       same moment in the track's other charts, and play from there in the listen-along player. */
+    svg [data-tip] { cursor: pointer; }
+    svg [data-tip]:hover, svg [data-tip].on { stroke: currentColor; stroke-width: 1.5; stroke-opacity: .9; }
+    svg .tspan { fill: currentColor; fill-opacity: .1; pointer-events: none; }
+    svg .playhead { stroke: var(--accent); stroke-width: 2; pointer-events: none; }
+    .listen { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin: 6px 0 14px; font-size: .85rem; }
+    .listen label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; border: 1px solid var(--line);
+                    padding: 5px 10px; }
+    .listen label:hover { border-color: var(--ink); }
+    .listen input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .listen audio { height: 32px; max-width: 100%; }
+    .listen .muted { font-size: .78rem; }
+    button.hear { font: inherit; font-size: .82rem; background: none; color: var(--ink); border: 1px solid var(--line);
+                  padding: 4px 10px; cursor: pointer; margin: 4px 0 8px; }
+    button.hear:hover { border-color: var(--accent); }
     /* "What the app can't do": shown centred on the first visit, the page dimmed behind it */
     dialog#intro { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 0;
                    border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
@@ -117,6 +133,7 @@
     <span class="name">Music Inspiration Analyzer</span></a>
   <nav>
     <a href="{{ url_for('index') }}">Analyse</a>
+    <a href="{{ url_for('style_page') }}">Your style</a>
     <a href="{{ url_for('find') }}">Find music</a>
     {% if user %}
       <a href="{{ url_for('history') }}">Library</a>
@@ -146,36 +163,186 @@
       tipEl.style.top = (window.scrollY + r.bottom + 6) + 'px';
     });
   })();
+
+  // Charts: tooltips on every mark, the same moment lit up across a track's timeline charts, and listen-along.
+  (function () {
+    const tipEl = document.getElementById('tip');
+    const NS = 'http://www.w3.org/2000/svg';
+    // a mark's <title> becomes our tooltip (the browser's own one is slow and can't be tapped)
+    function tipOf(el) {
+      const mark = el.closest && el.closest('svg [data-tip], svg *');
+      if (!mark || mark.tagName === 'svg') return null;
+      if (!mark.dataset.tip) {
+        const t = Array.from(mark.children).find(c => c.tagName.toLowerCase() === 'title');
+        if (!t) return null;
+        mark.dataset.tip = t.textContent;
+        t.remove();
+      }
+      return mark;
+    }
+    function show(mark, x, y) {
+      tipEl.textContent = mark.dataset.tip;
+      tipEl.style.display = 'block';
+      const left = Math.min(window.scrollX + x + 12, window.scrollX + document.documentElement.clientWidth - tipEl.offsetWidth - 16);
+      tipEl.style.left = Math.max(16, left) + 'px';
+      tipEl.style.top = (window.scrollY + y + 14) + 'px';
+    }
+    // which track a timeline chart belongs to: the report's <h2> it comes after
+    function trackOf(svg) {
+      const all = Array.from(document.querySelectorAll('.report h2, svg[data-dur]'));
+      let n = -1;
+      for (const el of all) { if (el.tagName === 'H2') n++; if (el === svg) return n; }
+      return n;
+    }
+    const timedIn = n => Array.from(document.querySelectorAll('svg[data-dur]')).filter(s => trackOf(s) === n);
+    function xAt(svg, t) {
+      const x0 = +svg.dataset.x0, x1 = +svg.dataset.x1, d = +svg.dataset.dur;
+      return x0 + (x1 - x0) * Math.max(0, Math.min(d, t)) / d;
+    }
+    function lightUp(svg, t0, t1) {
+      timedIn(trackOf(svg)).forEach(s => {
+        let r = s.querySelector('.tspan');
+        if (!r) { r = document.createElementNS(NS, 'rect'); r.setAttribute('class', 'tspan'); s.insertBefore(r, s.firstChild); }
+        const vb = s.viewBox.baseVal, a = xAt(s, t0), b = Math.max(a + 2, xAt(s, t1));
+        r.setAttribute('x', a); r.setAttribute('width', b - a); r.setAttribute('y', 0); r.setAttribute('height', vb.height);
+        r.style.display = '';
+      });
+    }
+    const dim = () => document.querySelectorAll('svg .tspan').forEach(r => { r.style.display = 'none'; });
+    document.addEventListener('pointerover', ev => {
+      const mark = tipOf(ev.target);
+      if (!mark) return;
+      show(mark, ev.clientX, ev.clientY);
+      const svg = mark.ownerSVGElement;
+      if (svg && svg.dataset.dur && mark.dataset.t0) lightUp(svg, +mark.dataset.t0, +mark.dataset.t1);
+      document.dispatchEvent(new CustomEvent('chart-used', {detail: mark}));
+    });
+    document.addEventListener('pointermove', ev => {
+      if (tipEl.style.display === 'block' && ev.target.closest && ev.target.closest('svg [data-tip]')) show(ev.target.closest('svg [data-tip]'), ev.clientX, ev.clientY);
+    });
+    document.addEventListener('pointerout', ev => {
+      if (ev.target.closest && ev.target.closest('svg [data-tip]')) { tipEl.style.display = 'none'; dim(); }
+    });
+
+    // Hear a drum grid: the pattern played at the track's tempo with sounds made right here (a thump, a burst of
+    // noise, a tick) - nothing is fetched or uploaded. Four bars, or until you press stop.
+    let groove = null;
+    function drum(ctx, kind, t) {
+      const g = ctx.createGain(); g.connect(ctx.destination);
+      if (kind === 'kick') {
+        const o = ctx.createOscillator(); o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+        g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        o.connect(g); o.start(t); o.stop(t + 0.26);
+      } else {
+        const len = kind === 'snare' ? 0.18 : 0.05, buf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate);
+        const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+        const src = ctx.createBufferSource(); src.buffer = buf;
+        const f = ctx.createBiquadFilter(); f.type = kind === 'snare' ? 'bandpass' : 'highpass';
+        f.frequency.value = kind === 'snare' ? 1800 : 7000;
+        g.gain.setValueAtTime(kind === 'snare' ? 0.5 : 0.18, t); g.gain.exponentialRampToValueAtTime(0.001, t + len);
+        src.connect(f); f.connect(g); src.start(t);
+      }
+    }
+    document.querySelectorAll('svg[data-grid]').forEach(svg => {
+      if (svg.closest('[aria-hidden="true"]')) return;  // a decorative thumbnail
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'hear';
+      b.textContent = '▶ Hear this groove';
+      svg.insertAdjacentElement('afterend', b);
+      b.addEventListener('click', () => {
+        if (groove) { groove.close(); groove = null; document.querySelectorAll('button.hear').forEach(x => x.textContent = '▶ Hear this groove'); return; }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx = groove = new AC(), grid = svg.dataset.grid, hats = svg.dataset.hats || '';
+        const step = 60 / +svg.dataset.bpm / 4, t0 = ctx.currentTime + 0.05, bars = 4;
+        for (let bar = 0; bar < bars; bar++) for (let i = 0; i < grid.length; i++) {
+          const t = t0 + (bar * grid.length + i) * step, c = grid[i];
+          if ('KX'.includes(c)) drum(ctx, 'kick', t);
+          if ('SX'.includes(c)) drum(ctx, 'snare', t);
+          if (c === 'x' || hats[i] === 'h') drum(ctx, 'hat', t);
+        }
+        b.textContent = '■ Stop';
+        setTimeout(() => { if (groove === ctx) { ctx.close(); groove = null; b.textContent = '▶ Hear this groove'; } },
+                   (bars * grid.length * step + 0.5) * 1000);
+      });
+    });
+
+    // Listen along: pick your own copy of the track; it plays here and is never uploaded. A click on any chart
+    // along the timeline plays from that moment, and a line follows the music through the track's charts.
+    const players = {};
+    function seek(n, t) {
+      const a = players[n];
+      if (!a) return false;
+      a.currentTime = t; a.play().catch(() => {});
+      return true;
+    }
+    document.addEventListener('click', ev => {
+      const svg = ev.target.closest && ev.target.closest('svg[data-dur]');
+      if (!svg) return;
+      const n = trackOf(svg), mark = ev.target.closest('[data-t0]');
+      let t;
+      if (mark) t = +mark.dataset.t0;
+      else {
+        const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+        const q = p.matrixTransform(svg.getScreenCTM().inverse());
+        t = (q.x - svg.dataset.x0) / (svg.dataset.x1 - svg.dataset.x0) * svg.dataset.dur;
+      }
+      if (t >= 0 && seek(n, t)) ev.preventDefault();
+    });
+    function follow(n) {
+      const a = players[n];
+      const heads = timedIn(n).map(s => {
+        let l = s.querySelector('.playhead');
+        if (!l) { l = document.createElementNS(NS, 'line'); l.setAttribute('class', 'playhead'); s.appendChild(l); }
+        l.setAttribute('y1', 0); l.setAttribute('y2', s.viewBox.baseVal.height);
+        return [s, l];
+      });
+      (function step() {
+        heads.forEach(([s, l]) => { const x = xAt(s, a.currentTime); l.setAttribute('x1', x); l.setAttribute('x2', x); });
+        if (!a.paused) requestAnimationFrame(step);
+      })();
+    }
+    document.querySelectorAll('.report h2').forEach((h, n) => {
+      if (!timedIn(n).length) return;
+      const box = document.createElement('div'); box.className = 'listen';
+      box.innerHTML = '<label>🎧 Listen along<input type="file" accept="audio/*"></label>' +
+        '<span class="muted">Pick your copy of this track: it plays here in your browser and is never uploaded. ' +
+        'Then click any chart along the timeline to play from there.</span>';
+      h.insertAdjacentElement('afterend', box);
+      box.querySelector('input').addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (!f) return;
+        let a = box.querySelector('audio');
+        if (!a) { a = document.createElement('audio'); a.controls = true; box.appendChild(a); }
+        if (a.src) URL.revokeObjectURL(a.src);
+        a.src = URL.createObjectURL(f);
+        players[n] = a;
+        box.querySelector('.muted').textContent = f.name + ' (stays on this device)';
+        a.addEventListener('play', () => follow(n));
+        a.addEventListener('seeked', () => follow(n));
+      });
+    });
+  })();
 </script>
 <dialog id="intro" aria-labelledby="intro-title" data-auto="{{ '1' if show_intro else '0' }}">
   <button class="x" type="button" data-close aria-label="Close">×</button>
   <div class="in">
     <p class="eyebrow">Before you start</p>
     <h2 id="intro-title">A few things worth knowing</h2>
-    <p class="muted small" style="margin:0">Think of this as a quick second pair of ears. It's good at sparking ideas,
-      but it isn't a transcription service. Here's what to expect:</p>
+    <p class="muted small" style="margin:0">Think of it as a quick second pair of ears: great for ideas, not a
+      transcription service.</p>
     <ul>
-      <li><b>It's built for instrumental music.</b> It doesn't pick out lyrics, and if someone's singing, the melody
-        it finds will usually be their voice.</li>
-      <li><b>We write out the drums and the lowest part</b>: the bass, or the low notes of a solo instrument.
-        Everything else shows up in the chords and the melody line rather than as its own sheet music.</li>
-      <li><b>Phone recordings lose a lot of low end,</b> so a bass guitar and a guitar's low strings can sound the
-        same. Tick the instruments you hear when you upload and we'll go with what you tell us.</li>
-      <li><b>Treat the numbers as good guesses.</b> A key can get mixed up with its relative (C major and A minor
-        share their notes), tempo sometimes comes out at half or double speed, chords get simplified, and section
-        letters are a rough map. For slow, smooth music with few clear attacks (strings, pads, soft piano) we mark
-        the tempo as approximate.</li>
-      <li><b>We recognise 8-, 12- and 16-bar blues</b> (major and minor) and the 32-bar AABA song form. Anything else
-        is shown as sections: A, B, C. Odd time signatures like 5/4 and 7/4 need a clear beat, such as drums, before
-        we'll call them.</li>
-      <li><b>If the melody matters, type it in.</b> Picking a tune out of a full band automatically is hit and miss.</li>
-      <li><b>AI ideas are optional</b>, and sometimes slow or unavailable. We check any times and chords they mention
-        against your track. Their opinions are their own.</li>
-      <li><b>Find music like this:</b> we listen to the songs you upload. For songs from a playlist link or a list we
-        only read the names and look up the tags other listeners gave them, usually for the artist rather than the
-        song, so they count for less. Very obscure songs might not turn up at all.</li>
-      <li><b>We delete your audio</b> as soon as we're done with it. Results stay for a day, or for as long as you
-        like if you save them to a free account.</li>
+      <li><b>Made for instrumental music.</b> It shows when someone sings, but not the words, and the tune it finds
+        will usually be the singer's.</li>
+      <li><b>We write out the drums and the lowest part</b> (the bass, or a solo instrument's low notes). Everyone
+        else shows up in the chords and the tune.</li>
+      <li><b>Phones lose the low end,</b> so a bass and a guitar's low strings can sound alike. Tick what you hear when
+        you upload and we'll go with you.</li>
+      <li><b>The numbers are good guesses.</b> A key can swap with its relative (C major, A minor), tempo can come out
+        at half or double, and chords get simplified.</li>
+      <li><b>If the tune matters, type it in.</b> Picking it out of a full band is hit and miss.</li>
+      <li><b>AI ideas are optional</b> and sometimes slow. We check any times and chords they mention.</li>
+      <li><b>Your audio is deleted</b> as soon as we're done. Results stay a day, or as long as you like in a free
+        account.</li>
     </ul>
     <button class="btn primary" type="button" data-close>Got it</button>
   </div>

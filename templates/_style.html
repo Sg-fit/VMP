@@ -1,0 +1,155 @@
+{# Your style: the summary with its pictures, then one tab per part. Used by the Your style page (every session)
+   and by a style upload's result page (that session's tracks). #}
+{% macro style_css() %}
+<style>
+  .style .inshort { margin: 0 0 12px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--faint); }
+  .style .sum { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 12px 24px; align-items: start; }
+  @media (max-width: 860px) { .style .sum { grid-template-columns: 1fr; } }
+  .style .side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .style figure { margin: 0; } .style figure svg { margin: 0 auto; }
+  .style .habits { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
+  .style .habits li { display: flex; gap: 10px; align-items: baseline; font-size: .92rem; }
+  .style .habits .area { flex: none; min-width: 7.5em; font-size: .68rem; font-weight: 700; letter-spacing: .1em;
+                         text-transform: uppercase; color: var(--muted); }
+  .style nav.stabs { position: sticky; top: 0; z-index: 4; display: flex; overflow-x: auto; overflow-y: hidden; margin: 16px 0 0;
+                     background: var(--bg); border-bottom: 2px solid var(--ink); }
+  .style nav.stabs a { flex: none; padding: 9px 12px 7px; font-size: .86rem; font-weight: 600; color: var(--muted);
+                       text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .style nav.stabs a[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .style.tabbed .spanel { display: none; } .style.tabbed .spanel.on { display: block; }
+  .style .spanel { padding-top: 10px; }
+  .style .spanel > h3 { font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; margin: 14px 0 8px; }
+  .style.tabbed .spanel > h3:first-child { display: none; }
+  .style .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 24px; }
+  .style table { font-size: .88rem; }
+  .style tr[data-trk].hl td, .style tr[data-trk]:hover td { background: var(--faint); }
+  .style svg [data-trk].hl { fill: var(--accent) !important; fill-opacity: 1 !important; r: 7; }
+  .style .idea { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; margin: 8px 0; }
+  .style .idea b { display: block; }
+  .style .note { font-size: .8rem; color: var(--muted); }
+</style>
+{% endmacro %}
+
+{% macro style_report(v, pics, min_tracks, hurl=None) %}
+<div class="style" id="style">
+  <p class="inshort"><b>In short:</b> {{ v.in_short }}</p>
+  <div class="sum">
+    <figure>{{ pics.strips|safe }}
+      <figcaption>Every track on every measure: a dot per track, your usual range shaded, “habit” where you hardly
+        vary. Hover over a dot to find that track everywhere on the page.</figcaption></figure>
+    <div class="side">
+      <figure>{{ pics['keys']|safe }}<figcaption>Your keys (darker = more tracks)</figcaption></figure>
+      <figure>{{ pics.mood|safe }}<figcaption>Each track's energy and mood, numbered as in “Each track”</figcaption></figure>
+    </div>
+  </div>
+  {% if v.signatures %}
+  <ul class="habits">{% for area, text in v.signatures[:4] %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <nav class="stabs" role="tablist" aria-label="Parts of your style">
+    <a href="#st-habits" role="tab" data-go="st-habits">Habits</a>
+    <a href="#st-chords" role="tab" data-go="st-chords">Chords</a>
+    <a href="#st-time" role="tab" data-go="st-time">Sessions &amp; change</a>
+    <a href="#st-tracks" role="tab" data-go="st-tracks">Each track</a>
+    <a href="#st-next" role="tab" data-go="st-next">Try next</a>
+  </nav>
+
+  <section class="spanel" id="st-habits" role="tabpanel" aria-label="Habits">
+    <h3>Habits</h3>
+    {% if v.signatures %}
+    <ul class="habits">{% for area, text in v.signatures %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
+    <p class="note">A habit is a choice two thirds of your tracks make, or a measure whose middle half of tracks you
+      couldn't tell apart by ear.</p>
+    {% elif not v.enough %}
+    <p>With {{ v.tracks }} track{{ 's' if v.tracks != 1 }} we can't tell a habit from a coincidence. Add
+      {{ min_tracks - v.tracks }} more and they'll show up here.</p>
+    {% else %}
+    <p>No strong habits: your tracks range widely. See where in the chart above.</p>
+    {% endif %}
+    {% if v.typical %}
+    <div class="two" style="margin-top:10px">
+      <div class="idea"><b>Your most typical track: {{ v.typical.name }}</b>
+        {% if v.diffs[v.typical.name] %}Close to your usual, apart from: {{ v.diffs[v.typical.name]|join(', ') }}.
+        {% else %}It sits right in your usual range on every measure.{% endif %}</div>
+      {% if v.outlier %}
+      <div class="idea"><b>Your outlier: {{ v.outlier.name }}</b>Away from your usual: {{ v.diffs[v.outlier.name]|join(', ') }}.
+        If you liked how it came out, that's a direction to explore.</div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="spanel" id="st-chords" role="tabpanel" aria-label="Chords">
+    <h3>Chords</h3>
+    <div class="two">
+      <figure>{{ pics.vocab|safe }}<figcaption>The chords you use as Roman numerals (I is home), so the same move in
+        different keys counts once. Bars: how many tracks use each.</figcaption></figure>
+      <div>
+        {% if v.progressions %}
+        <p><b>Loops you come back to</b></p>
+        <ul>{% for lp, n in v.progressions %}<li><code>{{ lp }}</code> · in {{ n }} tracks</li>{% endfor %}</ul>
+        {% else %}<p class="note">No chord loop turns up in two tracks yet: each track's loops are its own.</p>{% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="spanel" id="st-time" role="tabpanel" aria-label="Sessions and change">
+    <h3>Sessions &amp; change</h3>
+    <p>{{ v.sessions|length }} upload session{{ 's' if v.sessions|length != 1 }}:
+      {% for s in v.sessions %}{{ s.when|datetime(date_only=True) }} ({{ s.tracks|length }}){{ ', ' if not loop.last }}{% endfor %}.</p>
+    {% if v.drift %}
+    <p><b>From your first session to your latest</b></p>
+    <ul class="habits">{% for name, change, word in v.drift %}<li><span class="area">{{ name }}</span>{{ change }}: {{ word }}</li>{% endfor %}</ul>
+    {% elif v.sessions|length >= 2 %}<p class="note">Nothing you'd hear has changed from your first session to your latest.</p>
+    {% else %}<p class="note">Upload again another day (or open Your style after a few sessions) to see how your style moves.</p>{% endif %}
+    <div class="two">
+      {% if pics.tempo_time %}<figure>{{ pics.tempo_time|safe }}<figcaption>Tempo, track by track over time</figcaption></figure>{% endif %}
+      {% if pics.energy_time %}<figure>{{ pics.energy_time|safe }}<figcaption>Energy, track by track over time</figcaption></figure>{% endif %}
+    </div>
+  </section>
+
+  <section class="spanel" id="st-tracks" role="tabpanel" aria-label="Each track">
+    <h3>Each track</h3>
+    <table>
+      <tr><th>#</th><th>Track</th><th>When</th><th>Key</th><th>Tempo</th><th>Energy · mood</th><th>Away from your usual</th></tr>
+      {% for t in v.rows %}
+      <tr data-trk="{{ loop.index0 }}"><td>{{ loop.index }}</td>
+        <td>{% if hurl %}<a href="{{ hurl(t.session) }}">{{ t.name }}</a>{% else %}{{ t.name }}{% endif %}</td>
+        <td>{{ t.when|datetime(date_only=True) }}</td><td>{{ t.f.key }}</td>
+        <td>{{ (t.f.tempo|round|int ~ ' BPM') if t.f.tempo else '—' }}</td>
+        <td>{{ t.r.feel.energy if t.r.feel else '—' }}/10 · {{ t.r.feel.mood if t.r.feel else '' }}</td>
+        <td>{{ v.diffs.get(t.name, [])|join(', ') or '—' }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="spanel" id="st-next" role="tabpanel" aria-label="Try next">
+    <h3>Try next</h3>
+    {% if v.unexplored %}
+    <p class="note" style="margin-top:0">Things none of your tracks do yet. Not a to-do list: ground you haven't covered.</p>
+    {% for area, text in v.unexplored %}<div class="idea"><b>{{ area }}</b>{{ text }}</div>{% endfor %}
+    {% elif not v.enough %}<p>Add a few more tracks and we'll point out ground you haven't covered.</p>
+    {% else %}<p>You've covered a lot of ground already: no obvious gap.</p>{% endif %}
+  </section>
+</div>
+<script>
+  (function () {
+    const box = document.getElementById('style');
+    if (!box) return;
+    const tabs = [...box.querySelectorAll('nav.stabs a')], panels = [...box.querySelectorAll('.spanel')];
+    box.classList.add('tabbed');
+    const show = (id, click) => {
+      const p = panels.find(x => x.id === id) || panels[0];
+      panels.forEach(x => x.classList.toggle('on', x === p));
+      tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.go === p.id)));
+      if (click) try { history.replaceState(null, '', '#' + p.id); } catch (e) {}
+    };
+    tabs.forEach(t => t.addEventListener('click', e => { e.preventDefault(); show(t.dataset.go, true); }));
+    show((panels.find(p => '#' + p.id === location.hash) || panels[0]).id);
+    // one track, everywhere: hover a dot or a table row and the same track lights up in the chart and the table
+    const light = (i, on) => box.querySelectorAll(`[data-trk="${i}"]`).forEach(el => el.classList.toggle('hl', on));
+    box.addEventListener('pointerover', e => { const el = e.target.closest('[data-trk]'); if (el) light(el.dataset.trk, true); });
+    box.addEventListener('pointerout', e => { const el = e.target.closest('[data-trk]'); if (el) light(el.dataset.trk, false); });
+  })();
+</script>
+{% endmacro %}

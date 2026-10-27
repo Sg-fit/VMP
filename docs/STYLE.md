@@ -45,6 +45,13 @@ The rules that follow from that:
 - **Motion:** the "analysing" spinner is a level meter that bounces; it stops for people who prefer reduced motion.
 - **Emoji** are stripped from the interface and from report headings when shown on the page (the downloaded `.md`
   report is unchanged).
+- **Density** (Oct 2026 redesign): pictures before paragraphs, and no big empty bands. Page padding 28 px, gaps
+  between blocks 12-36 px, headline at most 3.1 rem. Every report section shows its gist and folds the rest into a
+  **More** box; one sentence of help instead of a paragraph, longer help behind a tooltip or a fold.
+- **Interactive by default:** every chart mark has a tooltip (hover or tap); charts on a track's timeline light up
+  the same moment together and play from it in **Listen along** (the musician's own file, never uploaded); drum
+  grids can be heard (sounds made in the browser); the home page's preview flips through four real report charts;
+  chosen files show their waveform before anything is uploaded.
 
 # Voice and tone
 
@@ -75,3 +82,6 @@ How the app applies it:
 6. **No exclamation marks in the interface**, no "simply" or "just" (it makes hard things sound easy), no
    marketing superlatives.
 7. **Numbers stay concrete.** "About 30 seconds a song", "counts 0.4 against 1".
+8. **Say it like a musician would.** "Songs you love", "the tune", "It's vocals, bass and guitar" - not "reference
+   tracks", "melodic content", "instrumentation detected". Each track opens with a few plain sentences (*In short*)
+   built only from what the report shows below.

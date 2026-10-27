@@ -10,17 +10,22 @@ not, and so on.
 Licence: the models are CC BY-NC-SA 4.0 (non-commercial use only, credit MTG/UPF, share alike).
 
 How it runs
-- The models need TensorFlow (the `essentia-tensorflow` package, Linux only). It lives in its own Python
-  environment (MUSIC_ESSENTIA_PYTHON, set up by the Dockerfile) so its pinned libraries can't clash with ours.
+- MTG publishes the networks as ONNX files, which onnxruntime runs on any system (Windows included) without
+  TensorFlow. The network's input - a log-compressed mel spectrogram - is rebuilt here exactly as Essentia's
+  TensorflowPredictEffnetDiscogs makes it (16 kHz, 512-sample Hann frames every 256 samples, 96 Slaney mel bands
+  up to 8 kHz with unit-area triangles, log10(1 + 10000 x), patches of 128 frames every 62): on a 4-minute song
+  the averages match the TensorFlow version to the second decimal.
+- The network sees the song in ~2-second patches, one a second. Besides each song's averages we keep the
+  per-second scores for vocals and the instruments, so the report can show who plays when.
 - The main process decodes each song (any format we can read) to 16 kHz and saves it as .npy; a short-lived
-  subprocess running that other Python loads the models, tags every song and exits. TensorFlow's memory is
-  freed when it exits, and a crash there only loses the style tags, never the job.
-- MUSIC_TAGGER=fake gives deterministic made-up predictions so the rest of the pipeline can be tested on any
-  machine (Windows included).
+  subprocess loads the models, tags every song and exits, so the models' memory is freed when it's done and a
+  crash there only loses the tags, never the job.
+- MUSIC_TAGGER=fake gives deterministic made-up predictions so the rest of the pipeline can be tested without
+  the model files.
 
 Usage
     python tagger.py --download            # fetch the model files into MUSIC_MODELS_DIR
-    python tagger.py --predict out.json a.npy b.npy   # (internal) run in the Essentia environment
+    python tagger.py --predict out.json a.npy b.npy   # (internal) run the models
 """
 
 import json
@@ -33,11 +38,10 @@ from pathlib import Path
 
 SR = 16000
 BASE = "https://essentia.upf.edu/models"
-EMBEDDING = ("discogs-effnet-bs64-1", f"{BASE}/feature-extractors/discogs-effnet/discogs-effnet-bs64-1")
-EMBEDDING_OUTPUT = "PartitionedCall:1"  # the 1280-d embeddings (":0" is the model's own 400-style output)
-# name -> what it answers. Each head has a .pb (weights) and .json (class names and input/output tensor names).
+EMBEDDING = ("discogs-effnet-bsdynamic-1", f"{BASE}/feature-extractors/discogs-effnet/discogs-effnet-bsdynamic-1")
+# The network's own 400 outputs are the Discogs styles; its 1280-number embedding feeds the heads.
+# name -> what it answers. Each head has a .onnx (weights) and .json (class names).
 HEADS = {
-    "genre_discogs400": "styles",
     "mtg_jamendo_moodtheme": "moods",
     "mtg_jamendo_instrument": "instruments",
     "voice_instrumental": "voice",
@@ -50,6 +54,11 @@ HEADS = {
     "mood_happy": "happy",
     "mood_sad": "sad",
 }
+# Essentia's input for the EffNet networks (TensorflowInputMusiCNN + TensorflowPredictEffnetDiscogs defaults)
+FRAME, HOP, MELS, PATCH, PATCH_HOP = 512, 256, 96, 128, 62
+PATCH_SEC = PATCH_HOP * HOP / SR  # one patch a second (0.99 s); each covers 2.05 s
+TIMELINE = ("instruments", "voice")  # the heads whose per-second scores are kept
+TIMELINE_CLASSES = 12  # the instrument classes kept per second: the song's strongest
 # For the two-way heads: the class whose probability we keep.
 POSITIVE = {"voice": "voice", "gender": "female", "acoustic": "acoustic", "electronic": "electronic",
             "danceable": "danceable", "aggressive": "aggressive", "relaxed": "relaxed", "happy": "happy", "sad": "sad"}
@@ -78,7 +87,7 @@ def download():
     d = models_dir()
     d.mkdir(parents=True, exist_ok=True)
     for stem, url in _files():
-        for ext in (".pb", ".json"):
+        for ext in (".onnx", ".json"):
             target = d / (stem + ext)
             if target.exists() and target.stat().st_size:
                 continue
@@ -88,81 +97,95 @@ def download():
                     target.write_bytes(r.read())
                 print(f"downloaded {target.name}")
             except OSError as e:
-                if ext == ".json" and stem == EMBEDDING[0]:  # the embedding's metadata isn't needed
-                    continue
                 print(f"could not download {url + ext}: {e}", file=sys.stderr)
 
 
 def backend():
-    """'fake', 'essentia', or None (not set up here)."""
+    """'fake', 'onnx', or None (not set up here)."""
     if os.environ.get("MUSIC_TAGGER") == "fake":
         return "fake"
     if os.environ.get("MUSIC_TAGGER") == "off":
         return None
     d = models_dir()
-    if not (d / f"{EMBEDDING[0]}.pb").exists() or not (d / "genre_discogs400-discogs-effnet-1.pb").exists():
+    if not all((d / f"{EMBEDDING[0]}{ext}").exists() for ext in (".onnx", ".json")):
         return None
-    return "essentia" if _essentia_python() else None
+    try:
+        import importlib.util
+        return "onnx" if importlib.util.find_spec("onnxruntime") else None
+    except (ImportError, ValueError):
+        return None
 
 
 def available():
     return backend() is not None
 
 
-def _essentia_python():
-    exe = os.environ.get("MUSIC_ESSENTIA_PYTHON")
-    if exe and Path(exe).exists():
-        return exe
-    try:  # essentia-tensorflow installed in our own environment
-        import importlib.util
-        if importlib.util.find_spec("essentia"):
-            return sys.executable
-    except (ImportError, ValueError):
-        pass
-    return None
+# ---------------------------------------------------------------- the model process
+def mel_patches(audio):
+    """16 kHz mono samples -> the network's input: (patches, 128 frames, 96 mel bands), as Essentia makes it."""
+    import librosa
+    import numpy as np
+    import scipy.signal
+    window = scipy.signal.get_window("hann", FRAME, fftbins=False).astype(np.float32)  # Essentia's symmetric Hann
+    y = np.pad(np.asarray(audio, dtype=np.float32), (FRAME // 2, FRAME // 2))  # frames centred from t = 0
+    n = 1 + (len(y) - FRAME) // HOP
+    if n < PATCH:
+        y = np.pad(y, (0, (PATCH - n) * HOP))  # a clip shorter than one patch: pad it with silence
+        n = PATCH
+    frames = np.lib.stride_tricks.as_strided(y, (n, FRAME), (y.strides[0] * HOP, y.strides[0]))
+    weights = librosa.filters.mel(sr=SR, n_fft=FRAME, n_mels=MELS, fmin=0, fmax=SR / 2, htk=False, norm="slaney")
+    mel = np.zeros((n, MELS), np.float32)
+    for a in range(0, n, 4096):  # in blocks, so a long song doesn't hold every frame's spectrum at once
+        power = np.abs(np.fft.rfft(frames[a:a + 4096] * window, axis=1)) ** 2
+        mel[a:a + 4096] = np.log10(1 + 10000 * power @ weights.T)
+    return np.stack([mel[s:s + PATCH] for s in range(0, n - PATCH + 1, PATCH_HOP)])
 
 
-# ---------------------------------------------------------------- inside the Essentia environment
-def _head_meta(name):
-    meta = json.loads((models_dir() / f"{name}-discogs-effnet-1.json").read_text(encoding="utf-8"))
-    schema = meta.get("schema", {})
-    inp = schema.get("inputs", [{}])[0].get("name", "model/Placeholder")
-    outs = schema.get("outputs", [])
-    out = next((o["name"] for o in outs if o.get("output_purpose") == "predictions"), outs[0]["name"] if outs else "model/Softmax")
-    return meta["classes"], inp, out
+def _classes(name):
+    return json.loads((models_dir() / f"{name}.json").read_text(encoding="utf-8"))["classes"]
 
 
 def _predict_files(npy_files):
     import numpy as np
-    from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
+    import onnxruntime as ort
     d = models_dir()
-    embed = TensorflowPredictEffnetDiscogs(graphFilename=str(d / f"{EMBEDDING[0]}.pb"), output=EMBEDDING_OUTPUT)
-    heads = {}
-    for name, key in HEADS.items():
-        if not (d / f"{name}-discogs-effnet-1.pb").exists():
-            continue
-        classes, inp, out = _head_meta(name)
-        heads[key] = (classes, TensorflowPredict2D(graphFilename=str(d / f"{name}-discogs-effnet-1.pb"),
-                                                   input=inp, output=out))
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = max(1, min(4, os.cpu_count() or 1))
+    run = lambda path: ort.InferenceSession(str(path), opts, providers=["CPUExecutionProvider"])
+    embed = run(d / f"{EMBEDDING[0]}.onnx")
+    styles = _classes(EMBEDDING[0])
+    heads = {key: (_classes(f"{name}-discogs-effnet-1"), run(d / f"{name}-discogs-effnet-1.onnx"))
+             for name, key in HEADS.items() if (d / f"{name}-discogs-effnet-1.onnx").exists()}
     results = []
     for f in npy_files:
-        audio = np.load(f).astype(np.float32)
-        emb = embed(audio)
-        res = {}
+        patches = mel_patches(np.load(f))
+        acts, embs = [], []
+        for i in range(0, len(patches), 16):  # 16 patches at a time keeps the network's working memory small
+            a, e = embed.run(["activations", "embeddings"], {"melspectrogram": patches[i:i + 16]})
+            acts.append(a)
+            embs.append(e)
+        acts, embs = np.concatenate(acts), np.concatenate(embs)
+        res = {"styles": {c: round(float(v), 4) for c, v in zip(styles, acts.mean(axis=0))}}
+        timeline = {"patch_sec": round(PATCH_SEC, 4)}
         for key, (classes, model) in heads.items():
-            p = np.mean(model(emb), axis=0)  # average over the ~3 s patches
-            res[key] = {c: round(float(v), 4) for c, v in zip(classes, p)}
+            p = model.run(None, {model.get_inputs()[0].name: embs})[0]
+            res[key] = {c: round(float(v), 4) for c, v in zip(classes, p.mean(axis=0))}  # averaged over the patches
+            if key in TIMELINE:
+                keep = np.argsort(-p.mean(axis=0))[:TIMELINE_CLASSES]
+                timeline[key] = {classes[i]: [round(float(v), 2) for v in p[:, i]] for i in keep}
+        res["timeline"] = timeline
         results.append(res)
     return results
 
 
-# ---------------------------------------------------------------- fake backend (tests, Windows)
+# ---------------------------------------------------------------- fake backend (tests)
 def _fake_predict(npy_files):
     import numpy as np
     out = []
     for f in npy_files:
         a = np.load(f)
         bright = float(np.mean(np.abs(np.diff(a)))) / (float(np.mean(np.abs(a))) + 1e-9)  # crude: more highs -> more "electronic"
+        n = max(1, int(len(a) / SR / PATCH_SEC) - 1)
         out.append({
             "styles": {"Electronic---Downtempo": round(min(0.9, bright), 3), "Rock---Indie Rock": 0.3,
                        "Blues---Delta Blues": round(max(0.05, 0.6 - bright), 3), "Pop---Ballad": 0.12},
@@ -172,7 +195,9 @@ def _fake_predict(npy_files):
             "acoustic": {"acoustic": 0.7, "non_acoustic": 0.3}, "electronic": {"electronic": 0.3, "non_electronic": 0.7},
             "danceable": {"danceable": 0.4, "not_danceable": 0.6}, "aggressive": {"aggressive": 0.1, "not_aggressive": 0.9},
             "relaxed": {"relaxed": 0.6, "not_relaxed": 0.4}, "happy": {"happy": 0.4, "non_happy": 0.6},
-            "sad": {"sad": 0.3, "non_sad": 0.7}})
+            "sad": {"sad": 0.3, "non_sad": 0.7},
+            "timeline": {"patch_sec": round(PATCH_SEC, 4), "voice": {"voice": [0.2] * n},
+                         "instruments": {"guitar": [0.6] * n}}})
     return out
 
 
@@ -189,12 +214,15 @@ def summarise(raw):
     for key, pos in POSITIVE.items():
         if key in raw:
             out[key] = raw[key].get(pos, next((v for c, v in raw[key].items() if c.replace("_", "") == pos), None))
+    if raw.get("timeline"):
+        out["timeline"] = raw["timeline"]
     return out
 
 
-# The model process (TensorFlow + the EffNet network and its heads) needs roughly this much memory on top of what's
-# already running. In a container with a memory cap, starting it without that headroom gets something killed -
-# possibly the analysis itself - so it isn't started then. It's a bonus: the analysis never depends on it.
+# The model process (onnxruntime + the EffNet network and its heads) needs roughly this much memory on top of
+# what's already running (measured: about 600 MB at its peak on a 4-minute song). In a container with a memory cap,
+# starting it without that headroom gets something killed - possibly the analysis itself - so it isn't started
+# then. It's a bonus: the analysis never depends on it.
 MODEL_MEMORY_MB = int(os.environ.get("MUSIC_MODEL_MEMORY_MB", 800))
 
 
@@ -235,7 +263,7 @@ def predict(paths, load_audio, timeout=900):
     kind = backend()
     if not kind or not paths:
         return {}
-    free = free_memory_mb() if kind == "essentia" else None
+    free = free_memory_mb() if kind != "fake" else None
     if free is not None and free < MODEL_MEMORY_MB:
         raise RuntimeError(f"not enough free memory to start it this time ({free} MB free, it needs about "
                            f"{MODEL_MEMORY_MB} MB)")
@@ -254,9 +282,9 @@ def predict(paths, load_audio, timeout=900):
             raw = _fake_predict(npys)
         else:
             out = Path(tmp) / "out.json"
-            proc = subprocess.run([_essentia_python(), str(Path(__file__).resolve()), "--predict", str(out), *npys],
+            proc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--predict", str(out), *npys],
                                   capture_output=True, text=True, timeout=timeout,
-                                  env={**os.environ, "MUSIC_MODELS_DIR": str(models_dir()), "TF_CPP_MIN_LOG_LEVEL": "3"})
+                                  env={**os.environ, "MUSIC_MODELS_DIR": str(models_dir())})
             if proc.returncode != 0 or not out.exists():
                 tail = (proc.stderr or "").strip().splitlines()[-3:]
                 raise RuntimeError(f"style model failed (exit {proc.returncode}): {' | '.join(tail)[:300]}")

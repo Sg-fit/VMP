@@ -1233,6 +1233,8 @@ def refine_tempo(y, sr, coarse):
     return float(60 * sr / hop / k)
 
 
+MINOR_DOMINANT_SHARE = 0.1  # a dominant that fills a tenth of the chord time is a real chord of the progression
+                            # (one bar in ten), not a passing misread
 TACTUS_MIN, TACTUS_MAX = 50, 200  # the beat people tap along to sits in this range (BPM)
 PREFERRED_TEMPO = 120             # and, given no other evidence, near here (listeners' preferred tempo is ~2 Hz)
 
@@ -1260,6 +1262,36 @@ def tactus_factor(y, sr, tempo):
     return min(options, key=lambda k: abs(np.log(tempo * k / PREFERRED_TEMPO)))
 
 
+EIGHTHS_WEAK = 0.25  # the in-between counted beats carry under a quarter of the kick/snare power: 6 dB down, a ghost
+                     # note at most. Measured: hats counted as beats 0.0; correct readings with drums 0.30-1.0
+
+
+def counted_eighths(drums, sr, beat_frames, hop, tempo):
+    """A beat people tap along to lands where the kick or the snare hits. Busy hi-hats can make the beat tracker
+    count eighth notes instead (a 94 BPM groove read as 188), and then every second counted beat has neither kick
+    nor snare. Only readings that halving brings nearer the preferred tempo (above 120 x sqrt 2, about 170 BPM)
+    are questioned, so a real fast tempo with a kick or snare on every beat, or a half-time groove, is left alone.
+    Each drum band is compared with itself (a kick carries far more power than a snare), and each counted beat
+    takes the stronger of the two. Returns which half of the counted beats are the real ones (0 or 1), or None."""
+    import librosa
+    beat_frames = np.asarray(beat_frames)
+    if len(beat_frames) < 16 or abs(np.log(tempo / 2 / PREFERRED_TEMPO)) >= abs(np.log(tempo / PREFERRED_TEMPO)):
+        return None
+    S = np.abs(librosa.stft(drums, n_fft=2048, hop_length=hop))
+    f = librosa.fft_frequencies(sr=sr, n_fft=2048)
+    hits = []
+    for name in ("Kick", "Snare"):
+        lo, hi = instruments.DRUM_BANDS[name]
+        P = (S[(f >= lo) & (f < hi)] ** 2).sum(axis=0)
+        env = np.maximum(0.0, np.diff(P, prepend=P[0]))  # the rise in power, as in instruments.onto_kicks
+        peak = np.array([env[max(0, int(i) - 1):int(i) + 2].max() for i in beat_frames if i < len(env)])
+        hits.append(peak / (np.percentile(peak, 90) + 1e-12))
+    strength = np.maximum(*hits)
+    halves = [float(np.median(strength[0::2])), float(np.median(strength[1::2]))]
+    strong = int(np.argmax(halves))
+    return strong if halves[1 - strong] < EIGHTHS_WEAK * halves[strong] else None
+
+
 def _analyze_audio(path, light=False):
     """The expensive part: everything that depends only on the audio (cacheable)."""
     import librosa
@@ -1269,7 +1301,8 @@ def _analyze_audio(path, light=False):
         raise ValueError("audio is shorter than 2 seconds")
     duration = len(y) / sr
     # Split off the drums so they don't blur the harmony, and analyse each part on its own.
-    y_perc, y_harm, separation = instruments.separate(y, sr, fast=light)  # drums, everything else
+    stems = {}  # with Demucs: each part's level, second by second (for "who plays when")
+    y_perc, y_harm, separation = instruments.separate(y, sr, fast=light, stems=stems)  # drums, everything else
 
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=HOP)
     tempo = float(np.atleast_1d(tempo)[0])
@@ -1285,6 +1318,10 @@ def _analyze_audio(path, light=False):
     if clear_beat:
         tempo = refine_tempo(y, sr, tempo)
         raised = tactus_factor(y, sr, tempo)
+        if raised == 1 and instruments.hits_are_drums(y_perc, sr)[0]:
+            real = counted_eighths(y_perc, sr, beat_frames, HOP, tempo)
+            if real is not None:  # the tracker counted eighth notes: every second counted beat is the beat
+                beat_frames, tempo = beat_frames[real::2], tempo / 2
         if raised > 1:  # the tracker counted bars (or half bars): split each counted beat into `raised` beats
             beat_frames = np.concatenate([np.linspace(a, b, raised, endpoint=False) for a, b in
                                           zip(beat_frames[:-1], beat_frames[1:])] + [beat_frames[-1:]]).round().astype(int)
@@ -1380,6 +1417,32 @@ def _analyze_audio(path, light=False):
             runner_up = old_key
             scale["mode_confidence"] = "medium" if scale["mode_confidence"] == "high" else scale["mode_confidence"]
 
+    # Two minor keys a fifth apart share most of their notes, so on the pitch profile alone they can come out nearly
+    # level (D minor 0.69, A minor 0.67 for Am - Dm - E - F). A minor key's dominant settles it: the major chord on
+    # its fifth degree, whose third is the key's leading tone (E major's G# in A minor). That chord belongs to no
+    # other minor key nearby - E major isn't in D minor at all - so if the runner-up's dominant plays and the
+    # chosen key's own doesn't, the runner-up is the key.
+    if key_is_minor(main_key) and key_is_minor(runner_up) and (key_tonic(runner_up) - main_tonic) % 12 in (5, 7):
+        clear = [c for c in chords if (c.get("clarity") or 9) >= UNCLEAR_CHORD]
+        played = sum(c["end"] - c["start"] for c in clear) or 1.0
+
+        def dominant(tonic):  # share of the chord time on the key's major V (or V7)
+            return sum(c["end"] - c["start"] for c in clear
+                       if c["root"] == (tonic + 7) % 12 and c["q"] in ("", "7")) / played
+        rival = key_tonic(runner_up)
+        if dominant(rival) >= MINOR_DOMINANT_SHARE and dominant(main_tonic) == 0:
+            old_key = main_key
+            frames_t = np.concatenate([np.arange(int(s * fps), min(int(e * fps), n))
+                                       for s, e, k in ksec if key_tonic(k) == main_tonic])
+            scale = mode_and_scale(chroma, frames_t, rival)
+            main_key, main_tonic = scale.pop("key_index"), rival
+            ksec = merge_runs([(s, e, main_key if k == old_key else k) for s, e, k in ksec])
+            time_in_key = Counter()
+            for s, e, k in ksec:
+                time_in_key[k] += e - s
+            scores = key_scores(chroma[:, frames_t].mean(axis=1))
+            runner_up = old_key
+
     # With almost no percussive sound (legato strings, pads, soft piano) the beat grid can lock onto the wrong
     # speed, and a wrong grid can make chord changes look like 5/4 or 7/4. So in that case the tempo is marked
     # approximate and odd meters aren't claimed.
@@ -1460,8 +1523,10 @@ def _analyze_audio(path, light=False):
     # string with real energy there. Otherwise the low notes are the main instrument's own lowest part (e.g. the
     # thumb line of fingerstyle guitar), which is still transcribed and written out.
     below_80 = float(spec[(spec_f >= 30) & (spec_f < 80)].sum() / (spec.sum() + 1e-12))
+    voices = (instruments.voices_apart(y_perc, sr, 256, beat_times, meter["beats_per_bar"])
+              if clear_beat and are_drums else None)
     found = instruments.verdict(hit_noise, are_drums, float(np.sum(y_perc ** 2)) / (float(np.sum(y ** 2)) + 1e-12),
-                                below_80, bass, light)
+                                below_80, bass, light, voices)
     separate_bass = found["bass"]
     loudest_low = max((sec["bass_low_db"] for sec in sections), default=0.0)
     for sec in sections:
@@ -1501,6 +1566,7 @@ def _analyze_audio(path, light=False):
         "rhythm": rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr),
         "sound": sound_features(y, sr, rms_db, duration),
         "separation": separation,
+        **({"stems": stems} if stems else {}),
         "drums": instruments.drum_analysis(y_perc, sr, 256, beat_times, float(np.sum(y ** 2)),
                                            beats_per_bar=meter["beats_per_bar"], are_drums=are_drums)
         if clear_beat else {"present": False},
@@ -1565,7 +1631,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-23a"
+ANALYSIS_VERSION = "2026-10-26a"
 
 
 def _cache_key(path, light=False):
@@ -1683,7 +1749,91 @@ def hear_instruments(paths, progress=lambda m: None):
         heard = sorted(({"key": k, "name": n, "p": round(p, 2)} for k, (n, p) in best.items()), key=lambda x: -x["p"])
         out[path] = {"instruments": heard[:HEARD_MAX], "model": tagger.backend(),
                      **{k: summary.get(k) for k in ("voice", "electronic", "acoustic") if summary.get(k) is not None}}
+        tl = summary.get("timeline") or {}
+        if (tl.get("voice") or {}).get("voice"):  # second by second: is someone singing? (for "who plays when")
+            out[path]["timeline"] = {"patch_sec": tl["patch_sec"], "voice": tl["voice"]["voice"]}
     return out
+
+
+VOICE_SUNG = 0.5        # the voice/instrumental head answers a two-way question: above one half, it hears singing
+SUNG_SHARE = 0.4        # a section "has vocals" when singing is heard through at least this share of it
+STEM_PRESENT_DB = -20   # a separated part plays in a section when it's within 20 dB of the whole mix there: the
+                        # stems of parts that play measured -3 to -12 dB, what bleeds into an empty stem -30 to -65
+STEM_ROWS = [("vocals", "Vocals"), ("drums", "Drums"), ("bass", "Bass"), ("guitar", "Guitar"), ("piano", "Piano"),
+             ("other", "Other (keys, strings, synths)")]
+
+
+def lineup(r):
+    """Who plays when: [{"key", "name", "how", "cells": [{label, start, end, on, p, unsure, note}]}], one cell per
+    section. Each row is only as sure as its evidence: separated stems (Demucs) when we have them; otherwise our
+    own measurements for the drums, the bass and the harmony, and the trained model's second-by-second
+    voice/instrumental answer for the vocals. Rows nothing plays in are left out."""
+    secs = r.get("sections") or []
+    if not secs:
+        return []
+    rows = []
+
+    def row(key, name, how, cell):
+        cells = [dict(label=s["label"], start=s["start"], end=s["end"], **cell(s)) for s in secs]
+        if any(c["on"] or c.get("unsure") for c in cells):
+            rows.append({"key": key, "name": name, "how": how, "cells": cells})
+
+    stems = r.get("stems")
+    if stems:
+        t_of = lambda s: slice(int(s["start"]), max(int(s["end"]), int(s["start"]) + 1))
+        for key, name in STEM_ROWS:
+            if key not in stems:
+                continue
+
+            def cell(s, key=key):
+                lv = stems[key][t_of(s)]
+                db = round(float(10 * np.log10(np.mean(np.power(10.0, np.array(lv) / 10)) + 1e-12)), 1) if lv else -99
+                return {"on": db >= STEM_PRESENT_DB, "p": min(1.0, max(0.0, (db + 30) / 27)),
+                        "note": f"{db:+.0f} dB against the whole mix"}
+            row(key, name, "separated", cell)
+        return rows
+
+    tl = (r.get("heard") or {}).get("timeline") or {}
+    if tl.get("voice"):
+        step = tl["patch_sec"]
+
+        def sung(s):  # patches whose middle (1 s in: each covers ~2 s) falls inside the section
+            v = [p for i, p in enumerate(tl["voice"]) if s["start"] <= i * step + 1.0 < s["end"]]
+            share = sum(p >= VOICE_SUNG for p in v) / len(v) if v else 0.0
+            return {"on": share >= SUNG_SHARE, "p": round(share, 2),
+                    "note": f"singing heard through {round(100 * share)}% of it" if v else "too short to tell"}
+        row("vocals", "Vocals", "model", sung)
+    d = r.get("drums") or {}
+    if d.get("present"):
+        row("drums", "Drums", "measured", lambda s: {"on": bool(s.get("drums")), "p": 1.0 if s.get("drums") else 0.0,
+                                                      "note": "drum kit" if s.get("drums") else "no drums"})
+    elif d.get("possible"):
+        row("drums", "Drums?", "measured", lambda s: {"on": False, "unsure": bool(s.get("drums_heard")), "p": 0.0,
+                                                       "note": "percussive, but maybe not drums" if s.get("drums_heard")
+                                                       else "no percussion"})
+    b = r.get("bass") or {}
+    if b.get("present"):
+        row("bass", "Bass", "measured", lambda s: {"on": bool(s.get("bass")), "p": 1.0 if s.get("bass") else 0.0,
+                                                    "note": "bass plays" if s.get("bass") else "no bass"})
+    if all("harmony_db" in s and "loudness_db" in s for s in secs):
+        # Is the harmony there at all? Its share of each section's own sound, against its usual share: a quiet verse
+        # keeps its share, a drums-only break loses it (electronic.MUSIC_GONE_DB below the usual, as in a drop's
+        # "drums alone"). Its level against the fullest section would call every quiet verse empty.
+        share = lambda s: s["harmony_db"] - s["loudness_db"]
+        usual = float(np.median([share(s) for s in secs]))
+        chosen = [k for k in (r.get("context") or {}).get("chosen") or []
+                  if family(k) not in ("drums", "bass", "voice")]
+        heard = [x for x in (r.get("heard") or {}).get("instruments") or []
+                 if family(x["key"]) not in ("drums", "bass", "voice")]
+        name = (", ".join(INSTRUMENTS[k].split(" / ")[0] for k in chosen[:3]) if chosen else
+                heard[0]["name"] if heard else "Chords & melody")
+        # the instrument's name is the model's guess unless the musician named it; that it plays is measured
+        row("harmony", name[:1].upper() + name[1:], "measured" if chosen or not heard else "guessed",
+            lambda s: {"on": share(s) >= usual - electronic.MUSIC_GONE_DB,
+                       "p": round(min(1.0, max(0.0, 1 + (share(s) - usual) / (2 * electronic.MUSIC_GONE_DB))), 2),
+                       "note": "plays" if share(s) >= usual - electronic.MUSIC_GONE_DB else
+                               f"{usual - share(s):.0f} dB under its usual share of the sound: gone, in effect"})
+    return rows
 
 
 def heard_notes(r):
@@ -2951,6 +3101,14 @@ def ai_summary(r):
         b = r.get("low_part") or {}
     elif d.get("string_attacks"):
         lines.append("No drums (the percussive sound is picking/strumming).")
+    elif d.get("possible"):
+        lines.append("Drums: not confirmed - the percussive sound may just be strummed or picked strings. Don't "
+                     "assume a drum kit.")
+    rows = lineup(r)
+    if rows:
+        lines.append("Who plays when (by section " + " ".join(x["label"] for x in r["sections"]) + "): " + "; ".join(
+            f"{rw['name']} in " + (" ".join(c["label"] for c in rw["cells"] if c["on"]) or "none (unconfirmed)")
+            for rw in rows) + ".")
     if b.get("present"):
         brh = r.get("bass_rhythm") or {}
         lines.append(f"{'Lowest part' if (r.get('bass') or {}).get('low_part_only') else 'Bass'}: {b['style']}; main notes " + ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"][:3])
@@ -3069,6 +3227,22 @@ def _check_times(text, r, tolerance=3):
     # "the 0:05 D5" names the chord that's there now, even inside a suggestion ("replace the 0:05 D5 with Bm")
     claims += [(None, m_.group(2), m_.group(1)) for m_ in
                re.finditer(r"\bthe\s+(\d{1,2}:\d{2})\s+([A-G][b#]?(?:maj7|m7|m|7|5)?)\b(?!\s+section)", text)]
+    # "between G and D at 0:10" / "from G to D at 0:10" is about the move from one chord to the next: it holds when G
+    # is followed by D and the time falls from G's start to just after D comes in (the claim for D alone is then
+    # covered by it)
+    covered = set()
+    chord_re = r"([A-G][b#]?(?:maj7|m7|m|7|5)?)"
+    for m_ in re.finditer(rf"\b(?:between|from)\s+(?:the\s+)?{chord_re}(?:\s+chord)?\s+(?:and|to|into)\s+(?:the\s+)?"
+                          rf"{chord_re}(?:\s+chords?)?\s+at\s+(\d{{1,2}}:\d{{2}})\b", text):
+        x, y, t = parse_chord(m_.group(1)), parse_chord(m_.group(2)), _to_sec(m_.group(3))
+        if not (x and y):
+            continue
+        covered.add(m_.start(2))
+        root = lambda c: (parse_chord(c["chord"]) or (None,))[0]
+        if not any(root(tl[i]) == x[0] and root(tl[i + 1]) == y[0] and starts[i] - 0.5 <= t <= starts[i + 1] + 1
+                   for i in range(len(tl) - 1)):
+            problems.append(f"no {m_.group(1)} to {m_.group(2)} change at {m_.group(3)}")
+    claims = [c for c in claims if c[0] not in covered]
     for pos, name, t in claims:
         # look back to the start of the chord's own clause, however long the description is
         clause = re.split(r"[.;:!?()]", text[:pos])[-1] if pos is not None else ""
@@ -3583,6 +3757,11 @@ GUIDE = {
         "Minor chords": "How much of the section's time minor chords take up. More minor usually feels darker.",
     },
     "Instruments": {
+        "Who plays when": "One row per instrument, one block per section: filled where it plays (stronger = surer), "
+                          "a dashed outline where it might (drums we couldn't confirm), faint where it doesn't. The "
+                          "vocals come from a trained model listening second by second; the drums, bass and "
+                          "chords from our own measurements (or, with Demucs, from each separated part). Hover "
+                          "over a block for the evidence.",
         "Separation": "We pull the drums apart from everything else before we analyse anything. Demucs, an AI model, "
                       "does this well. Without it we use a simpler split by sound type: sharp hits versus held notes.",
         "Drum grid": "One bar cut into 16 sixteenth-notes (1 e & a 2 e & a 3 e & a 4 e & a). K is a kick-heavy hit, "
@@ -3748,20 +3927,8 @@ def track_report(r):
     L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
           f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
+    L += [f"> **In short:** {in_short(r)}", ""]
     L += glance(r)
-    h = r.get("heard") or {}
-    if h.get("instruments"):
-        heard = " · ".join(f"{x['name']} {round(100 * x['p'])}%" for x in h["instruments"])
-        L += [f"_{tip('Instruments we hear', 'Instruments we hear')}: {heard}._"]
-        extra = heard_notes(r)
-        if extra:
-            L += [f"- _We also hear {', '.join(x['name'] for x in extra)}, which you didn't tick. If "
-                  f"{'it is' if len(extra) == 1 else 'they are'} there, tick {'it' if len(extra) == 1 else 'them'} next "
-                  "time and we'll use it (nothing here was changed on the model's say-so)._"]
-        elif not ctx:
-            L += ["- _Tick the right ones when you upload and we'll use them: they settle the drums, the bass and "
-                  "whose melody it is._"]
-        L.append("")
     L += comparison_report(r)  # what the musician came for, when they brought songs they admire
 
     # Harmony
@@ -3770,44 +3937,45 @@ def track_report(r):
     mode_note = ("" if r["mode_confidence"] == "high" else
                  f"; could also be {r['mode_runner_up']}" if r["mode_confidence"] == "medium" else
                  f"; not sure, {r['mode_runner_up']} fits almost as well")
-    L += ["### Harmony", "", "_What the music is built from: its key, scale and chords._", "",
+    L += ["### Harmony", "", "_The key you're in and the chords you lean on._", "",
           f"- **{tip('Key')}:** {r['key']} ({tip('confidence', 'Confidence')} {conf}: {conf_note}; "
           f"{tip('runner-up', 'Runner-up')} {r['runner_up_key']})",
           f"- **{tip('Mode')}:** {mode_tip(r['mode'])} ({tip(r['mode_confidence'] + ' confidence', 'Mode confidence')}"
           f"{mode_note}) — {tip('colour note', 'Colour note')} **{r['color_note']}**",
-          f"- **{tip('Scale')}:** {' '.join(r['scale_notes'])}",
+          f"- **{tip('Chords used most', 'Chord names')}:** "
+          + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]),
           ]
+    more = [f"- **{tip('Scale')}:** {' '.join(r['scale_notes'])}"]  # the details, folded on the web page
     if r.get("drone"):
         who = " (the bass holds it)" if (r.get("bass") or {}).get("pedal_note") == r["scale_notes"][0] else ""
-        L.append(f"- **{tip('Drone / pedal')}:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the "
-                 f"track{who}")
+        more.append(f"- **{tip('Drone / pedal')}:** {r['scale_notes'][0]} sounds through {r['drone_pct']}% of the "
+                    f"track{who}")
     if r.get("third_mix"):
-        L.append(f"- **{tip('Major/minor blur')}:** both thirds ({r['thirds']}) are prominent")
+        more.append(f"- **{tip('Major/minor blur')}:** both thirds ({r['thirds']}) are prominent")
     cents = r.get("tuning_cents", 0)
     if abs(cents) >= 10:
-        L.append(f"- **{tip('Tuning')}:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
-                 f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz). We've allowed for that in everything below")
-    L.append(f"- **{tip('Chords used most', 'Chord names')}:** " + ", ".join(f"{c['chord']} ({fmt_time(c['seconds'])})" for c in r["chords_used"]))
+        more.append(f"- **{tip('Tuning')}:** about {abs(cents)} cents {'sharp' if cents > 0 else 'flat'} of A440 "
+                    f"(A ≈ {440 * 2 ** (cents / 1200):.0f} Hz). We've allowed for that in everything below")
     g = r.get("guitar")
     chosen = (r.get("context") or {}).get("chosen") or (r.get("context") or {}).get("keys") or []
     if g and (not chosen or any(c in GUITARS for c in chosen)):  # capo shapes are a six-string guitar's
         shapes = " · ".join(f"{s['shape']} `{s['fingering']}`" + (f" (sounds {s['sounds']})" if g["capo"] else "")
                             for s in g["shapes"])
         where = f"capo on fret {g['capo']}, then play these open shapes" if g["capo"] else "all open shapes, no capo needed"
-        L.append(f"- **{tip('For guitar', 'Capo')}:** {where} ({g['open_share_pct']}% of the chords): {shapes}")
+        more.append(f"- **{tip('For guitar', 'Capo')}:** {where} ({g['open_share_pct']}% of the chords): {shapes}")
     if r["harmonic_rhythm_beats"]:
-        L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
+        more.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_beats']} beats")
     elif r.get("harmonic_rhythm_sec"):
-        L.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_sec']} seconds")
+        more.append(f"- **{tip('Harmonic rhythm')}:** a chord change every ~{r['harmonic_rhythm_sec']} seconds")
     strip = charts.chord_strip(r["chord_timeline"], r.get("duration_sec"))
     if strip:
         L += ["", f"**{tip('Chords over time', 'Chord timeline')}**", "", strip]
-    L += ["", f"**{tip('Time in each key')}**", "",
-          charts.hbars([(k, v["percent"], f"{k}: {fmt_time(v['seconds'])} ({v['percent']}%)")
-                        for k, v in r["time_in_key"].items()], width=420, unit="%", top=100,
-                       label="Share of the track in each key")]
+    more += ["", f"**{tip('Time in each key')}**", "",
+             charts.hbars([(k, v["percent"], f"{k}: {fmt_time(v['seconds'])} ({v['percent']}%)")
+                           for k, v in r["time_in_key"].items()], width=420, unit="%", top=100,
+                          label="Share of the track in each key")]
     if r["key_changes"]:
-        L += ["", f"**{tip('Key timeline')}:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
+        more += ["", f"**{tip('Key timeline')}:** " + " → ".join(f"{s_['key']} ({s_['start']}–{s_['end']})" for s_ in r["key_sections"])]
     b = r.get("blues_form")
     if b:
         L += ["", f"**{tip('Form', explanation=BLUES_TIPS.get(b.get('bars', 12), BLUES_TIP))}: {b['name']}** — choruses of "
@@ -3817,17 +3985,18 @@ def track_report(r):
               + (" · there's an intro or pickup before the first full chorus" if b["choruses"][0] > b["bar_sec"] * 2 else "")]
         k = r["key_index"]
         home = spell(key_tonic(k), k)
+        more += ["", "**Blues variations to try**", ""]
         for v in r.get("blues_variations") or []:
-            L.append(f"- **Try:** {v['name']} — `{' | '.join(v['chords'])}` — {v['why']}")
+            more.append(f"- **Try:** {v['name']} — `{' | '.join(v['chords'])}` — {v['why']}")
         four, five = spell((key_tonic(k) + 5) % 12, k), spell((key_tonic(k) + 7) % 12, k)
         if key_is_minor(k):
-            L.append(f"_This is a minor blues, so you'd expect minor 7th chords on the home and IV chords "
+            more += ["", f"_This is a minor blues, so you'd expect minor 7th chords on the home and IV chords "
                      f"({home}m7, {four}m7), a dominant {five}7, and the blues scale's b5 ({flat5(five)}) as its "
-                     "colour note._")
+                     "colour note._"]
         else:
-            L.append(f"_In a blues, “{r['key']}” just means {home} is home. You'd expect dominant-7th chords "
+            more += ["", f"_In a blues, “{r['key']}” just means {home} is home. You'd expect dominant-7th chords "
                      f"({home}7, {four}7, {five}7) and the blue notes {spell((key_tonic(k) + 3) % 12, k)} (flat 3rd) "
-                     f"and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) rubbing against the major scale._")
+                     f"and {spell((key_tonic(k) + 10) % 12, k)} (flat 7th) rubbing against the major scale._"]
     sf = r.get("song_form")
     if sf:
         names = ["A", "A", "B (bridge)", "A"]
@@ -3835,21 +4004,23 @@ def track_report(r):
               f"{n} at {fmt_time(t)}" for n, t in zip(names, sf["starts"])) + f" (8 bars each, {sf['section_sec']} s)"
               + (f" · the whole AABA comes round {sf['cycles']} times" if sf["cycles"] > 1 else "")]
     if r["loops"]:
-        L += ["", f"**{tip('Chord loops', 'Chord loop')}**", ""]
+        more += ["", f"**{tip('Chord loops', 'Chord loop')}**", ""]
         for lp in r["loops"]:
-            L.append(f"- `{' – '.join(lp['chords'])}`  ({tip(' – '.join(lp['roman']), 'Roman numerals')} "
-                     f"in {lp['key']}) "
-                     f"· {', '.join(lp['where'])} · ×{lp['repeats']}")
+            more.append(f"- `{' – '.join(lp['chords'])}`  ({tip(' – '.join(lp['roman']), 'Roman numerals')} "
+                        f"in {lp['key']}) "
+                        f"· {', '.join(lp['where'])} · ×{lp['repeats']}")
     if r["chord_timeline"]:
-        L += ["", "<details markdown=\"1\"><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
-              f"_{GLOSSARY['Chord timeline']} {GLOSSARY['Chord names']}_", "",
-              " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" + ("?" if (c.get("clarity") or 9) < UNCLEAR_CHORD else "")
-                         for c in r["chord_timeline"]), "",
-              "</details>"]
+        more += ["", "<details markdown=\"1\"><summary>Full chord timeline (with bass notes as slash chords)</summary>", "",
+                 f"_{GLOSSARY['Chord timeline']} {GLOSSARY['Chord names']}_", "",
+                 " · ".join(f"{c['time']} {c.get('with_bass', c['chord'])}" + ("?" if (c.get("clarity") or 9) < UNCLEAR_CHORD else "")
+                            for c in r["chord_timeline"]), "",
+                 "</details>"]
+    L += ["", MORE, ""] + more
 
     # Structure
-    L += ["", "### Structure", "", "_The sections in order, and what changes from one to the next._", "",
+    L += ["", "### Structure", "", "_How the track is laid out, section by section._", "",
           *([timeline_svg(r), ""] if timeline_svg(r) else []),
+          f"{tip('Form')}: **{' '.join(sec['label'] for sec in r['sections'])}**", "", MORE, "",
           f"| {tip('Section', 'Form')} | Time | Length | {tip('Energy', 'Section energy')} | Key | "
           f"{tip('Main chords', 'Chord names')} | {tip('Drums', 'Instrument columns')} | {tip('Bass', 'Instrument columns')} |",
           "|---------|------|--------|--------|-----|-------------|-------|------|"]
@@ -3858,7 +4029,6 @@ def track_report(r):
                  f"{fmt_time(sec['end'] - sec['start'])} | {sec['energy']} | {sec['key']} | "
                  f"{', '.join(sec['main_chords']) or '—'} | {'✓' if sec.get('drums') else '—'} | "
                  f"{'✓' if sec.get('bass') else '—'} |")
-    L += ["", f"{tip('Form')}: **{' '.join(sec['label'] for sec in r['sections'])}**"]
     L += feel_report(r)
     L += instruments_report(r)
     L += melody_report(r)
@@ -3872,6 +4042,7 @@ def track_report(r):
           + (f", {rh['groove']} ({rh['syncopation_pct']}% {tip('off-beat', 'Syncopation')})" if "groove" in rh else ""),
           f"- **{tip('Percussive', 'Percussive')} vs tonal:** {rh['percussive_pct']}% percussive energy",
           f"- **{tip('Tone')}:** {s['tone']} ({tip(str(s['brightness_hz']) + ' Hz', 'Brightness')} brightness), {s['texture']}",
+          "", MORE, "",
           *loudness_lines(s),
           f"- **{tip('Energy arc', 'Energy')}:** {charts.sparkline(s['energy_curve'], width=140, height=24)}"
           + (f" — biggest build into **{s['biggest_build']['time']}**" if s["biggest_build"] else "")
@@ -3884,9 +4055,10 @@ def track_report(r):
     # Ideas
     L += past_report(r)
     L += gaps_report(r)
-    L += ["", "### 💡 Ideas to try", "", "_We worked these out from the analysis itself, no AI involved. Try "
-          "them out and keep whatever works for you._", ""]
-    for i in r["ideas"]:
+    L += ["", "### 💡 Ideas to try", "", "_Worked out from the analysis itself, no AI. Try them and keep what "
+          "works._", ""]
+    for n, i in enumerate(r["ideas"]):
+        L += ["", MORE, ""] if n == IDEAS_SHOWN and len(r["ideas"]) > IDEAS_SHOWN + 1 else []
         L.append(f"- **{i['area']}:** {i['idea']}")
 
     ai = r.get("ai")
@@ -3907,6 +4079,8 @@ def track_report(r):
                     L.append(f"- **{i['title']}** ({i['missing']}): {i['idea']}")
                 L.append("")
             mood = ai.get("mood") or {}
+            if ai.get("gap_ideas") and (mood.get("directions") or ai["ideas"]):
+                L += [MORE, ""]
             if mood.get("directions"):
                 L += ["**Mood**" + (f": now {mood['now']}" if mood.get("now") else ""), ""]
                 for d in mood["directions"]:
@@ -3940,8 +4114,7 @@ def track_report(r):
 
 
 def melody_report(r):
-    L = ["", "### 🎶 Melody", "", "_The tune: its notes, its shape and ways to develop it. For the full "
-         "picture, type the melody you hear when you upload._", ""]
+    L = ["", "### 🎶 Melody", "", "_The tune: which notes it uses, its shape, and ways to grow it._", ""]
     m = r.get("melody")
     if m and m.get("error"):
         L += [f"_{m['error']}_", ""]
@@ -3956,6 +4129,7 @@ def melody_report(r):
               f"- **{tip('Scale degrees', 'Scale degree')}:** {' '.join(m['degrees'])} (1 = {r['scale_notes'][0]}, the home note)",
               f"- **Fits:** {', '.join(mode_tip(x) for x in m['fits_modes']) or 'no single mode — it mixes notes from the major and minor scales on ' + r['scale_notes'][0]}"
               + (f" · outside the detected scale: {', '.join(m['outside_detected_scale'])}" if m["outside_detected_scale"] else ""),
+              "", MORE, "",
               f"- **{tip('Shape', 'Melody shape')}:** {m['shape']} · range {m['range']} · {m['steps_pct']}% steps, {m['leaps_pct']}% leaps",
               f"- **{tip('Moves', 'Intervals')}:** {', '.join(m['intervals'])}"]
         if m["harmonize"]:
@@ -4009,11 +4183,89 @@ def dna_report(r):
         L.append(f"- **Groove:** {d['groove']}")
     for m in d.get("melody", []):
         L.append(f"- **Melody:** {m['device']} — {m['reference']}")
+    items = [i for i, x in enumerate(L) if x.startswith("- ")]
+    if len(items) > 3:
+        L[items[2]:items[2]] = ["", MORE, ""]
     if ai_refs:
+        L += ["", MORE, ""] if len(items) <= 3 else []
         L += ["", "_Suggested by the AI, so give them a listen before you rely on them:_", ""]
         L += [f"- **{x.get('artist', '?')} — “{x.get('track', '?')}”:** {x.get('shared', '')}" for x in ai_refs]
     L.append("")
     return L
+
+
+def _and(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
+def in_short(r):
+    """The track in two or three plain sentences: what it is, who plays, and how it moves. Built only from what the
+    report shows below, so nothing here is claimed that the details don't back up."""
+    bpm = r.get("tempo_bpm")
+    pace = ("free-flowing" if not bpm else "slow" if bpm < 76 else "mid-tempo" if bpm < 108 else
+            "upbeat" if bpm < 132 else "fast")
+    f = r.get("feel") or {}
+    kind = ((r.get("blues_form") or {}).get("name") or ("AABA song" if r.get("song_form") else None)
+            or ("dance track" if (r.get("producer") or {}).get("map") else "track"))
+    mood = f.get("mood", "").replace(", ", " and ")
+    first = (f"A {pace}{', ' + mood if mood else ''} {kind} in {r['key']}"
+             + (f" at {bpm:.0f} BPM" if bpm else "") + ".")
+    rows = lineup(r)
+    plays = [rw["name"].split(" (")[0].lower() for rw in rows if rw["key"] != "drums" and any(c["on"] for c in rw["cells"])]
+    plays = [p.replace("chords & melody", "the chords and tune") for p in plays]
+    d = r.get("drums") or {}
+    tail = ", with no drum kit that we can hear" if d.get("possible") or d.get("string_attacks") else ""
+    if d.get("present"):
+        plays = ["drums"] + plays
+    second = ("" if not plays else f"It's {plays[0]} on its own{tail}." if len(plays) == 1 else
+              f"It's {_and(plays)}{tail}.")
+    third = ""
+    if f.get("arc"):
+        peak = f.get("peak") if f.get("contrast", 0) >= 10 else None
+        third = f"It {f['arc']}" + (f"; the high point is section {peak['label']} at {fmt_time(peak['start'])}"
+                                    if peak else "") + "."
+    chords = [c["chord"] for c in r.get("chords_used") or []][:3]
+    fourth = f"The chords lean on {_and(chords)}." if chords else ""
+    return " ".join(x for x in (first, second, third, fourth) if x)
+
+
+MORE = "<!--more-->"  # in a report section: what's above is the gist, the web page folds what's below
+IDEAS_SHOWN = 3       # ideas shown before the fold
+GAPS_SHOWN = 3        # gaps shown before the fold
+
+
+def heard_report(r):
+    """The trained model's opinion of the instruments, with what to do about it: a second opinion, never a change."""
+    h, ctx = r.get("heard") or {}, r.get("context")
+    if not h.get("instruments"):
+        return []
+    heard = " · ".join(f"{x['name']} {round(100 * x['p'])}%" for x in h["instruments"])
+    L = [f"**{tip('Instruments we hear', 'Instruments we hear')}** (the model's opinion): {heard}"]
+    extra = heard_notes(r)
+    if extra:
+        L += ["", f"_We also hear {', '.join(x['name'] for x in extra)}, which you didn't tick. If "
+              f"{'it is' if len(extra) == 1 else 'they are'} there, tick {'it' if len(extra) == 1 else 'them'} next "
+              "time and we'll use it (nothing here was changed on the model's say-so)._"]
+    elif not ctx:
+        L += ["", "_Tick the right ones when you upload and we'll use them: they settle the drums, the bass and "
+              "whose melody it is._"]
+    return L + [""]
+
+
+def lineup_summary(rows, r):
+    """One line: where each instrument plays."""
+    n = len(r.get("sections") or [])
+    parts = []
+    for rw in rows:
+        on = [c["label"] for c in rw["cells"] if c["on"]]
+        if rw["key"] == "drums" and not on:
+            parts.append("drums unconfirmed (see below)")
+        elif on:
+            where = "throughout" if len(on) == n else "in " + " ".join(on)
+            parts.append(f"**{rw['name']}** {where}" + {"model": " (the model hears singing)",
+                                                         "guessed": " (which instrument is the model's guess)"}.get(rw["how"], ""))
+    return " · ".join(parts) + "."
 
 
 def instruments_report(r):
@@ -4024,13 +4276,18 @@ def instruments_report(r):
     melodic = [i for i in chosen if family(i) not in ("drums", "bass")]
     named = [i for i in melodic  # the solo instrument's low part is written out below, so it isn't "other"
              if not (solo and family(i) == r.get("low_part_instrument") and len(melodic) == 1)]
+    rows = lineup(r)
     if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named \
-            and not d.get("possible"):
+            and not d.get("possible") and not rows:
         return []
     how = ("with Demucs, an AI model built for the job" if r.get("separation") == "demucs" else
            "with a lighter split that tells sharp hits from held notes")
-    L = ["", "### Instruments", "", "_Who's playing, and what the drums and bass are up to._", "",
-         f"_We separated the drums from everything else {tip(how, 'Separation')}._", ""]
+    L = ["", "### Instruments", "", "_Who's playing when, and what the drums and bass are up to._", ""]
+    if rows:
+        L += [f"**{tip('Who plays when')}**", "", charts.lineup_map(rows, r.get("duration_sec")), "",
+              lineup_summary(rows, r), ""]
+    L += [MORE, "", f"_To hear the drums on their own, we split them from everything else {tip(how, 'Separation')}._", ""]
+    L += heard_report(r)
     if d.get("present") and d.get("grid"):
         where = [sec["label"] for sec in r["sections"] if sec.get("drums")]
         parts = [f"plays in sections {' '.join(where)}" if where else "plays throughout",
@@ -4044,11 +4301,17 @@ def instruments_report(r):
         if d.get("hats"):
             rows.append("Cymbals  " + " ".join(d["hats"]))
         L += [f"**🥁 Drums** — " + " · ".join(parts), "", f"Main groove ({tip('how to read', 'Drum grid')}):", "",
-              charts.drum_grid(g, d.get("hats"), len(g) // 4), "",
+              charts.drum_grid(g, d.get("hats"), len(g) // 4, bpm=r.get("tempo_bpm")), "",
               '<details markdown="1"><summary>As text</summary>', "", "```", *rows, "```", "", "</details>", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — they're there, but we couldn't find a clear repeating pattern.", ""]
-    if d.get("possible") and not d.get("user_said_none"):
+    together = (r.get("evidence") or {}).get("voices", 0) >= instruments.VOICES_APART
+    if d.get("possible") and not d.get("user_said_none") and together:
+        L += ["**🥁 Drums** — we don't think there's a drum kit, so we haven't assumed one. The hits are noisy, but "
+              "every frequency band hits at the same moment, bar after bar: that's one instrument's strums or "
+              "picking (a bright or distorted guitar is as noisy as a snare). In a kit, the snare or the hats hit at "
+              "moments the kick doesn't. If there are drums, tick “drums” when you upload and we'll show their groove.", ""]
+    elif d.get("possible") and not d.get("user_said_none"):
         L += ["**🥁 Drums** — we can't tell, so we haven't assumed any. The percussive sound is only slightly "
               "noise-like: it could be light percussion (a shaker, brushes) or just the scrape of strummed or "
               "hard-picked strings. If there are drums, tick “drums” when you upload and we'll show their groove.", ""]
@@ -4149,18 +4412,20 @@ def timeline_svg(r):
         hue.setdefault(s["label"], SECTION_HUES[len(hue) % len(SECTION_HUES)])
     y0 = top + curve_h + 4
     blocks = "".join(
-        f'<rect x="{x(s["start"]):.1f}" y="{y0}" width="{max(1.0, x(s["end"]) - x(s["start"]) - 1):.1f}" height="{band}" '
+        f'<rect x="{x(s["start"]):.1f}" y="{y0}" width="{max(1.0, x(s["end"]) - x(s["start"]) - 1):.1f}" height="{band}"'
+        f'{charts.span(s["start"], s["end"])} '
         f'fill="hsl({hue[s["label"]]},70%,55%)" fill-opacity="0.45"><title>{html.escape(s["label"])} '
         f'{fmt_time(s["start"])}-{fmt_time(s["end"])}, {s["energy"]} energy</title></rect>'
         + (f'<text x="{(x(s["start"]) + x(s["end"])) / 2:.1f}" y="{y0 + 15}" text-anchor="middle" font-size="12" '
-           f'font-weight="700" fill="currentColor">{html.escape(s["label"])}</text>' if x(s["end"]) - x(s["start"]) > 14 else "")
+           f'font-weight="700" fill="currentColor" pointer-events="none">{html.escape(s["label"])}</text>'
+           if x(s["end"]) - x(s["start"]) > 14 else "")
         for s in secs)
     step = next(st for st in (10, 15, 30, 60, 120, 300, 600) if dur / st <= 10)
     ticks = "".join(f'<text x="{x(t):.1f}" y="{H - 4}" text-anchor="middle" font-size="10" fill="currentColor" '
                     f'fill-opacity="0.7">{fmt_time(t)}</text>' for t in range(0, int(dur) + 1, step))
     return (f'<svg class="timeline" viewBox="0 0 {W} {H}" width="100%" role="img" '
             f'aria-label="Loudness over time with the sections {" ".join(s["label"] for s in secs)}" '
-            f'style="max-width:{W}px;display:block;margin:4px 0 12px">'
+            f'style="max-width:{W}px;display:block;margin:4px 0 12px"{charts.timed(dur, x)}>'
             f'<path d="{area}" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-opacity="0.55" '
             f'stroke-width="1"/>{blocks}{ticks}</svg>')
 
@@ -4215,9 +4480,8 @@ def feel_report(r):
     if not f:
         return []
     L = ["", f"### ⚡ Energy & mood", "",
-         f"_We measured these from the audio. {tip('Energy', 'Energy level')} comes from loudness, notes per "
-         f"second, brightness and tempo, and {tip('mood', 'Mood')} from the mode, how much minor chords play, "
-         f"brightness and tempo._", "",
+         f"_How intense it feels ({tip('energy', 'Energy level')}) and what it sets ({tip('mood', 'Mood')}), "
+         f"section by section._", "",
          f"- **Overall:** energy **{f['energy']}/10**, mood **{f['mood']}** "
          f"(positivity {f['valence']}/100) · the track {f['arc']}"
          + (f" · peak: section **{f['peak']['label']}** ({fmt_time(f['peak']['start'])}–{fmt_time(f['peak']['end'])})"
@@ -4228,7 +4492,10 @@ def feel_report(r):
                  + ("A breakdown (drop the drums and bass) or a fuller last section would give the track more shape."
                     if band else "A quieter, sparser passage, or a bigger, fuller last section, would give the track "
                                  "more shape."))
-    L += ["", f"| Section | Time | {tip('Energy', 'Energy level')} | {tip('Mood')} | {tip('Positivity')} | "
+    chart = charts.section_energy(f["sections"], r.get("duration_sec"))
+    if chart:
+        L += ["", chart]
+    L += ["", MORE, "", f"| Section | Time | {tip('Energy', 'Energy level')} | {tip('Mood')} | {tip('Positivity')} | "
           f"{tip('Loudness vs peak')} | {tip('Notes/sec', 'Notes per second')} | {tip('Brightness')} | {tip('Minor chords')} |",
           "|---------|------|--------|------|------------|------------------|-----------|------------|--------------|"]
     for s in f["sections"]:
@@ -4269,9 +4536,13 @@ def gaps_report(r):
     if g.get("degrees"):
         L += [charts.degree_chart(g["degrees"], g.get("melody_source")), ""]
     if g.get("gaps"):
-        L += ["| | What you have | What's missing |", "|---|---|---|"]
-        L += [f"| **{x['title']}** | {x['have']} | {x['missing']} |" for x in g["gaps"]]
-        L.append("")
+        head = ["| | What you have | What's missing |", "|---|---|---|"]
+        rows = [f"| **{x['title']}** | {x['have']} | {x['missing']} |" for x in g["gaps"]]
+        L += head + rows[:GAPS_SHOWN] + [""]
+        if len(rows) > GAPS_SHOWN + 1:
+            L += [MORE, ""] + head + rows[GAPS_SHOWN:] + [""]
+        else:
+            L[-1:-1] = rows[GAPS_SHOWN:]
     else:
         L.append("Nothing obvious is missing: the chords and melody use the scale widely and the mood moves.")
     return L
@@ -4451,6 +4722,7 @@ def comparison_report(r):
     if chart:
         L += [chart, "", '<span class="muted small">Measure by measure: your dot in the text colour, each song you '
               'admire in its own colour. Each row has its own scale; your value is on the right.</span>', ""]
+    L += [MORE, ""]
     for svg in (energy_overlay_svg(r, curves), tonal_overlay_svg(r, curves)):
         if svg:
             L += [svg, ""]
@@ -4491,7 +4763,7 @@ def producer_report(r):
         roles = {"intro": "Intro", "build": "Build", "drop": "Drop", "breakdown": "Breakdown", "outro": "Outro",
                  "groove": "Groove"}
         L += ["", f"**{tip('Dance arrangement', 'Drop')}** (bars at {r['tempo_bpm']:.0f} BPM)", "",
-              charts.dance_map_svg(m, r.get("duration_sec")), "",
+              charts.dance_map_svg(m, r.get("duration_sec")), "", MORE, "",
               "| Section | Role | Time | Bars | Level | |", "|---|---|---|---|---|---|"]
         for x in m["sections"]:
             extra = []
@@ -4512,6 +4784,8 @@ def producer_report(r):
         if facts:
             L += ["", "_" + "; ".join(facts).capitalize() + "._"]
         L.append("")
+    if MORE not in L:
+        L += ["", MORE, ""]
     w = v.get("widths")
     if w and w.get("low") is not None:
         state = ("wide: part of it cancels on mono club systems and phones" if v["low_end_wide"] else
@@ -4538,10 +4812,10 @@ def build_report(results):
     results = [r for r in results if r.get("role") != "reference"]
     ok = [r for r in results if "error" not in r]
     L = ["# 🎵 Music Inspiration Report", "",
-         f"_{len(results)} track{'' if len(results) == 1 else 's'}, analysed and ready for ideas"
-         + (f", next to {'your reference ' if len(refs) == 1 else 'the songs you admire: '}"
+         f"_Here's what we heard in {'your track' if len(results) == 1 else f'your {len(results)} tracks'}"
+         + (f", next to {'the song you admire, ' if len(refs) == 1 else 'the songs you admire: '}"
             + ", ".join(x["file"] for x in refs) if refs else "") + "._", ""]
-    if ok:
+    if len(ok) > 1:  # with one track, its own header says all this
         heads = ["Length", "Tempo", "Key", "Camelot", "Mode", "Form", "Energy"]
         L += ["| Track | " + " | ".join(tip(h) for h in heads) + " |",
               "|-------|" + "|".join("-" * (len(h) + 2) for h in heads) + "|"]
@@ -4550,6 +4824,7 @@ def build_report(results):
             L.append(f"| {r['file']} | {r['duration']} | {tempo} | {r['key']} | {r['camelot']} | {mode_tip(r['mode'])} | "
                      f"{' '.join(s['label'] for s in r['sections'])} | {charts.sparkline(r['sound']['energy_curve'], width=110, height=22)} |")
         L.append("")
+    if ok:
         L += guide()
     for r in results:
         L += track_report(r)

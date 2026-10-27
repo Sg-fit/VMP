@@ -5,6 +5,10 @@ the page's own tokens (--c1 blue, --c2 orange, --c3 aqua: a palette checked for 
 and dark mode; text in the page's ink), with fallbacks for viewers that don't define them. Your own track is
 always drawn in the ink colour, so it never competes with a series colour. Marks carry <title> tooltips (hover),
 and every chart sits next to the numbers it shows, so nothing is told by colour alone.
+
+Charts along the track's time carry their scale (data-dur, and data-x0/data-x1: where 0:00 and the end sit in the
+viewBox) and each time-bound mark its span (data-t0/data-t1), so the page can link them: hovering a moment lights
+it up in every chart of that track, and with the track loaded in the listen-along player a click plays from there.
 """
 
 import html
@@ -17,11 +21,21 @@ ACCENT = "var(--accent, #ff5a1f)"
 esc = lambda s: html.escape(str(s), quote=True)
 
 
-def _svg(w, h, body, label, cls="chart", max_w=None, decorative=False):
+def _svg(w, h, body, label, cls="chart", max_w=None, decorative=False, extra=""):
     role = 'aria-hidden="true"' if decorative else f'role="img" aria-label="{esc(label)}"'
     return (f'<svg class="{cls}" viewBox="0 0 {w} {h}" width="100%" {role} '
             f'style="max-width:{max_w or w}px;display:block;overflow:visible" '
-            f'font-family="inherit">{body}</svg>')
+            f'font-family="inherit"{extra}>{body}</svg>')
+
+
+def timed(duration, x):
+    """The attributes that put a chart on the track's timeline (see the module notes)."""
+    return f' data-dur="{duration:.2f}" data-x0="{x(0):.1f}" data-x1="{x(duration):.1f}"'
+
+
+def span(t0, t1):
+    """The attributes of a mark that covers t0-t1 seconds of the track."""
+    return f' data-t0="{t0:.2f}" data-t1="{t1:.2f}"'
 
 
 def _text(x, y, s, size=11, anchor="start", weight=None, opacity=None, extra=""):
@@ -239,7 +253,7 @@ def chord_strip(timeline, duration, width=720):
         w = max(1.0, x(e) - x(s) - 2)  # a 2px surface gap between neighbouring chords
         op = "0.25" if fn == "other" else "0.85"
         unclear = (c.get("clarity") or 9) < 1.0
-        parts.append(f'<rect x="{x(s) + 1:.1f}" y="{top}" width="{w:.1f}" height="{band}" rx="2" '
+        parts.append(f'<rect x="{x(s) + 1:.1f}" y="{top}" width="{w:.1f}" height="{band}" rx="2"{span(s, e)} '
                      f'style="fill:{col};fill-opacity:{"0.35" if unclear else op}">'
                      f'<title>{esc(c["time"])} {esc(c["chord"])} ({esc(c.get("roman", ""))})'
                      f'{" — unclear" if unclear else ""}</title></rect>')
@@ -256,12 +270,14 @@ def chord_strip(timeline, duration, width=720):
                      f'style="fill:{col};fill-opacity:{0.25 if fn == "other" else 0.85}"/>')
         parts.append(_text(lx + 14, H - 1, word, size=10, opacity=0.8))
         lx += 22 + 6.2 * len(word)
-    return _svg(width, H, "".join(parts), "Chords over time, coloured by what they do in the key", max_w=width)
+    return _svg(width, H, "".join(parts), "Chords over time, coloured by what they do in the key", max_w=width,
+                extra=timed(duration, x))
 
 
 # ---------------------------------------------------------------- drums
-def drum_grid(grid, hats=None, beats_per_bar=4, width=520):
-    """The main groove as a picture: one row per drum, one column per 16th note, a dot for each hit."""
+def drum_grid(grid, hats=None, beats_per_bar=4, width=520, bpm=None):
+    """The main groove as a picture: one row per drum, one column per 16th note, a dot for each hit. With a tempo,
+    the page can play it (data-grid, data-hats, data-bpm)."""
     if not grid:
         return ""
     n = len(grid)
@@ -293,7 +309,10 @@ def drum_grid(grid, hats=None, beats_per_bar=4, width=520):
                              f'<title>{name}, step {i + 1}</title></circle>')
             else:
                 parts.append(f'<circle cx="{cxp:.1f}" cy="{y:.1f}" r="1.5" fill="currentColor" fill-opacity="0.2"/>')
-    return _svg(width, H, "".join(parts), f"Drum groove: {grid}" + (f" / hats {hats}" if hats else ""), max_w=width)
+    play = (f' data-grid="{esc(grid)}" data-hats="{esc(hats or "")}" data-bpm="{bpm:.0f}" data-beats="{beats_per_bar}"'
+            if bpm else "")
+    return _svg(width, H, "".join(parts), f"Drum groove: {grid}" + (f" / hats {hats}" if hats else ""), max_w=width,
+                extra=play)
 
 
 # ---------------------------------------------------------------- the low part as a piano roll
@@ -324,12 +343,14 @@ def piano_roll(notes, duration, note_name=None, width=720, height=130):
                                anchor="end", opacity=0.6))
     for n in notes:
         w = max(1.5, x(n["end"]) - x(n["start"]) - 1)
-        parts.append(f'<rect x="{x(n["start"]):.1f}" y="{y(n["midi"]) - row / 2 + 0.5:.1f}" width="{w:.1f}" '
+        parts.append(f'<rect x="{x(n["start"]):.1f}" y="{y(n["midi"]) - row / 2 + 0.5:.1f}" width="{w:.1f}"'
+                     f'{span(n["start"], n["end"])} '
                      f'height="{max(2.0, row - 1):.1f}" rx="1.5" style="fill:{C1}">'
                      f'<title>{esc(note_name(n["midi"]))} at {_fmt_time(n["start"])}</title></rect>')
     for tx, lab in _time_ticks(duration, x):
         parts.append(_text(tx, height - 3, lab, size=9, anchor="middle", opacity=0.6))
-    return _svg(width, height, "".join(parts), "The low part as a piano roll: pitch against time", max_w=width)
+    return _svg(width, height, "".join(parts), "The low part as a piano roll: pitch against time", max_w=width,
+                extra=timed(duration, x))
 
 
 # ---------------------------------------------------------------- dance arrangement and pumping
@@ -347,7 +368,8 @@ def dance_map_svg(m, duration, width=720):
     for s in m["sections"]:
         col, op = ROLE_STYLE[s["role"]]
         w = max(1.0, x(s["end"]) - x(s["start"]) - 2)
-        parts.append(f'<rect x="{x(s["start"]) + 1:.1f}" y="{top}" width="{w:.1f}" height="{band}" rx="2" '
+        parts.append(f'<rect x="{x(s["start"]) + 1:.1f}" y="{top}" width="{w:.1f}" height="{band}" rx="2"'
+                     f'{span(s["start"], s["end"])} '
                      f'style="fill:{col};fill-opacity:{op}"><title>{esc(s["role"])} {_fmt_time(s["start"])}-'
                      f'{_fmt_time(s["end"])}, {s["bars"]} bars</title></rect>')
         name = f"{s['role']} · {s['bars']}"
@@ -361,7 +383,131 @@ def dance_map_svg(m, duration, width=720):
     for tx, lab in _time_ticks(duration, x):
         parts.append(_text(tx, H - 4, lab, size=9, anchor="middle", opacity=0.6))
     return _svg(width, H, "".join(parts), "Dance arrangement: " + ", ".join(
-        f"{s['role']} {s['bars']} bars" for s in m["sections"]), max_w=width)
+        f"{s['role']} {s['bars']} bars" for s in m["sections"]), max_w=width, extra=timed(duration, x))
+
+
+# ---------------------------------------------------------------- energy and mood, section by section
+def section_energy(sections, duration, width=720, height=120):
+    """Each section as a column along the track's time: as wide as the section, as tall as its energy (1-10),
+    coloured by its mood (orange brighter, blue darker, grey in between), with its letter and energy on top."""
+    if not sections or not duration:
+        return ""
+    top, bottom, left = 16, 18, 4
+    ph = height - top - bottom
+    x = lambda t: left + (width - 2 * left) * t / duration
+    parts = []
+    for v in (5, 10):
+        y = top + ph * (1 - v / 10)
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width - left}" y2="{y:.1f}" stroke="currentColor" '
+                     f'stroke-opacity="0.08"/>')
+    for s in sections:
+        e, val = s.get("energy", 0), s.get("valence", 50)
+        col, op = (C2, 0.85) if val >= 55 else (C1, 0.85) if val < 45 else ("currentColor", 0.35)
+        w = max(1.0, x(s["end"]) - x(s["start"]) - 2)
+        h = max(2.0, ph * e / 10)
+        tip = (f'{s["label"]} {_fmt_time(s["start"])}-{_fmt_time(s["end"])}: energy {e}/10, {s.get("mood", "")}, '
+               f'positivity {val}/100')
+        parts.append(f'<rect x="{x(s["start"]) + 1:.1f}" y="{top + ph - h:.1f}" width="{w:.1f}" height="{h:.1f}" '
+                     f'rx="2"{span(s["start"], s["end"])} style="fill:{col};fill-opacity:{op}"><title>{esc(tip)}</title></rect>')
+        if w >= 14:
+            parts.append(_text(x(s["start"]) + 1 + w / 2, top + ph - h - 4, f'{s["label"]} {e}', size=10,
+                               anchor="middle", weight=600, opacity=0.8, extra='pointer-events="none"'))
+    for tx, lab in _time_ticks(duration, x):
+        parts.append(_text(tx, height - 3, lab, size=9, anchor="middle", opacity=0.6))
+    lx = width - 4
+    for col, word in ((C1, "darker"), ("currentColor", "in between"), (C2, "brighter")):
+        lx -= 10 + 6.2 * len(word) + 14
+        parts.append(f'<rect x="{lx:.1f}" y="2" width="9" height="9" rx="2" style="fill:{col};fill-opacity:'
+                     f'{0.35 if col == "currentColor" else 0.85}"/>')
+        parts.append(_text(lx + 13, 10, word, size=10, opacity=0.8))
+    return _svg(width, height, "".join(parts), "Energy and mood by section: " + ", ".join(
+        f'{s["label"]} {s.get("energy")}/10 {s.get("mood", "")}' for s in sections), max_w=width,
+        extra=timed(duration, x))
+
+
+# ---------------------------------------------------------------- your style: every track on every measure
+def style_strips(ranges, order=None, width=640):
+    """One row per measurement, each with its own scale: a dot per track, the middle half of your tracks shaded,
+    the median marked, and a steady measurement (a habit) labelled. Dots carry data-trk, so the page can light up
+    one track across every row."""
+    if not ranges:
+        return ""
+    label_w, right, row_h, top = 150, 64, 30, 6
+    names = list(order or [])
+    for x in ranges:
+        for n, _ in x["values"]:
+            if n not in names:
+                names.append(n)
+    H = top + row_h * len(ranges) + 4
+    span = width - label_w - right
+    parts = []
+    for i, x in enumerate(ranges):
+        y = top + i * row_h + row_h / 2
+        lo, hi = x.get("axis") or (x["lo"], x["hi"])
+        pad = (hi - lo) * 0.06 or max(abs(lo) * 0.05, 1)
+        a, b = lo - pad, hi + pad
+        px = lambda v: label_w + span * (v - a) / (b - a)
+        fmt = (lambda v: f"{v:.1f}") if x["key"] in ("length", "busy", "pace") else (lambda v: f"{v:.0f}")
+        parts.append(_text(label_w - 8, y + 4, x["name"], size=11, anchor="end", weight=600 if x["steady"] else None,
+                           opacity=0.9))
+        parts.append(f'<line x1="{label_w}" y1="{y:.1f}" x2="{label_w + span}" y2="{y:.1f}" stroke="currentColor" '
+                     f'stroke-opacity="0.15"/>')
+        parts.append(f'<rect x="{px(x["q1"]):.1f}" y="{y - 7:.1f}" width="{max(2.0, px(x["q3"]) - px(x["q1"])):.1f}" '
+                     f'height="14" rx="3" style="fill:{C1};fill-opacity:0.18"><title>The middle half of your tracks: '
+                     f'{fmt(x["q1"])}-{fmt(x["q3"])}{x["unit"]}</title></rect>')
+        parts.append(f'<line x1="{px(x["median"]):.1f}" y1="{y - 9:.1f}" x2="{px(x["median"]):.1f}" y2="{y + 9:.1f}" '
+                     f'style="stroke:{C1}" stroke-width="2"><title>Your usual: {fmt(x["median"])}{x["unit"]}</title></line>')
+        for n, v in x["values"]:
+            parts.append(f'<circle cx="{px(v):.1f}" cy="{y:.1f}" r="4.5" fill="currentColor" fill-opacity="0.75" '
+                         f'stroke="var(--surface, #fff)" stroke-width="1.5" data-trk="{names.index(n)}">'
+                         f'<title>{esc(n)}: {fmt(v)}{esc(x["unit"])}</title></circle>')
+        parts.append(_text(label_w + span + 6, y + 4, f'{fmt(x["median"])}{x["unit"]}', size=10, opacity=0.75))
+        if x["steady"]:
+            parts.append(_text(2, y + 4, "HABIT", size=8, weight=700, extra=f'style="fill:{ACCENT}" letter-spacing="1"'))
+    return _svg(width, H, "".join(parts), "Every track on every measure: " + "; ".join(
+        f'{x["name"]} usually {x["median"]:.0f}{x["unit"]}' for x in ranges), max_w=width)
+
+
+# ---------------------------------------------------------------- who plays when
+LANE_COLOUR = {"vocals": C2, "drums": C3, "bass": C1}
+
+
+def lineup_map(rows, duration, width=720):
+    """One lane per instrument, one block per section: filled (stronger = surer) where it plays, a dashed outline
+    where it might (unconfirmed drums), a faint slot where it doesn't. Every block names its section, time and
+    evidence on hover."""
+    if not rows or not duration:
+        return ""
+    label_w, lane, gap, top = (150 if width >= 640 else 80), 20, 6, 4
+    H = top + len(rows) * (lane + gap) + 14
+    x = lambda t: label_w + (width - label_w - 4) * t / duration
+    parts = []
+    for i, rw in enumerate(rows):
+        y = top + i * (lane + gap)
+        col = LANE_COLOUR.get(rw["key"], "currentColor")
+        how = {"model": "the trained model", "measured": "measured", "separated": "separated stem",
+               "guessed": "measured; the instrument is the model's guess"}.get(rw["how"], "")
+        parts.append(_text(label_w - 8, y + lane / 2 + 4, rw["name"][:24], size=11, anchor="end", weight=600))
+        for c in rw["cells"]:
+            w = max(1.0, x(c["end"]) - x(c["start"]) - 2)
+            tip = f'{c["label"]} {_fmt_time(c["start"])}-{_fmt_time(c["end"])}: {rw["name"]} — {c["note"]} ({how})'
+            if c["on"]:
+                look = f'style="fill:{col};fill-opacity:{0.35 + 0.55 * c.get("p", 1):.2f}"'
+            elif c.get("unsure"):
+                look = f'fill="none" stroke="{col}" stroke-width="1.5" stroke-dasharray="4 3"'
+            else:
+                look = 'fill="currentColor" fill-opacity="0.05"'
+            parts.append(f'<rect x="{x(c["start"]) + 1:.1f}" y="{y}" width="{w:.1f}" height="{lane}" rx="3"'
+                         f'{span(c["start"], c["end"])} {look}><title>{esc(tip)}</title></rect>')
+            if i == 0 and w >= 14:
+                parts.append(_text(x(c["start"]) + 1 + w / 2, y - 0.5 + lane / 2 + 4, c["label"], size=10,
+                                   anchor="middle", weight=700, opacity=0.55, extra='pointer-events="none"'))
+    for tx, lab in _time_ticks(duration, x):
+        parts.append(_text(tx, H - 2, lab, size=9, anchor="middle", opacity=0.6))
+    plays = "; ".join(f"{rw['name']}: " + (" ".join(c["label"] for c in rw["cells"] if c["on"]) or "unsure")
+                      for rw in rows)
+    return _svg(width, H, "".join(parts), f"Who plays when, section by section. {plays}", max_w=width,
+                extra=timed(duration, x))
 
 
 def pump_shape(shape, width=200, height=70):
@@ -499,8 +645,54 @@ def example_overlay(width=520, height=150):
              _text(pad + 134, 13, "a song you admire", size=11, opacity=0.85),
              _text(xy(theirs[4])[0], xy(theirs[4])[1] - 6, "their drop", size=10, anchor="middle", opacity=0.75),
              _text(width - pad, height - 3, "example · energy over time", size=9, anchor="end", opacity=0.55)]
+    for i, (a, b) in enumerate(zip(yours, theirs)):  # a dot per moment to hover: both levels, and the gap
+        x, _ = xy(a)
+        gap = round(100 * (b[1] - a[1]))
+        say = ("they're far louder here" if gap > 25 else "they're a bit louder" if gap > 8 else
+               "you're louder here" if gap < -8 else "about level")
+        parts.append(f'<circle cx="{x:.1f}" cy="{xy(a)[1]:.1f}" r="4" fill="currentColor" fill-opacity="0.001">'
+                     f'<title>Moment {i + 1} of 15: you {round(100 * a[1])}, them {round(100 * b[1])} — {say}</title></circle>')
     return _svg(width, height, "".join(parts), "Example: your track's energy against a song you admire",
                 max_w=width)
+
+
+def example_lineup(width=520):
+    """An illustration: who plays when in a made-up four-minute song."""
+    secs = [("Intro", 0, 18), ("Verse", 18, 62), ("Chorus", 62, 92), ("Verse", 92, 136), ("Chorus", 136, 170),
+            ("Bridge", 170, 200), ("Chorus", 200, 240)]
+    plays = {"Vocals": [0, 1, 1, 1, 1, 0, 1], "Drums": [0, 0, 1, 1, 1, 0, 1], "Bass": [0, 1, 1, 1, 1, 1, 1],
+             "Guitar": [1, 1, 1, 1, 1, 1, 1]}
+    notes = {"Vocals": "singing heard", "Drums": "drum kit", "Bass": "bass plays", "Guitar": "plays"}
+    rows = [{"key": k.lower(), "name": k, "how": "measured",
+             "cells": [{"label": lab, "start": a, "end": b, "on": bool(on[i]), "p": 1.0 if on[i] else 0.0,
+                        "note": notes[k] if on[i] else "sits out"} for i, (lab, a, b) in enumerate(secs)]}
+            for k, on in plays.items()]
+    return lineup_map(rows, 240, width=width)
+
+
+def example_style(width=560):
+    """An illustration: six made-up tracks on four measures."""
+    tracks = ["Night drive", "Old town", "Paper boats", "Low tide", "Glass", "Last train"]
+
+    def row(key, name, unit, vals, steady):
+        xs = sorted(vals)
+        n = len(xs)
+        return {"key": key, "name": name, "unit": unit, "values": list(zip(tracks, vals)), "q1": xs[n // 4],
+                "median": (xs[n // 2 - 1] + xs[n // 2]) / 2, "q3": xs[3 * n // 4], "lo": xs[0], "hi": xs[-1],
+                "steady": steady}
+    return style_strips([row("tempo", "Tempo", " BPM", [88, 92, 90, 94, 91, 126], True),
+                         row("energy", "Energy", "/10", [3, 6, 4, 7, 5, 8], False),
+                         row("mood", "Positivity", "/100", [30, 34, 28, 36, 31, 55], True),
+                         row("lufs", "Loudness", " LUFS", [-14, -11, -16, -9, -12, -10], False)],
+                        order=tracks, width=width)
+
+
+def example_chords(width=520):
+    """An illustration: a made-up chord loop along time, coloured by what each chord does."""
+    loop = [("C", "I"), ("G", "V"), ("Am", "vi"), ("F", "IV")]
+    timeline = [{"start": i * 2.0, "time": _fmt_time(i * 2), "chord": c, "roman": rn}
+                for i, (c, rn) in enumerate(loop * 4)]
+    return chord_strip(timeline, 32.0, width=width)
 
 
 # ---------------------------------------------------------------- over time (the history page)

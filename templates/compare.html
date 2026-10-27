@@ -11,11 +11,11 @@
   .cmp-lib label { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 0 0; font-size: .9rem; }
   .cmp-pick input.text { width: min(100%, 520px); font: inherit; padding: 8px 10px; border: 1px solid var(--line);
                          border-radius: 0; background: var(--bg); color: var(--ink); margin: 4px 0; }
-  .who { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 28px 0 8px; }
+  .who { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 16px 0 6px; }
   .who span { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
   .who i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
   .cmp h2 { font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; display: flex;
-            align-items: center; gap: 8px; margin: 36px 0 10px; }
+            align-items: center; gap: 8px; margin: 24px 0 8px; }
   .cmp h2::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
   .cmp table { width: 100%; font-size: .92rem; }
   .cmp .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px 36px; }
@@ -30,8 +30,8 @@
 {% block content %}
 <p class="eyebrow">Your library</p>
 <h1>Compare tracks</h1>
-<p class="lede">Your own tracks side by side (two takes, the versions of one song, the tracks of an EP), or yours next
-  to a result another musician shared with you. We only name differences you'd hear.</p>
+<p class="lede">Two takes, every version of a song, an EP's tracks, or yours next to a friend's shared result.
+  We only point out differences you'd actually hear.</p>
 
 {% if skipped %}<div class="notice">Couldn't add {{ skipped|length }} of them: they're not yours, or no longer shared.
   Nothing about them is shown.</div>{% endif %}

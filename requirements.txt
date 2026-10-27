@@ -3,6 +3,7 @@ librosa>=0.10,<2
 numpy
 av>=11            # decodes m4a/aac (bundles ffmpeg)
 verovio>=4        # engraves the bass sheet music (MusicXML -> SVG)
+onnxruntime>=1.17  # runs the style and instrument models (tagger.py)
 
 # Web app
 flask>=3
