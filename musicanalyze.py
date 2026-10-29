@@ -47,7 +47,11 @@ import inspiration
 import instruments
 import notation
 
-AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"}
+# What phones and browsers make, besides the usual files: iPhone Voice Memos (.m4a, and .qta for iOS 18's layered
+# recordings), recordings made in the browser (.mp4 on iPhone/Safari, .webm/.ogg elsewhere), and Apple's .caf/.aiff.
+# Anything libsndfile can't read goes through PyAV (ffmpeg) in load_audio.
+AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".mp4", ".mov", ".qta", ".caf", ".aif", ".aiff",
+              ".webm", ".opus", ".3gp"}
 SR = 22050
 HOP = 512
 
@@ -3907,7 +3911,23 @@ def bar(pct, width=20):
     return "█" * int(round(pct / 100 * width))
 
 
-def track_report(r):
+def where_to_start(r):
+    """For a track analysed on its own: the three ideas to try first (the AI's gap ideas when they're in, else our
+    own) and the biggest gap, right under the summary."""
+    ai = r.get("ai") or {}
+    ideas = [(i.get("title") or i.get("missing") or "Idea", i["idea"]) for i in ai.get("gap_ideas") or [] if i.get("idea")]
+    ideas += [(i["area"], i["idea"]) for i in r.get("ideas") or []]
+    gap = ((r.get("gaps") or {}).get("gaps") or [None])[0]
+    if not ideas and not gap:
+        return []
+    L = ["**Where to start**", ""] + [f"- **{a}:** {t}" for a, t in ideas[:3]]
+    if gap:
+        L += ["", f"_What's missing most: **{gap['title']}** — {gap['missing']}_"]
+    return L + [""]
+
+
+def track_report(r, focus=None):
+    """focus "ideas": the track was analysed on its own, so its ideas come right after the summary."""
     L = [f"## 🎵 {r['file']}", ""]
     if "error" in r:
         return L + [f"⚠️ We couldn't analyse this file ({r['error']}). If it plays on your computer, try "
@@ -3928,6 +3948,8 @@ def track_report(r):
           f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
     L += [f"> **In short:** {in_short(r)}", ""]
+    if focus == "ideas":
+        L += where_to_start(r)
     L += glance(r)
     L += comparison_report(r)  # what the musician came for, when they brought songs they admire
 
@@ -4705,13 +4727,12 @@ def comparison_report(r):
          f"_Your track beside {names}, measured the same way. We only point out differences big enough to hear; a song "
          "you admire is a guide, not a target._", ""]
     if c.get("close") or c.get("different"):
-        stand = []
         if c["close"]:
-            stand.append("**Already close:** " + ", ".join(c["close"]))
+            L += [f"- **What's there in both:** " + ", ".join(c["close"])]
         if c["different"]:
-            stand.append("**Where you differ:** " + ", ".join(
-                d["area"] + (f" ({d['references']} of {n})" if n > 1 else "") for d in c["different"]))
-        L += [" · ".join(stand), ""]
+            L += [f"- **What's not there in yours (or not the same):** " + ", ".join(
+                d["area"] + (f" ({d['references']} of {n})" if n > 1 else "") for d in c["different"])]
+        L.append("")
     if c.get("shared"):
         L += [f"**What {'both' if n == 2 else f'all {n}'} have in common that yours doesn't**, the strongest leads:", ""]
         L += [f"- **{i['area']}:** {i['idea']}" for i in c["shared"]] + [""]
@@ -4827,7 +4848,7 @@ def build_report(results):
     if ok:
         L += guide()
     for r in results:
-        L += track_report(r)
+        L += track_report(r, "ideas" if len(results) == 1 and not refs else None)
 
     if len(ok) > 1:
         L += ["## 🔗 Tracks that blend well", "",
@@ -4939,7 +4960,9 @@ def run_analysis(files, out, llm=None, progress=None, melody_text=None, on_analy
             f = Path(f)
             progress(f"[{i}/{len(files)}] Listening to {f.name}…")
             try:
-                r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir, context=context)
+                # one context for every file, or each file its own (recordings carry their own instruments and genre)
+                ctx = (context.get("per_file") or {}).get(f.name) if isinstance(context, dict) and "per_file" in context                     else context
+                r = analyze(f, inspiration.melody_for(f.name, melody_text), cache_dir=cache_dir, context=ctx)
                 r["analyzer_version"] = CODE_VERSION
                 if heard.get(str(f)):
                     r["heard"] = heard[str(f)]

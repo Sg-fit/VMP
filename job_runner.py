@@ -84,12 +84,32 @@ def run_job(job_dir):
                         on_analysis_done=analysis_ready if llm else None, cache_dir=cache,
                         reference=refs, memory=st.get("memory"), hear=not st.get("demo"))
         write_status(d, state="done", ai_pending=False, message="Done")
+        if not st.get("demo"):
+            bump_stats(d.parent, tracks=len(files), jobs=1, multi=int(len(files) > 1 or bool(refs)))
     except Exception as e:
         if read_status(d).get("state") == "done":  # analysis already shown: keep it, just stop waiting for AI
             write_status(d, ai_pending=False, message="We couldn't get the AI ideas this time.")
         else:
             write_status(d, state="error", ai_pending=False,
                          message=f"Something went wrong during the analysis: {str(e)[:300]}")
+
+
+def bump_stats(data_dir, **add):
+    """Site-wide totals for the About page (how many tracks have been analysed, how many jobs, how many read several
+    tracks together): numbers only - nothing about who, or what music. One worker runs the jobs, so no locking."""
+    import json
+    f = Path(data_dir) / "stats.json"
+    try:
+        stats = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        stats = {}
+    for k, v in add.items():
+        key = {"tracks": "tracks_analysed", "jobs": "analyses", "multi": "multi_track"}.get(k, k)
+        stats[key] = stats.get(key, 0) + v
+    try:
+        f.write_text(json.dumps(stats), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def warm_up():

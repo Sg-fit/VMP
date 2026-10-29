@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Groups · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .gwrap { max-width: 760px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 12px 0; }
+  .card h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input.text { font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius);
+               background: var(--bg); color: var(--ink); min-height: 44px; flex: 1 1 220px; }
+  .btn { min-height: 44px; }
+  ul.glist { list-style: none; padding: 0; margin: 0; }
+  ul.glist li { padding: 10px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; }
+  .muted { color: var(--muted); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="gwrap">
+  <p class="eyebrow">For a teacher, a class or a community programme</p>
+  <h1>Groups</h1>
+  <p class="lede">A group sees only the results each member chooses to share with it, one at a time, and what's there
+    and not there across them. Nothing else of anyone's.</p>
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+  {% if groups %}
+  <ul class="glist">
+    {% for g in groups %}
+    <li><a href="{{ url_for('group_page', group_id=g.id) }}"><b>{{ g.name }}</b></a>
+      <span class="muted small">{{ g.members }} member{{ 's' if g.members != 1 }} · {{ g.shared }} shared{{ ' · you run it' if g.owner_id == user.id }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <div class="card">
+    <h2>Join a group</h2>
+    <form method="post" action="{{ url_for('group_join') }}" class="row">
+      <label for="code" class="muted small" style="flex-basis:100%">The code your teacher or organiser gave you</label>
+      <input class="text" id="code" name="code" maxlength="12" autocomplete="off" placeholder="e.g. 7F3A9C21" required>
+      <button class="btn primary" type="submit">Join</button>
+    </form>
+  </div>
+  <div class="card">
+    <h2>Start a group</h2>
+    <form method="post" action="{{ url_for('group_new') }}" class="row">
+      <label for="name" class="muted small" style="flex-basis:100%">A name members will recognise</label>
+      <input class="text" id="name" name="name" maxlength="60" placeholder="e.g. Tuesday songwriting class" required>
+      <button class="btn secondary" type="submit">Create</button>
+    </form>
+    <p class="muted small" style="margin:8px 0 0">You'll get a code to hand out. Members share results from their own
+      analyses (“Share with a group”, under Organise).</p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_style.html" import style_css, style_report %}
+{% block title %}{{ g.name }} · Groups{% endblock %}
+{% block head %}
+{{ style_css() }}
+<style>
+  .ghead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 24px; align-items: end;
+           padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .ghead h1 { margin: 0; }
+  .code { font-family: var(--mono); font-size: 1.1rem; letter-spacing: .12em; background: var(--faint); padding: 4px 10px;
+          border-radius: var(--radius); }
+  .cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px 28px; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  ul.plain { list-style: none; padding: 0; margin: 0; }
+  ul.plain li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
+                gap: 10px; align-items: center; }
+  .linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer;
+             text-decoration: underline; }
+  h2.sh { font-size: 1.1rem; font-weight: 600; margin: 18px 0 8px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ghead">
+  <div>
+    <p class="eyebrow"><a href="{{ url_for('groups_page') }}">← Groups</a></p>
+    <h1>{{ g.name }}</h1>
+  </div>
+  <div class="small">Code for new members: <span class="code">{{ g.code }}</span></div>
+</div>
+
+<div class="cols">
+  <div>
+    <h2 class="sh">Shared with the group</h2>
+    {% if g.shares %}
+    <ul class="plain">{% for sh in g.shares %}
+      <li><a href="{{ url_for('job', job_id=sh.job_id) }}">{{ sh.title }}</a>
+        <span class="muted small">{{ sh.username }} · {{ sh.shared|datetime(date_only=True) }}</span></li>{% endfor %}</ul>
+    {% else %}<p class="muted">Nothing shared yet. Members share a result from its page (Organise → Share with a group).</p>{% endif %}
+  </div>
+  <div>
+    <h2 class="sh">Members</h2>
+    <ul class="plain">{% for m in g.members %}
+      <li><span>{{ m.username }}{{ ' (runs the group)' if m.id == g.owner_id }}</span>
+        {% if me == g.owner_id and m.id != g.owner_id %}
+        <form method="post" action="{{ url_for('group_remove', group_id=g.id, member_id=m.id) }}" style="margin:0"
+              onsubmit="return confirm('Remove {{ m.username }} and what they shared?')"><button class="linkish small" type="submit">Remove</button></form>
+        {% endif %}</li>{% endfor %}</ul>
+    <form method="post" action="{{ url_for('group_leave', group_id=g.id) }}" style="margin-top:12px"
+          onsubmit="return confirm('{{ 'Close this group for everyone?' if me == g.owner_id else 'Leave this group? What you shared with it stops being shared.' }}')">
+      <button class="linkish small" type="submit">{{ 'Close the group' if me == g.owner_id else 'Leave the group' }}</button></form>
+  </div>
+</div>
+
+{% if view %}
+<h2 class="sh" style="margin-top:28px">Across the shared tracks</h2>
+<p class="muted small" style="margin:0 0 10px">What's there in the group's music, and what none of it has yet: a starting
+  point for a lesson or a workshop.</p>
+{{ style_report(view, pics, min_tracks, hurl) }}
+{% endif %}
+{% endblock %}

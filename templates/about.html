@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}About · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .ab { max-width: 780px; }
+  .ab h2 { font-size: 1.2rem; font-weight: 600; margin: 28px 0 8px; }
+  .ab ul { padding-left: 20px; } .ab li { margin: 5px 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .stat b { display: block; font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: .85rem; color: var(--muted); }
+  table.acc td:last-child, table.acc th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .note { font-size: .85rem; color: var(--muted); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ab">
+  <p class="eyebrow">About</p>
+  <h1>A second pair of ears for musicians who don't have one</h1>
+  <p class="lede">Most musicians learn on their own. Lessons, a producer and studio time cost money, so the honest
+    feedback that helps people improve mostly goes to those who can already pay for it. This app gives that feedback
+    for free, on the recordings people already make: a phone memo is enough.</p>
+
+  <h2>Who it's for</h2>
+  <ul>
+    <li><b>Self-taught musicians</b> with no teacher to ask what's working, what's missing, and how they're progressing.</li>
+    <li><b>Teachers and community programmes</b> with more students than hours: a <a href="{{ url_for('groups_page') }}">group</a>
+      sees the work members choose to share, and what's there and not there across it.</li>
+    <li><b>Anyone with unreleased music</b> who wants feedback without handing their work to a platform.</li>
+  </ul>
+
+  <h2>What it does</h2>
+  <ul>
+    <li>Reads a recording back in plain words and pictures: key, chords, form, groove, who plays when, energy and mood.</li>
+    <li>One track: ideas to try first, built on what it leaves out. Several, or next to a song you admire: what's there in
+      all of them, and what none of them has yet.</li>
+    <li>Follows you over time: <a href="{{ url_for('style_page') }}">your style</a> across sessions, and how it changes.</li>
+    <li>Works on a phone: record in the browser or send a Voice Memo; keep recordings, tag them, analyse when you choose.</li>
+  </ul>
+
+  <h2>Your music stays yours</h2>
+  <ul>
+    <li>Audio sent for analysis is deleted as soon as it's analysed. Recordings you choose to keep are only playable by you,
+      and deleted with one click.</li>
+    <li>Nothing you upload trains any model. The optional AI sees numbers only - never audio, never file names.</li>
+    <li>“Find music like this” deliberately points to artists with between 20 and 10,000 listeners, not the names
+      everyone already hears.</li>
+  </ul>
+  <p><a href="{{ url_for('privacy') }}">The full privacy page →</a></p>
+
+  <h2>How sure it is</h2>
+  <p>Automatic analysis makes mistakes, and we'd rather show you how often than promise it doesn't. Every update runs a
+    self-test on music with known answers (generated tracks, and real recordings whose tempo, key and line-up their
+    musicians confirmed). These are this server's last results:</p>
+  {% if tests %}
+  <table class="acc">
+    <tr><th>What was checked</th><th>Passed</th></tr>
+    {% set names = {'analysis': 'Analysis on music with known answers', 'precision': 'Precision (tempo, key, chords)',
+                    'facts': 'Real recordings with confirmed answers', 'lineup': 'Instruments: drums and bass only on evidence',
+                    'style': 'Your style across tracks', 'web': 'The website end to end', 'unit': 'Building blocks',
+                    'ai': 'AI ideas and their fact-check', 'charts': 'Pictures', 'live': 'A real upload on this server',
+                    'compare': 'Next to a song you admire', 'gaps': "What's missing", 'instruments': 'Instruments',
+                    'producer': "Producer's view"} %}
+    {% for g, pt in tests.groups.items() %}{% if g in names %}
+    <tr><td>{{ names[g] }}</td><td>{{ pt[0] }} of {{ pt[1] }}</td></tr>{% endif %}{% endfor %}
+  </table>
+  <p class="note">Run {{ tests.when|datetime }} · {{ tests.passed }} of {{ tests.total }} checks passed in all.</p>
+  {% else %}
+  <p class="note">No self-test has run on this server yet.</p>
+  {% endif %}
+  <p>On real music, expect the key to be right about 70–80% of the time (the usual slip is the relative key: B minor
+    for D major), and the tempo sometimes at half or double what you feel. Chords are simplified, and section letters
+    are a rough map. We say so in every report, and you can correct a result: your corrections count from then on.</p>
+
+  <h2>Who uses it</h2>
+  <div class="stats">
+    {% for key, label in [('tracks', 'tracks analysed'), ('accounts', 'musicians with an account'),
+                          ('returning', 'came back with a second track'), ('recordings', 'recordings kept'),
+                          ('groups', 'groups')] %}
+    {% set v = analyses if key == 'tracks' else counts.get(key) %}
+    <div class="stat"><b>{{ v if v is not none and (key != 'tracks' or v >= small) else 'fewer than ' ~ small }}</b><span>{{ label }}</span></div>
+    {% endfor %}
+    <div class="stat"><b>{{ (helpful_pct ~ '%') if helpful_pct is not none else '—' }}</b><span>of rated ideas marked helpful</span></div>
+  </div>
+  <p class="note">Totals only: nothing about who, or what music. Counts under {{ small }} aren't shown, so no one can be
+    picked out.</p>
+
+  <h2>What it isn't</h2>
+  <p>It isn't a teacher, and it doesn't replace one. It fills the gap where there is no teacher: a quick, honest first
+    listen and a few concrete things to try. The style and instrument models are by the Music Technology Group,
+    Universitat Pompeu Fabra (CC BY-NC-SA 4.0, non-commercial use), which suits a free, educational tool.</p>
+</div>
+{% endblock %}

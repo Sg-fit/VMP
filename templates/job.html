@@ -38,6 +38,8 @@
                  font-size: .82rem; color: var(--muted); }
   .privacy-box b { color: var(--ink); }
   .privacy-box form { margin: 0; }
+  .linkish { font: inherit; font-size: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer;
+             text-decoration: underline; text-underline-offset: 2px; }
   .privacy-box .linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
                           text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
   .organise { margin-top: 10px; font-size: .9rem; }
@@ -166,6 +168,18 @@
   </form>
   <datalist id="project-names">{% for name, n, last in projects %}<option value="{{ name }}">{% endfor %}</datalist>
 </details>
+{% if groups %}
+<div class="small" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center">
+  <span class="muted">Share with a group:</span>
+  {% for g in groups %}
+  <form method="post" action="{{ url_for('job_group_share', job_id=job_id) }}" style="margin:0">
+    <input type="hidden" name="group" value="{{ g.id }}">
+    <input type="hidden" name="on" value="{{ '0' if g.id in shared_groups else '1' }}">
+    <button type="submit" class="linkish">{{ g.name }}: {{ 'shared · stop' if g.id in shared_groups else 'share' }}</button>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
 {% endif %}
 {% endmacro %}
 {% block content %}
@@ -382,8 +396,8 @@
   {% endif %}
   {% if style_view %}
   {{ style_css() }}
-  <h2 class="style-h">Your style in these {{ style_view.tracks }} tracks</h2>
-  <p class="muted small" style="margin:0 0 10px">What they have in common, and where they differ.
+  <h2 class="style-h">{{ 'Your style in' if s.mode == 'style' else 'Across' }} these {{ style_view.tracks }} tracks</h2>
+  <p class="muted small" style="margin:0 0 10px">What's there in all of them, what none of them has, and how they differ.
     <a href="{{ url_for('style_page') }}">Your style across every session →</a> · each track on its own is further down.</p>
   {{ style_report(style_view, style_pics, min_tracks) }}
   <h2 class="style-h">Each track on its own</h2>
@@ -473,7 +487,9 @@
         panels.forEach(p => { if (favs.includes(p.dataset.sec)) p.querySelectorAll('details.more').forEach(d => { d.open = true; }); });
         const fromLink = panels.find(p => '#' + p.id === location.hash);
         const fav = favs.map(k => panels.find(p => p.dataset.sec === k)).find(Boolean);
-        show((fromLink || fav || panels[0]).id);
+        // what the upload is for comes first (one track: its ideas; next to a song you admire: the comparison)
+        const focused = art.dataset.focus ? panels[0] : null;
+        show((fromLink || focused || fav || panels[0]).id);
         if (fromLink) nav.scrollIntoView();
       });
     })();
@@ -531,7 +547,7 @@
     <div class="working" role="img" aria-label="Working"><i></i><i></i><i></i><i></i><i></i></div>
     <p class="eyebrow">Working</p>
     <h1>{% if s.mode == 'tags' %}Tagging your songs…{% else %}Analysing your music…{% endif %}</h1>
-    <p id="msg" class="lede" style="margin-bottom:12px">{{ s.message }}</p>
+    <p id="msg" class="lede" style="margin-bottom:12px" role="status" aria-live="polite">{{ s.message }}</p>
     {% if s.mode == 'tags' %}
     <p class="muted small" style="max-width:40em">Songs you uploaded take 10–40 seconds each. Songs we look up by name
       take about 2 seconds each, because the music database asks us to send one request a second. You don't need to

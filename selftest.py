@@ -945,6 +945,7 @@ def web_checks(tmp, files):
         account_checks(base, job4, browser)
         memory_web_checks(base, files)
         style_web_checks(base, files)
+        inventory_web_checks(base, files)
         home = browser.get(base + "/", timeout=10).text
         check("web", "the upload form offers single instruments, grouped (cello, synth bass, drum machine…)",
               all(x in home for x in ('value="cello"', 'value="synth_bass"', 'value="drum_machine"', "Wind &amp; brass")))
@@ -1181,7 +1182,7 @@ def style_web_checks(base, files):
     mine = cara.get(base + "/style", timeout=20)
     theirs = words(stranger.get(base + "/style", timeout=20).text)
     check("web", "a style upload reads its tracks together, then shows each on its own",
-          "Your style in these 3 tracks" in page and 'id="st-habits"' in page and "Each track on its own" in page
+          "Your style in these 3 tracks" in page and 'id="st-there"' in page and "Each track on its own" in page
           and "Harmony" in page)
     check("web", "the style page: this browser's own results only, private to the web",
           "3 tracks from 1 upload session" in words(mine.text) and "nothing to read yet" in theirs
@@ -1194,6 +1195,60 @@ def style_web_checks(base, files):
     check("web", "signed in: every saved session counts (a style upload and a single analysis), and the tab says so",
           "3 tracks from 2 upload sessions" in signed and 'value="style" checked' in home
           and "You've saved 3 tracks" in words(home), signed[signed.find("Your style ·"):][:160])
+
+
+def inventory_web_checks(base, files):
+    """Recordings kept (not analysed), named, tagged and trimmed; analysed only when picked, as trimmed; groups see
+    only what a member shares; the About page shows totals."""
+    import requests
+    import soundfile as sf_
+    rae, sam, tom = requests.Session(), requests.Session(), requests.Session()
+    for sess, name in ((rae, "rae"), (sam, "sam"), (tom, "tom")):
+        sess.post(base + "/signup", data={"username": name, "password": "selftest-pw7", "password2": "selftest-pw7"},
+                  timeout=10)
+    up = rae.post(base + "/recordings/upload", files={"audio": ("recording.webm", open(files["pop4"], "rb"), "audio/webm")},
+                  data={"json": "1", "source": "recorded", "title": "Night idea"}, headers={"Accept": "application/json"},
+                  timeout=30).json()
+    rid = (up.get("ids") or [0])[0]
+    edit = rae.get(f"{base}/recordings/{rid}?new=1", timeout=10).text
+    rae.post(f"{base}/recordings/{rid}", data={"title": "Night idea v2", "tags": "riff, Chorus", "project": "EP",
+                                               "status": "idea", "instruments": ["acoustic_guitar"],
+                                               "trim_start": "2", "trim_end": "12"}, timeout=10)
+    lst = rae.get(base + "/recordings", timeout=10).text
+    check("web", "a recording is kept as it is: named, tagged and trimmed, and not analysed until it's picked",
+          rid and "Saved, not analysed" in edit and "Night idea v2" in lst and "Not analysed" in lst and "chorus" in lst,
+          str(up)[:200])
+    theirs = sam.get(f"{base}/recordings/{rid}/audio", timeout=10).status_code
+    mine = rae.get(f"{base}/recordings/{rid}/audio", headers={"Range": "bytes=0-99"}, timeout=10)
+    check("web", "only you can play your recordings (and they play in parts, as iPhone Safari needs)",
+          theirs == 404 and mine.status_code == 206 and len(mine.content) == 100, f"{theirs}/{mine.status_code}")
+    r_ = rae.post(base + "/recordings/bulk", data={"rec": [str(rid)], "action": "analyse"}, allow_redirects=False,
+                  timeout=60)
+    job = r_.headers.get("Location", "").rsplit("/", 1)[-1]
+    t0 = time.time()
+    while time.time() - t0 < 300 and rae.get(f"{base}/jobs/{job}/status", timeout=10).json().get("state") not in ("done", "error"):
+        time.sleep(1)
+    res = rae.get(f"{base}/jobs/{job}/files/music_results.json", timeout=10).json()
+    page = rae.get(f"{base}/jobs/{job}", timeout=20).text
+    check("web", "picked recordings are analysed as trimmed (10 s here), with their own instruments, focused on ideas",
+          res and abs(res[0]["duration_sec"] - 10) < 0.5 and (res[0].get("context") or {}).get("chosen") == ["acoustic_guitar"]
+          and "Where to start" in page and 'data-focus="ideas"' in page,
+          f"{res and res[0].get('duration_sec')} s, {res and res[0].get('context')}")
+    g = rae.post(base + "/groups/new", data={"name": "Tuesday class"}, allow_redirects=False, timeout=10)
+    gid = g.headers.get("Location", "").rsplit("/", 1)[-1]
+    code = re.search(r'class="code">([0-9A-F]+)<', rae.get(f"{base}/groups/{gid}", timeout=10).text)
+    sam.post(base + "/groups/join", data={"code": code.group(1) if code else ""}, timeout=10)
+    before = sam.get(f"{base}/jobs/{job}", timeout=10).status_code
+    rae.post(f"{base}/jobs/{job}/group", data={"group": gid, "on": "1"}, timeout=10)
+    after = sam.get(f"{base}/jobs/{job}", timeout=10).status_code
+    outsider = (tom.get(f"{base}/jobs/{job}", timeout=10).status_code, tom.get(f"{base}/groups/{gid}", timeout=10).status_code)
+    check("web", "a group sees a result only once a member shares it, and no one outside the group ever does",
+          before == 404 and after == 200 and outsider == (404, 404), f"{before} {after} {outsider}")
+    rae.post(f"{base}/recordings/{rid}/delete", timeout=10)
+    about = requests.get(base + "/about", timeout=10).text
+    check("web", "deleting a recording removes it; the About page shows totals only, small counts hidden",
+          rae.get(f"{base}/recordings/{rid}", timeout=10).status_code == 404 and "How sure it is" in about
+          and "fewer than 10" in about)
 
 
 def memory_web_checks(base, files):
@@ -2292,6 +2347,11 @@ def style_checks(tmp):
     check("style", "ground no track covers is offered (a major key, another time signature, a key change)",
           {"Major key", "Time signature", "Key change"} <= set(tried), str(list(tried)))
     two = style.profile(tracks[:2])
+    there_ = dict(two["there"])
+    gone = dict(two["not_there"])
+    check("style", "two tracks read together: what's there in both (minor keys, 4/4) and what neither has (a key change)",
+          "Keys" in there_ and "minor" in there_["Keys"] and "Time" in there_ and "Key change" in gone,
+          f"there {list(there_)}; not there {list(gone)}")
     check("style", "two tracks: no habits and no gaps claimed (a habit needs three examples)",
           not two["signatures"] and not two["unexplored"] and not two["enough"] and "Add 1 more" in two["in_short"],
           two["in_short"])
@@ -2642,7 +2702,26 @@ def main():
         print(f"  WARN [{g}] {n}" + (f": {d}" if d else ""))
     print("RESULT:", ("PASS ✅" + (" (with warnings: an outside service, see WARN lines)" if WARNINGS else ""))
           if not failed else "FAIL ❌")
+    save_summary(failed)
     sys.exit(1 if failed else 0)
+
+
+def save_summary(failed):
+    """On the server (DATA_DIR set), keep this run's results for the About page: how many checks of each kind
+    passed, so the accuracy the site claims is the accuracy it was last measured at - not a number someone typed."""
+    data_dir = os.environ.get("DATA_DIR")
+    if not data_dir or not Path(data_dir).is_dir():
+        return
+    groups = {}
+    for g, _, ok, _ in RESULTS:
+        p_, t_ = groups.get(g, (0, 0))
+        groups[g] = (p_ + int(ok), t_ + 1)
+    summary = {"when": time.time(), "passed": len(RESULTS) - len(failed), "total": len(RESULTS), "groups": groups,
+               "analysis": [(n, ok) for g, n, ok, _ in RESULTS if g in ("analysis", "precision", "facts")][:80]}
+    try:
+        (Path(data_dir) / "selftest_results.json").write_text(json.dumps(summary), encoding="utf-8")
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

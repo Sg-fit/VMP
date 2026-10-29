@@ -351,6 +351,105 @@ def in_short(rows, sig, rng):
     return " ".join(parts)
 
 
+DEGREE_USED = 0.05  # a scale degree whose chords fill a twentieth of the chord time is part of the track's harmony
+
+
+def _how_many(k, n):
+    return f"all {n}" if k == n and n > 2 else "both" if k == n == 2 else f"{k} of {n}"
+
+
+def _degrees(t):
+    """{degree label: share of chord time on it} for one track (gaps.py's degree table), or {}."""
+    return {d["degree"]: d["harmony"] for d in (t["r"].get("gaps") or {}).get("degrees") or []}
+
+
+def _playing(t):
+    """The instruments heard through most of a track (who-plays-when rows on in at least half its sections)."""
+    out = set()
+    for rw in ma.lineup(t["r"]):
+        cells = rw["cells"]
+        if cells and sum(c["on"] for c in cells) >= len(cells) / 2:
+            out.add(rw["name"].split(" (")[0].lower())
+    return out
+
+
+def there(rows, rng, vocab, progs):
+    """What's there across the tracks: in all of them (any number from two), or in most of them (from MIN_TRACKS),
+    as [(area, sentence)], the clearest first."""
+    n = len(rows)
+    if n < 2:
+        return []
+    need = n if n < MIN_TRACKS else MAJORITY * n
+    out = []
+    for area, text in signatures(rows, rng):  # habits (three tracks or more)
+        out.append((area, text))
+    common = [k for k, used, _ in vocab if used >= need]
+    if common:
+        k = min(used for c, used, _ in vocab if c in common)
+        out.append(("Chords", f"{_and(common[:5])} in {_how_many(k, n)} tracks."))
+    for lp, k in progs[:2]:
+        out.append(("Loop", f"The {lp} loop comes back in {_how_many(k, n)} tracks."))
+    degs = Counter(d for t in rows for d, share in _degrees(t).items() if share >= DEGREE_USED)
+    shared = [d for d, k in degs.items() if k >= need]
+    if shared and len(shared) < 7:
+        out.append(("Scale", f"Chords on the {_and(sorted(shared, key=_deg_order))} of the scale, in "
+                             f"{_how_many(min(degs[d] for d in shared), n)} tracks."))
+    plays = Counter(x for t in rows for x in _playing(t))
+    inst = [x for x, k in plays.most_common() if k >= need]
+    if inst:
+        line = _and(inst)
+        out.append(("Line-up", f"{line[:1].upper() + line[1:]} through most of {_how_many(min(plays[x] for x in inst), n)} tracks."))
+    if n < MIN_TRACKS:  # signatures() needs three; with two, say what both share outright
+        f = [t["f"] for t in rows]
+        if f[0]["minor"] == f[1]["minor"]:
+            out.append(("Keys", f"Both in {'minor' if f[0]['minor'] else 'major'} keys."))
+        if f[0]["meter"] == f[1]["meter"]:
+            out.append(("Time", f"Both in {f[0]['meter']}."))
+        for x in rng:
+            if len(x["values"]) == 2 and _gap(x["key"], x["values"][0][1], x["values"][1][1]) <= 1:
+                out.append((x["name"], f"About the same in both: {_num_fmt(x['key'], x['median'])}{x['unit']}."))
+    return out
+
+
+def not_there(rows, rng, vocab):
+    """What's not there: what none of the tracks has (from two tracks), and what most of them miss (gaps.py's gaps,
+    from MIN_TRACKS), as [(area, sentence)]."""
+    n = len(rows)
+    if n < 2:
+        return []
+    out = list(unexplored(rows, rng, vocab)) if n >= MIN_TRACKS else []
+    if n < MIN_TRACKS:  # unexplored() needs three; with two, the plain facts
+        f = [t["f"] for t in rows]
+        if not any(x["modulates"] for x in f):
+            out.append(("Key change", "Neither changes key."))
+        if not any(x["drums"] for x in f):
+            out.append(("Arrangement", "Neither has drums."))
+        if all(x["minor"] for x in f) or not any(x["minor"] for x in f):
+            out.append(("Keys", f"No {'major' if f[0]['minor'] else 'minor'} key in either."))
+    missing = Counter(g["id"] for t in rows for g in {g["id"]: g for g in (t["r"].get("gaps") or {}).get("gaps") or []}.values())
+    titles = {g["id"]: g["title"] for t in rows for g in (t["r"].get("gaps") or {}).get("gaps") or []}
+    need = n if n < MIN_TRACKS else MAJORITY * n
+    for gid, k in missing.most_common():
+        if k >= need:
+            out.append((titles[gid], f"Missing in {_how_many(k, n)} tracks (see each track's “What's missing”)."))
+    degs = set(d for t in rows for d, share in _degrees(t).items() if share >= DEGREE_USED)
+    every = set(d for t in rows for d in _degrees(t))
+    unused = sorted(every - degs, key=_deg_order)
+    if unused:
+        out.append(("Scale", f"No track builds chords on the {_and(unused)} of its scale."))
+    return out
+
+
+def _deg_order(d):
+    digits = "".join(ch for ch in d if ch.isdigit())
+    return int(digits or 0), d
+
+
+def _and(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
 def profile(tracks):
     """tracks: [{"r": result, "name", "session", "when", "title"?}] -> everything the style page shows."""
     rows = [dict(t, f=features(t["r"])) for t in tracks if "error" not in t["r"]]
@@ -367,7 +466,9 @@ def profile(tracks):
     vocab = vocabulary(rows)
     ss, drift = sessions(rows)
     typ, out, diffs = typical(rows, rng)
-    return {"tracks": len(rows), "sessions": ss, "drift": drift, "ranges": rng, "signatures": sig,
+    progs = progressions(rows)
+    return {"there": there(rows, rng, vocab, progs), "not_there": not_there(rows, rng, vocab),
+            "tracks": len(rows), "sessions": ss, "drift": drift, "ranges": rng, "signatures": sig,
             "vocabulary": vocab, "progressions": progressions(rows), "typical": typ, "outlier": out, "diffs": diffs,
             "unexplored": unexplored(rows, rng, vocab), "in_short": in_short(rows, sig, rng), "rows": rows,
             "enough": len(rows) >= MIN_TRACKS}

@@ -181,12 +181,15 @@
         <label><input type="radio" name="mode" value="tags" {{ 'checked' if mode == 'tags' }}><span>Find music</span></label>
       </div>
       <label class="drop" id="drop">
-        <input type="file" name="tracks" id="tracks" multiple accept="{{ exts.replace(' ', ',') }},audio/*">
+        <input type="file" name="tracks" id="tracks" multiple accept="audio/*,{{ exts.replace(' ', ',') }}">
         <span class="plus" aria-hidden="true">+</span>
         <span><span class="title">Choose your tracks<span data-only="tags" class="muted" style="font-weight:400"> (optional)</span><span data-only="style" class="muted" style="font-weight:400"> (two or more)</span></span><br>
-          <span class="muted small">or drop them here · <abbr title="Most audio files work: phone voice memos (.m4a),
-          mp3, wav, flac, ogg and aac.">{{ exts }}</abbr> · up to {{ max_files }}, {{ max_mb }} MB in all</span></span>
+          <span class="muted small">or drop them here · <abbr title="Any common audio file: {{ exts }}. On an iPhone,
+          tap here and pick from Files; to send a Voice Memo, open it in Voice Memos, tap Share, then Save to Files.">any
+          audio, iPhone Voice Memos too</abbr> · up to {{ max_files }}, {{ max_mb }} MB in all</span></span>
       </label>
+      <p class="small" style="margin:-4px 0 10px" data-only="musician style"><a href="{{ url_for('recorder') }}">Or record
+        right here in your browser →</a></p>
       <ul id="chosen" aria-live="polite"></ul>
       <div class="admire" data-only="musician">
         <label class="field" for="reference"><abbr title="Finished songs you'd like yours to feel like, in any genre.
@@ -194,7 +197,7 @@
           to try. With two or three, what they all share is the strongest lead. They're deleted along with your
           audio.">Songs you love</abbr> <span class="opt">optional, up to 3</span></label>
         <input class="text" type="file" id="reference" name="reference" multiple
-               accept="{{ exts.replace(' ', ',') }},audio/*" style="padding:7px">
+               accept="audio/*,{{ exts.replace(' ', ',') }}" style="padding:7px">
         <ul id="chosen-refs"></ul>
       </div>
       <div data-only="tags">

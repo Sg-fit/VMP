@@ -66,6 +66,24 @@ def init(path):
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 job_id TEXT NOT NULL, track TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL,
                 created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS recordings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                file TEXT NOT NULL, title TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', instruments TEXT NOT NULL DEFAULT '',
+                genre TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', source TEXT NOT NULL DEFAULT 'uploaded',
+                duration REAL, size INTEGER NOT NULL DEFAULT 0, trim_start REAL NOT NULL DEFAULT 0, trim_end REAL,
+                last_job TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS recordings_by_user ON recordings(user_id, created);
+            CREATE TABLE IF NOT EXISTS groups_ (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE,
+                owner_id INTEGER NOT NULL REFERENCES users(id), created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, joined REAL NOT NULL,
+                PRIMARY KEY (group_id, user_id));
+            CREATE TABLE IF NOT EXISTS group_shares (
+                group_id INTEGER NOT NULL, job_id TEXT NOT NULL, user_id INTEGER NOT NULL, shared REAL NOT NULL,
+                PRIMARY KEY (group_id, job_id));
             CREATE TABLE IF NOT EXISTS interest (
                 user_id INTEGER NOT NULL REFERENCES users(id),
                 section TEXT NOT NULL,
@@ -244,7 +262,10 @@ def save_job(user_id, job_id, title):
 
 def forget_job(user_id, job_id):
     with _connect() as db:
-        return db.execute("DELETE FROM saved WHERE job_id = ? AND user_id = ?", (job_id, user_id)).rowcount > 0
+        gone = db.execute("DELETE FROM saved WHERE job_id = ? AND user_id = ?", (job_id, user_id)).rowcount > 0
+        if gone:  # and no group sees it any more
+            db.execute("DELETE FROM group_shares WHERE job_id = ?", (job_id,))
+        return gone
 
 
 def rename_job(user_id, job_id, title):
@@ -354,19 +375,246 @@ def all_labels(user_id):
 
 # ---------------------------------------------------------------- your data: take it, or delete it all
 
+# ---------------------------------------------------------------- your recordings (kept, not analysed)
+# Unlike an upload for analysis (deleted as soon as it's analysed), a recording you keep stays on the server until you
+# delete it - only you can play it - and is analysed only when you pick it. So there are limits per account.
+MAX_RECORDINGS = 300
+RECORDING_FIELDS = ("title", "project", "status", "tags", "instruments", "genre", "notes", "trim_start", "trim_end")
+
+
+def _rec(row):
+    d = dict(row)
+    d["tags"] = [t for t in d["tags"].split(",") if t]
+    d["instruments"] = [t for t in d["instruments"].split(",") if t]
+    return d
+
+
+def add_recording(user_id, file, title, size, duration=None, source="uploaded"):
+    """A new recording, kept as it is. Returns its id, or None when the account is at MAX_RECORDINGS."""
+    with _connect() as db:
+        if db.execute("SELECT COUNT(*) FROM recordings WHERE user_id = ?", (user_id,)).fetchone()[0] >= MAX_RECORDINGS:
+            return None
+        now = time.time()
+        cur = db.execute("INSERT INTO recordings (user_id, file, title, size, duration, source, created, updated) "
+                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (user_id, file, title[:120], size, duration, source, now, now))
+        return cur.lastrowid
+
+
+def recordings(user_id):
+    with _connect() as db:
+        rows = db.execute("SELECT * FROM recordings WHERE user_id = ? ORDER BY created DESC", (user_id,)).fetchall()
+    return [_rec(r) for r in rows]
+
+
+def recording(user_id, rec_id):
+    """One of your recordings, or None (someone else's, or gone)."""
+    with _connect() as db:
+        row = db.execute("SELECT * FROM recordings WHERE id = ? AND user_id = ?", (rec_id, user_id)).fetchone()
+    return _rec(row) if row else None
+
+
+def update_recording(user_id, rec_id, **fields):
+    """Change a recording's details: its name, project, stage, tags, instruments, genre, notes and the part of it
+    that counts (trim_start/trim_end in seconds; trim_end None = to the end). The audio itself never changes."""
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k not in RECORDING_FIELDS or v is None and k != "trim_end":
+            continue
+        if k == "tags":
+            v = ",".join(clean_labels(v if isinstance(v, str) else ",".join(v)))
+        elif k == "instruments":
+            v = ",".join(v)[:400]
+        elif k == "status":
+            v = v if v in STATUSES else ""
+        elif k in ("trim_start", "trim_end"):
+            v = None if v in (None, "") else max(0.0, float(v))
+        else:
+            v = str(v).strip()[:2000 if k == "notes" else 120]
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    if not sets:
+        return False
+    with _connect() as db:
+        cur = db.execute(f"UPDATE recordings SET {', '.join(sets)}, updated = ? WHERE id = ? AND user_id = ?",
+                         (*vals, time.time(), rec_id, user_id))
+    return cur.rowcount > 0
+
+
+def replace_recording_audio(user_id, rec_id, file, size, duration=None):
+    """New audio for a recording (a better take): its details stay, the trim starts over."""
+    with _connect() as db:
+        cur = db.execute("UPDATE recordings SET file = ?, size = ?, duration = ?, trim_start = 0, trim_end = NULL, "
+                         "updated = ? WHERE id = ? AND user_id = ?", (file, size, duration, time.time(), rec_id, user_id))
+    return cur.rowcount > 0
+
+
+def delete_recording(user_id, rec_id):
+    """Returns the deleted recording's stored file name (for the app to remove), or None."""
+    rec = recording(user_id, rec_id)
+    if not rec:
+        return None
+    with _connect() as db:
+        db.execute("DELETE FROM recordings WHERE id = ? AND user_id = ?", (rec_id, user_id))
+    return rec["file"]
+
+
+def mark_analysed(user_id, rec_ids, job_id):
+    with _connect() as db:
+        db.executemany("UPDATE recordings SET last_job = ? WHERE id = ? AND user_id = ?",
+                       [(job_id, r, user_id) for r in rec_ids])
+
+
+def recording_tags(user_id):
+    """[(tag, how many recordings)] for suggestions, the most used first."""
+    tags = Counter()
+    for r in recordings(user_id):
+        tags.update(r["tags"])
+    return tags.most_common()
+
+
+# ---------------------------------------------------------------- groups: a teacher, a class, a community programme
+# A group sees only what each member chooses to share with it, one result at a time. The person who made the group
+# (the facilitator) sees the same shared results as everyone else - nothing private of anyone's.
+MAX_GROUPS = 20      # per account, made or joined
+GROUP_CODE_LEN = 8
+
+
+def create_group(user_id, name):
+    import secrets
+    with _connect() as db:
+        if db.execute("SELECT COUNT(*) FROM group_members WHERE user_id = ?", (user_id,)).fetchone()[0] >= MAX_GROUPS:
+            return None
+        code = secrets.token_hex(GROUP_CODE_LEN // 2).upper()
+        gid = db.execute("INSERT INTO groups_ (name, code, owner_id, created) VALUES (?, ?, ?, ?)",
+                         ((name or "My group").strip()[:60], code, user_id, time.time())).lastrowid
+        db.execute("INSERT INTO group_members (group_id, user_id, joined) VALUES (?, ?, ?)", (gid, user_id, time.time()))
+    return gid
+
+
+def join_group(user_id, code):
+    """Join by the group's code. Returns the group id, or None (no such code, or too many groups)."""
+    with _connect() as db:
+        row = db.execute("SELECT id FROM groups_ WHERE code = ?", ((code or "").strip().upper(),)).fetchone()
+        if not row or db.execute("SELECT COUNT(*) FROM group_members WHERE user_id = ?",
+                                 (user_id,)).fetchone()[0] >= MAX_GROUPS:
+            return None
+        db.execute("INSERT OR IGNORE INTO group_members (group_id, user_id, joined) VALUES (?, ?, ?)",
+                   (row["id"], user_id, time.time()))
+    return row["id"]
+
+
+def my_groups(user_id):
+    with _connect() as db:
+        rows = db.execute("SELECT g.*, (SELECT COUNT(*) FROM group_members m2 WHERE m2.group_id = g.id) AS members, "
+                          "(SELECT COUNT(*) FROM group_shares s WHERE s.group_id = g.id) AS shared FROM groups_ g "
+                          "JOIN group_members m ON m.group_id = g.id WHERE m.user_id = ? ORDER BY g.created DESC",
+                          (user_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def group(user_id, group_id):
+    """A group you belong to (with its members and shared results), or None."""
+    with _connect() as db:
+        g = db.execute("SELECT g.* FROM groups_ g JOIN group_members m ON m.group_id = g.id "
+                       "WHERE g.id = ? AND m.user_id = ?", (group_id, user_id)).fetchone()
+        if not g:
+            return None
+        members = db.execute("SELECT u.id, u.username, m.joined FROM group_members m JOIN users u ON u.id = m.user_id "
+                             "WHERE m.group_id = ? ORDER BY m.joined", (group_id,)).fetchall()
+        shares = db.execute("SELECT s.job_id, s.user_id, s.shared, u.username, v.title FROM group_shares s "
+                            "JOIN users u ON u.id = s.user_id JOIN saved v ON v.job_id = s.job_id "
+                            "WHERE s.group_id = ? ORDER BY s.shared DESC", (group_id,)).fetchall()
+    return {**dict(g), "members": [dict(m) for m in members], "shares": [dict(x) for x in shares]}
+
+
+def leave_group(user_id, group_id):
+    """Leave a group: your shares to it go too. When its facilitator leaves, the group is closed for everyone."""
+    with _connect() as db:
+        g = db.execute("SELECT owner_id FROM groups_ WHERE id = ?", (group_id,)).fetchone()
+        if not g:
+            return
+        if g["owner_id"] == user_id:
+            for t in ("group_shares", "group_members"):
+                db.execute(f"DELETE FROM {t} WHERE group_id = ?", (group_id,))
+            db.execute("DELETE FROM groups_ WHERE id = ?", (group_id,))
+        else:
+            db.execute("DELETE FROM group_shares WHERE group_id = ? AND user_id = ?", (group_id, user_id))
+            db.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, user_id))
+
+
+def remove_member(owner_id, group_id, member_id):
+    with _connect() as db:
+        if db.execute("SELECT 1 FROM groups_ WHERE id = ? AND owner_id = ?", (group_id, owner_id)).fetchone() \
+                and member_id != owner_id:
+            db.execute("DELETE FROM group_shares WHERE group_id = ? AND user_id = ?", (group_id, member_id))
+            db.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, member_id))
+
+
+def share_with_group(user_id, group_id, job_id, on=True):
+    """Share one of your saved results with a group you're in (or stop sharing it)."""
+    with _connect() as db:
+        member = db.execute("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, user_id)).fetchone()
+        owns = db.execute("SELECT 1 FROM saved WHERE job_id = ? AND user_id = ?", (job_id, user_id)).fetchone()
+        if not (member and owns):
+            return False
+        if on:
+            db.execute("INSERT OR IGNORE INTO group_shares (group_id, job_id, user_id, shared) VALUES (?, ?, ?, ?)",
+                       (group_id, job_id, user_id, time.time()))
+        else:
+            db.execute("DELETE FROM group_shares WHERE group_id = ? AND job_id = ?", (group_id, job_id))
+    return True
+
+
+def shared_groups(job_id):
+    """The ids of the groups a result is shared with."""
+    with _connect() as db:
+        return {r["group_id"] for r in db.execute("SELECT group_id FROM group_shares WHERE job_id = ?", (job_id,))}
+
+
+def in_group_with_share(user_id, job_id):
+    """May this user open this result because it's shared with a group they're in?"""
+    if not user_id:
+        return False
+    with _connect() as db:
+        return db.execute("SELECT 1 FROM group_shares s JOIN group_members m ON m.group_id = s.group_id "
+                          "WHERE s.job_id = ? AND m.user_id = ?", (job_id, user_id)).fetchone() is not None
+
+
+# ---------------------------------------------------------------- impact, counted without anyone in it
+SMALL = 10  # counts under this are shown as "fewer than 10", so no one can be picked out
+
+
+def impact():
+    """Site-wide counts for the About page: how many people use it, keep coming back, and find the ideas useful. Only
+    totals - nothing about who, or what music."""
+    with _connect() as db:
+        one = lambda q: db.execute(q).fetchone()[0] or 0
+        return {"accounts": one("SELECT COUNT(*) FROM users"),
+                "saved": one("SELECT COUNT(*) FROM saved"),
+                "returning": one("SELECT COUNT(*) FROM (SELECT user_id FROM saved GROUP BY user_id HAVING COUNT(*) >= 2)"),
+                "helpful": one("SELECT COUNT(*) FROM feedback WHERE vote > 0"),
+                "unhelpful": one("SELECT COUNT(*) FROM feedback WHERE vote < 0"),
+                "recordings": one("SELECT COUNT(*) FROM recordings"),
+                "groups": one("SELECT COUNT(*) FROM groups_")}
+
+
 def export(user_id):
     """Everything we hold about a user, as plain data (the analyses' files are added by the app)."""
     u = get_user(user_id)
     return {"username": u["username"], "created": u["created"], "memory_on": bool(u.get("memory_on")),
             "goals": u.get("goals", ""), "saved": history(user_id), "feedback": list_feedback(user_id),
-            "corrections": list_corrections(user_id), "report_sections_used": interest(user_id)}
+            "corrections": list_corrections(user_id), "report_sections_used": interest(user_id),
+            "recordings": [{k: v for k, v in r.items() if k != "user_id"} for r in recordings(user_id)],
+            "groups": [{"name": g["name"], "facilitator": g["owner_id"] == user_id} for g in my_groups(user_id)]}
 
 
 def delete_account(user_id):
     """Remove the user and every row about them. Returns the job ids whose files the app must delete."""
+    for g in my_groups(user_id):  # the groups they run close; the ones they joined lose them
+        leave_group(user_id, g["id"])
     with _connect() as db:
         jobs = [r["job_id"] for r in db.execute("SELECT job_id FROM saved WHERE user_id = ?", (user_id,))]
-        for table in ("feedback", "corrections", "interest", "saved"):
+        for table in ("feedback", "corrections", "interest", "recordings", "group_shares", "group_members", "saved"):
             db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     return jobs

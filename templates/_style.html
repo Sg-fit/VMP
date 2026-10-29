@@ -24,6 +24,9 @@
   .style table { font-size: .88rem; }
   .style tr[data-trk].hl td, .style tr[data-trk]:hover td { background: var(--faint); }
   .style svg [data-trk].hl { fill: var(--accent) !important; fill-opacity: 1 !important; r: 7; }
+  .style .twolists { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 28px; margin-top: 14px; }
+  @media (max-width: 760px) { .style .twolists { grid-template-columns: 1fr; } }
+  .style h3.lh { font-size: 1.05rem; font-weight: 600; margin: 0 0 4px; }
   .style .idea { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; margin: 8px 0; }
   .style .idea b { display: block; }
   .style .note { font-size: .8rem; color: var(--muted); }
@@ -42,30 +45,32 @@
       <figure>{{ pics.mood|safe }}<figcaption>Each track's energy and mood, numbered as in “Each track”</figcaption></figure>
     </div>
   </div>
-  {% if v.signatures %}
-  <ul class="habits">{% for area, text in v.signatures[:4] %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
-  {% endif %}
+  <div class="twolists">
+    <div><h3 class="lh">What's there</h3>
+      {% if v.there %}<ul class="habits">{% for area, text in v.there[:4] %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
+      {% else %}<p class="note">Nothing yet: add a track or two.</p>{% endif %}</div>
+    <div><h3 class="lh">What's not there</h3>
+      {% if v.not_there %}<ul class="habits">{% for area, text in v.not_there[:4] %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
+      {% else %}<p class="note">No gap that all your tracks share.</p>{% endif %}</div>
+  </div>
 
   <nav class="stabs" role="tablist" aria-label="Parts of your style">
-    <a href="#st-habits" role="tab" data-go="st-habits">Habits</a>
+    <a href="#st-there" role="tab" data-go="st-there">What's there</a>
+    <a href="#st-missing" role="tab" data-go="st-missing">What's not there</a>
     <a href="#st-chords" role="tab" data-go="st-chords">Chords</a>
     <a href="#st-time" role="tab" data-go="st-time">Sessions &amp; change</a>
     <a href="#st-tracks" role="tab" data-go="st-tracks">Each track</a>
-    <a href="#st-next" role="tab" data-go="st-next">Try next</a>
   </nav>
 
-  <section class="spanel" id="st-habits" role="tabpanel" aria-label="Habits">
-    <h3>Habits</h3>
-    {% if v.signatures %}
-    <ul class="habits">{% for area, text in v.signatures %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
-    <p class="note">A habit is a choice two thirds of your tracks make, or a measure whose middle half of tracks you
-      couldn't tell apart by ear.</p>
-    {% elif not v.enough %}
-    <p>With {{ v.tracks }} track{{ 's' if v.tracks != 1 }} we can't tell a habit from a coincidence. Add
-      {{ min_tracks - v.tracks }} more and they'll show up here.</p>
-    {% else %}
-    <p>No strong habits: your tracks range widely. See where in the chart above.</p>
-    {% endif %}
+  <section class="spanel" id="st-there" role="tabpanel" aria-label="What's there">
+    <h3>What's there</h3>
+    {% if v.there %}
+    <ul class="habits">{% for area, text in v.there %}<li><span class="area">{{ area }}</span>{{ text }}</li>{% endfor %}</ul>
+    <p class="note">In all your tracks, or {{ 'in most of them (two thirds or more)' if v.enough else 'in both' }}. A
+      measure counts when your tracks are too close to tell apart by ear.</p>
+    {% else %}<p>Nothing these tracks clearly share yet.</p>{% endif %}
+    {% if not v.enough and v.tracks >= 2 %}<p class="note">With {{ min_tracks }} or more tracks we can also tell which
+      habits are yours rather than a coincidence.</p>{% endif %}
     {% if v.typical %}
     <div class="two" style="margin-top:10px">
       <div class="idea"><b>Your most typical track: {{ v.typical.name }}</b>
@@ -77,6 +82,15 @@
       {% endif %}
     </div>
     {% endif %}
+  </section>
+
+  <section class="spanel" id="st-missing" role="tabpanel" aria-label="What's not there">
+    <h3>What's not there</h3>
+    {% if v.not_there %}
+    <p class="note" style="margin-top:0">What none of your tracks has, and what most of them miss. Not a to-do list:
+      ground you haven't covered yet.</p>
+    {% for area, text in v.not_there %}<div class="idea"><b>{{ area }}</b>{{ text }}</div>{% endfor %}
+    {% else %}<p>No gap that all your tracks share: you've covered a lot of ground.</p>{% endif %}
   </section>
 
   <section class="spanel" id="st-chords" role="tabpanel" aria-label="Chords">
@@ -123,14 +137,6 @@
     </table>
   </section>
 
-  <section class="spanel" id="st-next" role="tabpanel" aria-label="Try next">
-    <h3>Try next</h3>
-    {% if v.unexplored %}
-    <p class="note" style="margin-top:0">Things none of your tracks do yet. Not a to-do list: ground you haven't covered.</p>
-    {% for area, text in v.unexplored %}<div class="idea"><b>{{ area }}</b>{{ text }}</div>{% endfor %}
-    {% elif not v.enough %}<p>Add a few more tracks and we'll point out ground you haven't covered.</p>
-    {% else %}<p>You've covered a lot of ground already: no obvious gap.</p>{% endif %}
-  </section>
 </div>
 <script>
   (function () {

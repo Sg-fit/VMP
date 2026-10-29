@@ -38,7 +38,7 @@ from collections import Counter
 from pathlib import Path
 
 import markdown
-from flask import (Flask, Response, abort, jsonify, redirect, render_template, request,
+from flask import (Flask, Response, abort, jsonify, redirect, render_template, request, send_file,
                    send_file, send_from_directory, session, url_for)
 from werkzeug.utils import secure_filename
 
@@ -131,7 +131,8 @@ def can_open(job_id):
         return True
     owner = accounts.owner_of(job_id)
     if owner is not None:
-        return owner == session.get("uid")
+        # its owner, or someone in a group its owner shared it with
+        return owner == session.get("uid") or accounts.in_group_with_share(session.get("uid"), job_id)
     # results from before the browser rule have no visitor and keep working by link until they expire
     return not st.get("visitor") or st["visitor"] == _browser_id()
 
@@ -329,7 +330,7 @@ def intro_seen():
 app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES)
 
 
-PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style")
+PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style", "/recordings", "/groups")
 
 
 @app.after_request
@@ -735,6 +736,366 @@ def compare_page():
                            too_many=len(picked) > crosscompare.MAX_TRACKS, version=ma.CODE_VERSION)
 
 
+# ---------------------------------------------------------------- your recordings: kept, analysed only when picked
+REC_DIR = DATA_DIR / "recordings"
+# what a browser recording is, when it arrives with a type but no usable name
+REC_TYPES = {"audio/webm": ".webm", "audio/mp4": ".mp4", "audio/x-m4a": ".m4a", "audio/aac": ".aac",
+             "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3"}
+REC_MIME = {".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+            ".wav": "audio/wav", ".mp3": "audio/mpeg", ".aac": "audio/aac", ".flac": "audio/flac", ".caf": "audio/x-caf",
+            ".aif": "audio/aiff", ".aiff": "audio/aiff", ".mov": "video/quicktime", ".qta": "audio/mp4", ".3gp": "audio/3gpp"}
+
+
+def _audio_duration(path):
+    """Length in seconds from the file's header (cheap), or None when it doesn't say (some browser recordings)."""
+    try:
+        import av
+        with av.open(str(path)) as c:
+            if c.duration:
+                return round(c.duration / 1e6, 2)
+            st = c.streams.audio[0]
+            if st.duration and st.time_base:
+                return round(float(st.duration * st.time_base), 2)
+    except Exception:
+        pass
+    return None
+
+
+def _store_audio(user_id, f):
+    """Save an uploaded or recorded file into the user's recordings folder: (stored name, size, seconds) or an error."""
+    name = secure_filename(f.filename or "") or "recording"
+    ext = Path(name).suffix.lower()
+    if ext not in ma.AUDIO_EXTS:
+        ext = REC_TYPES.get((f.mimetype or "").split(";")[0].strip().lower())
+        if not ext:
+            return None, "We can't read that kind of file. Try mp3, wav, m4a, flac, ogg or aac."
+    folder = REC_DIR / str(user_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    stored = uuid.uuid4().hex + ext
+    f.save(folder / stored)
+    size = (folder / stored).stat().st_size
+    if size < 1000:
+        (folder / stored).unlink(missing_ok=True)
+        return None, "That recording is empty. Check that the browser may use your microphone, then try again."
+    try:
+        hint = float(request.form.get("duration") or 0) or None  # the recorder's own clock, for files without one
+    except ValueError:
+        hint = None
+    return (stored, size, _audio_duration(folder / stored) or hint), None
+
+
+def _remove(path):
+    """Delete a file; a file that's busy right now (being played) is left for the next cleanup, never an error."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _rec_title(f):
+    stem = Path(secure_filename(f.filename or "") or "").stem
+    return stem if stem and stem.lower() not in ("recording", "blob", "audio") else \
+        "Recording " + time.strftime("%d %b %H:%M", time.localtime())
+
+
+@app.get("/recordings")
+def recordings_page():
+    """Your recordings: kept as they are, with your own names, projects, stages and tags - analysed only when you
+    pick them."""
+    u = _require_user()
+    recs = accounts.recordings(u["id"])
+    q, project, tag, stage = (request.args.get(k, "").strip() for k in ("q", "project", "tag", "stage"))
+    shown = [r for r in recs if (not project or r["project"] == project) and (not tag or tag in r["tags"])
+             and (not stage or r["status"] == stage)
+             and (not q or q.lower() in " ".join([r["title"], r["project"], r["notes"], *r["tags"]]).lower())]
+    for r in shown:
+        r["result"] = r["last_job"] if r["last_job"] and can_open(r["last_job"]) else ""
+        r["length"] = ((r["trim_end"] or r["duration"] or 0) - r["trim_start"]) if r["duration"] else None
+    return render_template("recordings.html", recs=shown, total=len(recs), tags=accounts.recording_tags(u["id"]),
+                           projects=sorted({r["project"] for r in recs if r["project"]}), statuses=accounts.STATUSES,
+                           f={"q": q, "project": project, "tag": tag, "stage": stage}, ai_label=LLM_LABEL,
+                           max_refs=ma.MAX_REFERENCES, exts=" ".join(sorted(ma.AUDIO_EXTS)),
+                           used_mb=round(sum(r["size"] for r in recs) / 2 ** 20, 1),
+                           error=request.args.get("error"), version=ma.CODE_VERSION)
+
+
+@app.get("/recordings/new")
+def recorder():
+    """Record in the browser. Anyone can record and analyse straight away; keeping recordings needs an account."""
+    u = current_user()
+    replace = accounts.recording(u["id"], int(request.args["replace"])) if u and request.args.get("replace", "").isdigit() else None
+    return render_template("recorder.html", replace=replace, version=ma.CODE_VERSION)
+
+
+@app.post("/recordings/upload")
+def recordings_upload():
+    """Keep recordings (recorded here or uploaded) without analysing them."""
+    u = _require_user()
+    files = [f for f in request.files.getlist("audio") if f and (f.filename or f.mimetype)]
+    wants_json = request.accept_mimetypes.best == "application/json" or request.form.get("json") == "1"
+    ids, problem = [], None
+    for f in files[:MAX_FILES * 2]:
+        saved, problem = _store_audio(u["id"], f)
+        if not saved:
+            continue
+        stored, size, seconds = saved
+        title = (request.form.get("title") or "").strip() if len(files) == 1 else ""
+        rid = accounts.add_recording(u["id"], stored, title or _rec_title(f), size, seconds,
+                                     source="recorded" if request.form.get("source") == "recorded" else "uploaded")
+        if rid is None:
+            _remove(REC_DIR / str(u["id"]) / stored)
+            problem = f"You've kept {accounts.MAX_RECORDINGS} recordings, which is the limit. Delete a few first."
+            break
+        ids.append(rid)
+    if wants_json:
+        if not ids:
+            return jsonify({"error": problem or "Nothing was saved."}), 400
+        return jsonify({"ids": ids, "url": url_for("recording_page", rec_id=ids[0], new=1)})
+    if len(ids) == 1:
+        return redirect(url_for("recording_page", rec_id=ids[0], new=1))
+    return redirect(url_for("recordings_page", error=problem) if problem and not ids else url_for("recordings_page"))
+
+
+@app.route("/recordings/<int:rec_id>", methods=["GET", "POST"])
+def recording_page(rec_id):
+    """Name it, file it, tag it, trim it. Nothing here is analysed until you ask."""
+    u = _require_user()
+    rec = accounts.recording(u["id"], rec_id)
+    if not rec:
+        abort(404)
+    if request.method == "POST":
+        f = request.form
+        accounts.update_recording(u["id"], rec_id, title=f.get("title") or rec["title"], project=f.get("project", ""),
+                                  status=f.get("status", ""), tags=f.get("tags", ""),
+                                  instruments=[i for i in f.getlist("instruments") if i in ma.INSTRUMENTS],
+                                  genre=f.get("genre") if f.get("genre") in ma.GENRES else "", notes=f.get("notes", ""),
+                                  trim_start=f.get("trim_start") or 0, trim_end=f.get("trim_end") or None)
+        if f.get("then") == "analyse":
+            return _analyse_recordings(u, [rec_id])
+        return redirect(url_for("recording_page", rec_id=rec_id, saved=1))
+    projects = sorted({r["project"] for r in accounts.recordings(u["id"]) if r["project"]}
+                      | {p for p, _, _ in accounts.projects(u["id"])})
+    rec["result"] = rec["last_job"] if rec["last_job"] and can_open(rec["last_job"]) else ""
+    return render_template("recording_edit.html", rec=rec, projects=projects, tags=accounts.recording_tags(u["id"]),
+                           statuses=accounts.STATUSES, instruments=ma.INSTRUMENTS, instrument_groups=ma.INSTRUMENT_GROUPS,
+                           genres={k: v[0] for k, v in ma.GENRES.items()}, new=request.args.get("new"),
+                           saved=request.args.get("saved"), ai_label=LLM_LABEL, version=ma.CODE_VERSION)
+
+
+@app.get("/recordings/<int:rec_id>/audio")
+def recording_audio(rec_id):
+    """Play your own recording (with byte ranges: iPhone Safari won't play audio without them)."""
+    u = _require_user()
+    rec = accounts.recording(u["id"], rec_id)
+    path = REC_DIR / str(u["id"]) / rec["file"] if rec else None
+    if not path or not path.is_file():
+        abort(404)
+    return send_file(path, mimetype=REC_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True,
+                     max_age=0)
+
+
+@app.post("/recordings/<int:rec_id>/replace")
+def recording_replace(rec_id):
+    """A new take for a recording: its name, tags and notes stay."""
+    u = _require_user()
+    rec = accounts.recording(u["id"], rec_id)
+    f = request.files.get("audio")
+    if not rec or not f:
+        abort(404)
+    saved, problem = _store_audio(u["id"], f)
+    if not saved:
+        return (jsonify({"error": problem}), 400) if request.form.get("json") == "1" else abort(400, problem)
+    stored, size, seconds = saved
+    accounts.replace_recording_audio(u["id"], rec_id, stored, size, seconds)
+    _remove(REC_DIR / str(u["id"]) / rec["file"])
+    url = url_for("recording_page", rec_id=rec_id, saved=1)
+    return jsonify({"url": url}) if request.form.get("json") == "1" else redirect(url)
+
+
+@app.post("/recordings/<int:rec_id>/delete")
+def recording_delete(rec_id):
+    u = _require_user()
+    stored = accounts.delete_recording(u["id"], rec_id)
+    if stored:
+        _remove(REC_DIR / str(u["id"]) / stored)
+    return redirect(url_for("recordings_page"))
+
+
+@app.post("/recordings/bulk")
+def recordings_bulk():
+    """What to do with the recordings you ticked: analyse them, file them in a project, tag them, or delete them."""
+    u = _require_user()
+    ids = [int(x) for x in request.form.getlist("rec") if x.isdigit()]
+    mine = [r for r in (accounts.recording(u["id"], i) for i in ids) if r]
+    action = request.form.get("action")
+    if not mine:
+        return redirect(url_for("recordings_page", error="Tick at least one recording first."))
+    if action == "analyse":
+        return _analyse_recordings(u, [r["id"] for r in mine])
+    for r in mine:
+        if action == "project":
+            accounts.update_recording(u["id"], r["id"], project=request.form.get("project", ""))
+        elif action == "tag" and request.form.get("tag"):
+            accounts.update_recording(u["id"], r["id"], tags=r["tags"] + accounts.clean_labels(request.form["tag"]))
+        elif action == "delete":
+            stored = accounts.delete_recording(u["id"], r["id"])
+            if stored:
+                _remove(REC_DIR / str(u["id"]) / stored)
+    return redirect(url_for("recordings_page"))
+
+
+def _analyse_recordings(u, rec_ids):
+    """Analyse the picked recordings now: each as you trimmed it, with its own instruments and genre, plus any songs
+    you admire uploaded with the request. One recording gets the full analysis and ideas; two or more (or a song you
+    admire) are read side by side for what's there in all of them and what isn't."""
+    if _too_many_uploads():
+        return redirect(url_for("recordings_page", error=f"You've started {UPLOADS_PER_HOUR} analyses in the last "
+                                                         "hour, which is our limit. Give it a little while."))
+    if len(rec_ids) > MAX_FILES:
+        return redirect(url_for("recordings_page", error=f"Pick up to {MAX_FILES} recordings at a time."))
+    import soundfile as sf
+    cleanup_old_jobs()
+    job_id = uuid.uuid4().hex
+    d = DATA_DIR / job_id
+    (d / "input").mkdir(parents=True)
+    names, per_file = [], {}
+    for rid in rec_ids:
+        rec = accounts.recording(u["id"], rid)
+        src = REC_DIR / str(u["id"]) / rec["file"] if rec else None
+        if not src or not src.is_file():
+            continue
+        # the recording's own name, as the report shows it (only characters a file name can't hold are dropped)
+        stem = re.sub(r"[^\w\- ]+", "", rec["title"]).strip()[:60] or f"recording {rid}"
+        trimmed = rec["trim_start"] > 0 or rec["trim_end"] is not None
+        name, n = stem + (".wav" if trimmed else src.suffix), 2
+        while (d / "input" / name).exists():
+            name, n = f"{stem}_{n}{'.wav' if trimmed else src.suffix}", n + 1
+        if trimmed:  # only the part you kept counts
+            y, sr = ma.load_audio_channels(src)
+            a = int(rec["trim_start"] * sr)
+            b = int(rec["trim_end"] * sr) if rec["trim_end"] is not None else y.shape[1]
+            sf.write(d / "input" / name, y[:, a:max(b, a + sr)].T, sr)
+        else:
+            shutil.copy(src, d / "input" / name)
+        names.append(name)
+        per_file[name] = ma.clean_context(rec["instruments"], rec["genre"] or None)
+    if not names:
+        shutil.rmtree(d, ignore_errors=True)
+        return redirect(url_for("recordings_page", error="Those recordings are gone."))
+    references = []
+    for ref in [f for f in request.files.getlist("reference") if f and f.filename][:ma.MAX_REFERENCES]:
+        rname = secure_filename(ref.filename) or "reference"
+        if Path(rname).suffix.lower() in ma.AUDIO_EXTS:
+            (d / "reference").mkdir(exist_ok=True)
+            ref.save(d / "reference" / rname)
+            references.append(rname)
+    ahead = job_queue.qsize()
+    write_status(d, state="queued", mode="musician", files=names, references=references,
+                 visitor=_browser_id(create=True), memory=user_memory(u),
+                 use_ai=bool(LLM and request.form.get("ai")), melody="",
+                 context={"per_file": per_file}, from_recordings=rec_ids, created=time.time(),
+                 message=f"You're in line, with {ahead} ahead of you…" if ahead else "Starting…")
+    titles = [Path(x).stem for x in names]
+    accounts.save_job(u["id"], job_id, ", ".join(titles[:3]) + (f" +{len(titles) - 3} more" if len(titles) > 3 else ""))
+    accounts.mark_analysed(u["id"], rec_ids, job_id)
+    job_queue.put(job_id)
+    return redirect(url_for("job", job_id=job_id))
+
+
+# ---------------------------------------------------------------- groups: a teacher, a class, a community programme
+@app.get("/groups")
+def groups_page():
+    u = _require_user()
+    return render_template("groups.html", groups=accounts.my_groups(u["id"]), error=request.args.get("error"),
+                           version=ma.CODE_VERSION)
+
+
+@app.post("/groups/new")
+def group_new():
+    u = _require_user()
+    gid = accounts.create_group(u["id"], request.form.get("name"))
+    if not gid:
+        return redirect(url_for("groups_page", error=f"You're in {accounts.MAX_GROUPS} groups, which is the limit."))
+    return redirect(url_for("group_page", group_id=gid))
+
+
+@app.post("/groups/join")
+def group_join():
+    u = _require_user()
+    gid = accounts.join_group(u["id"], request.form.get("code"))
+    if not gid:
+        return redirect(url_for("groups_page", error="No group has that code. Check it with whoever gave it to you."))
+    return redirect(url_for("group_page", group_id=gid))
+
+
+@app.get("/groups/<int:group_id>")
+def group_page(group_id):
+    """The results the members chose to share, and what's there and not there across them."""
+    u = _require_user()
+    g = accounts.group(u["id"], group_id)
+    if not g:
+        abort(404)
+    tracks = []
+    for sh in g["shares"]:
+        for _, r in tracks_of(sh["job_id"]):
+            tracks.append({"r": r, "name": f"{sh['username']}: {Path(r['file']).stem[:40]}", "session": sh["job_id"],
+                           "when": sh["shared"], "title": sh["title"]})
+    view = style.profile(tracks) if len(tracks) >= 2 else None
+    return render_template("group.html", g=g, me=u["id"], view=view, pics=style.pictures(view),
+                           min_tracks=style.MIN_TRACKS, hurl=lambda job_id: url_for("job", job_id=job_id),
+                           version=ma.CODE_VERSION)
+
+
+@app.post("/groups/<int:group_id>/leave")
+def group_leave(group_id):
+    u = _require_user()
+    accounts.leave_group(u["id"], group_id)
+    return redirect(url_for("groups_page"))
+
+
+@app.post("/groups/<int:group_id>/remove/<int:member_id>")
+def group_remove(group_id, member_id):
+    u = _require_user()
+    accounts.remove_member(u["id"], group_id, member_id)
+    return redirect(url_for("group_page", group_id=group_id))
+
+
+@app.post("/jobs/<job_id>/group")
+def job_group_share(job_id):
+    """Share this result with one of your groups, or stop sharing it."""
+    u = _require_user()
+    gid = request.form.get("group", "")
+    if not gid.isdigit() or not accounts.share_with_group(u["id"], int(gid), job_id, request.form.get("on") == "1"):
+        abort(403)
+    return redirect(url_for("job", job_id=job_id))
+
+
+# ---------------------------------------------------------------- about: what this is for, how sure it is, who uses it
+def _selftest_summary():
+    """The self-test's last run on this server (deploy.sh runs it after every update), if there is one."""
+    try:
+        return json.loads((DATA_DIR / "selftest_results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+@app.get("/about")
+def about():
+    counts = accounts.impact()
+    shown = {k: (v if v >= accounts.SMALL else None) for k, v in counts.items()}
+    votes = counts["helpful"] + counts["unhelpful"]
+    return render_template("about.html", counts=shown, small=accounts.SMALL, tests=_selftest_summary(),
+                           helpful_pct=round(100 * counts["helpful"] / votes) if votes >= accounts.SMALL else None,
+                           analyses=_stats().get("tracks_analysed"), version=ma.CODE_VERSION)
+
+
+def _stats():
+    try:
+        return json.loads((DATA_DIR / "stats.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 @app.get("/account")
 def account_page():
     u = _require_user()
@@ -757,6 +1118,11 @@ def account_export():
             for f in out.rglob("*") if out.is_dir() else []:
                 if f.is_file():
                     z.write(f, f"analyses/{folder}/{f.relative_to(out).as_posix()}")
+        for r in data["recordings"]:  # your own recordings, as you made them
+            src = REC_DIR / str(u["id"]) / r["file"]
+            if src.is_file():
+                safe = re.sub(r"[^\w\-. ]+", "_", r["title"])[:60]
+                z.write(src, f"recordings/{safe} ({r['id']}){src.suffix}")
     return Response(buf.getvalue(), mimetype="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{u["username"]}-music-analyzer-data.zip"'})
 
@@ -771,6 +1137,7 @@ def account_delete():
     for job_id in accounts.delete_account(u["id"]):
         if JOB_ID.match(job_id):
             purge_job(DATA_DIR / job_id)
+    shutil.rmtree(REC_DIR / str(u["id"]), ignore_errors=True)  # your kept recordings go with the account
     session.clear()
     return redirect(url_for("index", deleted="account"))
 
@@ -1035,7 +1402,12 @@ def _chart_name(svg):
     return label[:42] or "Chart"
 
 
-def tab_tracks(report_html):
+# What each track's tabs open on, and in what order, by what the musician gave us: one track on its own is about
+# what to try next (ideas and what's missing first); next to a song they admire it's about the comparison.
+FOCUS_ORDER = {"ideas": ["ideas", "gaps", "ai"], "admire": ["admire"]}
+
+
+def tab_tracks(report_html, focus=None):
     """Each track's report as a summary and tabs: its header, the few plain sentences and the at-a-glance pictures,
     then every other chart of the report as a small picture (a click opens its part), then one tab per section
     (fold_sections' <section>s), each with its own charts. The page script shows one tab at a time; without
@@ -1081,7 +1453,13 @@ def tab_tracks(report_html):
         gallery = (f'<div class="gallery" aria-label="Every picture in this report"><p class="eyebrow">All the '
                    f'pictures · click one to open its part</p><div class="thumbs">{"".join(thumbs)}</div></div>'
                    if thumbs else "")
-        out.append(f'<article class="track" data-track="{n}">{head}<div class="tsum">{intro}{gallery}</div>'
+        first = FOCUS_ORDER.get(focus, [])
+        pairs = sorted(zip(tabs, panels[-len(tabs):] if tabs else []),
+                       key=lambda tp: first.index(tp[0].split('data-sec="')[1].split('"')[0])
+                       if tp[0].split('data-sec="')[1].split('"')[0] in first else len(first))
+        if tabs:
+            tabs, panels = [t for t, _ in pairs], panels[:len(panels) - len(tabs)] + [p for _, p in pairs]
+        out.append(f'<article class="track" data-track="{n}" data-focus="{focus or ""}">{head}<div class="tsum">{intro}{gallery}</div>'
                    f'<nav class="tabs" role="tablist" aria-label="Parts of the report">{"".join(tabs)}</nav>'
                    f'{"".join(panels)}</article>')
     return "".join(out)
@@ -1109,7 +1487,10 @@ def job(job_id):
         # The page's typography carries the headings (docs/STYLE.md); drop the emoji the .md report uses.
         report_html = re.sub("(<(?:h[23]|summary|strong)>)\\s*[\U0001F300-\U0001FAFF☀-➿⬀-⯿️]+\\s*",
                              r"\1", report_html)
-        report_html = tab_tracks(fold_sections(report_html))
+        own = [r for _, r in tracks_of(job_id)]
+        has_refs = bool(s.get("references"))
+        focus = "admire" if has_refs else "ideas" if len(own) == 1 else None
+        report_html = tab_tracks(fold_sections(report_html), focus)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)
@@ -1118,7 +1499,8 @@ def job(job_id):
         if u and owner == u["id"] else None
     used = accounts.interest(u["id"]) if u and u.get("memory_on") else {}
     style_view = None
-    if s.get("state") == "done" and s.get("mode") == "style":  # these tracks read together, before each on its own
+    # two or more of your own tracks: read together first (what's there in all of them, what none has), then each
+    if s.get("state") == "done" and s.get("mode") != "tags" and len(tracks_of(job_id)) >= 2:
         style_view = style.profile([{"r": r, "name": Path(r["file"]).stem[:60], "session": job_id,
                                      "when": s.get("created") or 0, "title": ""} for _, r in tracks_of(job_id)])
     return render_template("job.html", job_id=job_id, s=s, report_html=report_html, midi_files=midi_files,
@@ -1127,6 +1509,8 @@ def job(job_id):
                            min_tracks=style.MIN_TRACKS,
                            version=ma.CODE_VERSION, saved=owner is not None, demos=demos.DEMOS, teach=teach,
                            creator=is_creator(job_id, s), meta=meta, statuses=accounts.STATUSES,
+                           groups=accounts.my_groups(u["id"]) if meta else [],
+                           shared_groups=accounts.shared_groups(job_id) if meta else set(),
                            projects=accounts.projects(u["id"]) if meta else [],
                            expires=(s.get("created") or s.get("updated") or time.time()) + JOB_TTL_HOURS * 3600,
                            fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"))

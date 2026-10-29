@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Your recordings · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .rhead2 { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: end; justify-content: space-between;
+            padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .rhead2 h1 { margin: 0; }
+  .rhead2 .sub { margin: 6px 0 0; color: var(--muted); font-size: .9rem; }
+  .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn { min-height: 44px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+  .filters input, .filters select { font: inherit; font-size: .9rem; padding: 8px 10px; border: 1px solid var(--line);
+                                    border-radius: var(--radius); background: var(--surface); color: var(--ink); min-height: 40px; }
+  .tagbar { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 12px; }
+  .tagbar a { font-size: .82rem; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none;
+              color: var(--ink); background: var(--surface); }
+  .tagbar a.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .list { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+          overflow: hidden; }
+  .list li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center;
+             padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .list li:last-child { border-bottom: 0; }
+  .list input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  .list .play { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg);
+                color: var(--ink); cursor: pointer; font-size: .9rem; }
+  .list .play[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  .list .name { font-weight: 600; overflow-wrap: anywhere; }
+  .list .meta { font-size: .82rem; color: var(--muted); }
+  .list .tag { display: inline-block; font-size: .76rem; padding: 1px 8px; border-radius: 999px; background: var(--faint);
+               margin: 2px 4px 0 0; }
+  .list .right { font-size: .82rem; text-align: right; }
+  @media (max-width: 600px) { .list li { grid-template-columns: auto auto minmax(0, 1fr); } .list .right { grid-column: 3; text-align: left; } }
+  .bulk { position: sticky; bottom: 0; z-index: 5; margin-top: 12px; padding: 12px; background: var(--surface);
+          border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 -2px 12px rgba(0,0,0,.06); }
+  .bulk .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .bulk .count { font-weight: 600; margin-right: 6px; }
+  .bulk .focus { font-size: .85rem; color: var(--muted); margin: 8px 0 0; }
+  .bulk details { margin-top: 8px; font-size: .9rem; }
+  .bulk details summary { cursor: pointer; }
+  .bulk input.text, .bulk select { font: inherit; font-size: .9rem; padding: 8px 10px; border: 1px solid var(--line);
+                                   border-radius: var(--radius); background: var(--bg); color: var(--ink); min-height: 40px; }
+  .empty { max-width: 40em; }
+  .error { margin: 12px 0; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="rhead2">
+  <div>
+    <p class="eyebrow">Only you can see and play these</p>
+    <h1>Your recordings</h1>
+    <p class="sub">{{ total }} kept · {{ used_mb }} MB · nothing here is analysed until you pick it.</p>
+  </div>
+  <div class="acts">
+    <a class="btn primary" href="{{ url_for('recorder') }}">● Record</a>
+    <form method="post" action="{{ url_for('recordings_upload') }}" enctype="multipart/form-data" id="up">
+      <label class="btn secondary" style="cursor:pointer">Add files
+        <input type="file" name="audio" multiple accept="audio/*,{{ exts.replace(' ', ',') }}"
+               style="position:absolute;width:1px;height:1px;opacity:0" onchange="this.form.submit()"></label>
+    </form>
+  </div>
+</div>
+{% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+
+{% if total %}
+<form class="filters" method="get" role="search">
+  <input name="q" value="{{ f.q }}" placeholder="Search names, notes, tags" aria-label="Search your recordings">
+  {% if projects %}<select name="project" aria-label="Project" onchange="this.form.submit()"><option value="">All projects</option>
+    {% for p in projects %}<option {{ 'selected' if p == f.project }}>{{ p }}</option>{% endfor %}</select>{% endif %}
+  <select name="stage" aria-label="Stage" onchange="this.form.submit()"><option value="">Any stage</option>
+    {% for st in statuses %}<option {{ 'selected' if st == f.stage }}>{{ st }}</option>{% endfor %}</select>
+  {% if f.tag %}<input type="hidden" name="tag" value="{{ f.tag }}">{% endif %}
+  <button class="btn secondary" type="submit">Search</button>
+  {% if f.q or f.project or f.tag or f.stage %}<a href="{{ url_for('recordings_page') }}">Clear</a>{% endif %}
+</form>
+{% if tags %}<nav class="tagbar" aria-label="Filter by tag">
+  {% for t, n in tags[:24] %}<a href="{{ url_for('recordings_page', tag='' if f.tag == t else t, project=f.project, q=f.q, stage=f.stage) }}"
+     class="{{ 'on' if f.tag == t }}" aria-pressed="{{ 'true' if f.tag == t else 'false' }}">{{ t }} · {{ n }}</a>{% endfor %}
+</nav>{% endif %}
+
+<form method="post" action="{{ url_for('recordings_bulk') }}" enctype="multipart/form-data" id="bulk">
+  {% if recs %}
+  <ul class="list">
+    {% for r in recs %}
+    <li>
+      <input type="checkbox" name="rec" value="{{ r.id }}" aria-label="Pick {{ r.title }}">
+      <button type="button" class="play" data-src="{{ url_for('recording_audio', rec_id=r.id) }}"
+              data-start="{{ r.trim_start }}" data-end="{{ r.trim_end if r.trim_end is not none else '' }}"
+              aria-pressed="false" aria-label="Play {{ r.title }}">▶</button>
+      <div>
+        <a class="name" href="{{ url_for('recording_page', rec_id=r.id) }}">{{ r.title }}</a>
+        <div class="meta">{% if r.length %}{{ (r.length // 60)|int }}:{{ '%02d' % (r.length % 60)|int }}{{ ' (trimmed)' if r.trim_start or r.trim_end is not none }} · {% endif %}{{ r.created|datetime }}{% if r.project %} · {{ r.project }}{% endif %}{% if r.status %} · {{ r.status }}{% endif %}</div>
+        {% for t in r.tags %}<span class="tag">{{ t }}</span>{% endfor %}
+      </div>
+      <div class="right">{% if r.result %}<a href="{{ url_for('job', job_id=r.result) }}">Analysed · open</a>{% else %}<span class="muted">Not analysed</span>{% endif %}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Nothing matches. <a href="{{ url_for('recordings_page') }}">Show all</a></p>{% endif %}
+
+  <div class="bulk" id="bulkbar" hidden>
+    <div class="row">
+      <span class="count" id="count" aria-live="polite"></span>
+      <button class="btn primary" type="submit" name="action" value="analyse">Analyse</button>
+      <button class="btn secondary" type="submit" name="action" value="delete"
+              onclick="return confirm('Delete the ticked recordings for good? This can\'t be undone.')">Delete</button>
+    </div>
+    <p class="focus" id="focus"></p>
+    <details><summary>Compare with a song you admire, or add AI ideas</summary>
+      <label class="small">Songs you admire (up to {{ max_refs }}):
+        <input type="file" name="reference" multiple accept="audio/*,{{ exts.replace(' ', ',') }}"></label>
+      {% if ai_label %}<br><label class="small"><input type="checkbox" name="ai" value="1"> AI ideas too ({{ ai_label }})</label>{% endif %}
+    </details>
+    <details><summary>File them in a project, or tag them</summary>
+      <div class="row" style="margin-top:8px">
+        <input class="text" name="project" list="projects" placeholder="Project" aria-label="Project for the ticked recordings">
+        <datalist id="projects">{% for p in projects %}<option value="{{ p }}">{% endfor %}</datalist>
+        <button class="btn secondary" type="submit" name="action" value="project">Set project</button>
+        <input class="text" name="tag" placeholder="Tag" aria-label="Tag to add to the ticked recordings">
+        <button class="btn secondary" type="submit" name="action" value="tag">Add tag</button>
+      </div>
+    </details>
+  </div>
+</form>
+{% else %}
+<div class="empty">
+  <p class="lede">Record ideas, takes and practice right here, or add files from your phone or computer. They're kept as
+    they are: name them, tag them, file them by project, trim them. Analyse just the ones you choose, when you choose.</p>
+  <p class="muted">One recording gets a full analysis with ideas to try. Two or more get read side by side: what's in
+    all of them, and what none of them has yet.</p>
+</div>
+{% endif %}
+<script>
+(function () {
+  const form = document.getElementById('bulk');
+  if (!form) return;
+  const bar = document.getElementById('bulkbar'), count = document.getElementById('count'), focus = document.getElementById('focus');
+  const refs = form.querySelector('input[name=reference]');
+  function update() {
+    const n = form.querySelectorAll('input[name=rec]:checked').length, withRefs = refs && refs.files.length;
+    bar.hidden = n === 0;
+    count.textContent = `${n} ticked`;
+    focus.textContent = n === 1 && !withRefs ? 'One recording: a full analysis, focused on ideas to try.'
+      : n > 1 ? `${n} recordings: read side by side - what's there in all of them, what none of them has, and how they differ.`
+      : 'Next to the song you admire: what you share, and what theirs has that yours doesn\'t.';
+  }
+  form.addEventListener('change', update);
+  update();
+  // play a recording right in the list (the part you kept)
+  let audio = null, btn = null;
+  form.querySelectorAll('button.play').forEach(b => b.addEventListener('click', () => {
+    if (btn === b && audio && !audio.paused) { audio.pause(); return; }
+    if (audio) { audio.pause(); btn.setAttribute('aria-pressed', 'false'); btn.textContent = '▶'; }
+    audio = new Audio(b.dataset.src); btn = b;
+    const end = b.dataset.end ? +b.dataset.end : null;
+    audio.addEventListener('loadedmetadata', () => { audio.currentTime = +b.dataset.start || 0; });
+    audio.addEventListener('timeupdate', () => { if (end !== null && audio.currentTime >= end) audio.pause(); });
+    audio.addEventListener('pause', () => { b.setAttribute('aria-pressed', 'false'); b.textContent = '▶'; });
+    audio.play().then(() => { b.setAttribute('aria-pressed', 'true'); b.textContent = '■'; }).catch(() => {});
+  }));
+})();
+</script>
+{% endblock %}

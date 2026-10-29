@@ -1,7 +1,8 @@
 <!doctype html>
 <html lang="en" data-look="pro">
 <head>
-  <script>try { if (localStorage.getItem('look') === 'studio') document.documentElement.dataset.look = 'studio'; } catch (e) {}</script>
+  <script>try { if (localStorage.getItem('look') === 'studio') document.documentElement.dataset.look = 'studio';
+    if (localStorage.getItem('text') === 'large') document.documentElement.dataset.text = 'large'; } catch (e) {}</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Music Inspiration Analyzer{% endblock %}</title>
@@ -30,7 +31,8 @@
     svg.chart text, svg.spark text { font-family: var(--sans); }
     figure { margin: 0; }
     figcaption { font-size: .78rem; color: var(--muted); margin-top: 6px; line-height: 1.35; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--sans);
+    html[data-text="large"] { font-size: 118.75%; }  /* the "Larger text" switch in the footer */
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1rem/1.55 var(--sans);
            -webkit-font-smoothing: antialiased; }
     ::selection { background: var(--accent); color: var(--on-accent); }
 
@@ -187,17 +189,32 @@
     html[data-look="studio"] .modes { border-color: var(--ink); }
     html[data-look="studio"] .modes input:checked + span, html[data-look="studio"] .chip input:checked + span {
       background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    /* accessibility: a way past the menu, comfortable targets on touch screens, no motion for those who ask */
+    .skip { position: absolute; left: 8px; top: -60px; z-index: 100; background: var(--accent); color: var(--on-accent);
+            padding: 10px 14px; border-radius: var(--radius); text-decoration: none; }
+    .skip:focus { top: 8px; }
+    @media (pointer: coarse) {
+      .btn, .bar nav a, button.hear, .listen label, .tabs .tab, nav.stabs a, .peek .tabs button { min-height: 44px; }
+      .bar nav a, .tabs .tab, nav.stabs a { display: inline-flex; align-items: center; }
+    }
+    @media (max-width: 640px) { .bar nav { overflow-x: auto; max-width: 70vw; scrollbar-width: none; }
+                                .bar nav a { flex: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+    }
     footer .looks button { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
     footer .looks button[aria-pressed="true"] { color: var(--ink); font-weight: 600; text-decoration: underline;
                                                 text-decoration-color: var(--accent); text-underline-offset: 3px; }
   </style>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
+<a class="skip" href="#main">Skip to content</a>
 <header class="bar"><div class="bar-in">
   <a class="brand" href="{{ url_for('index') }}" aria-label="Music Inspiration Analyzer, home"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
     <span class="name">Music Inspiration Analyzer</span></a>
   <nav>
     <a href="{{ url_for('index') }}">Analyse</a>
+    {% if user %}<a href="{{ url_for('recordings_page') }}">Recordings</a>{% else %}<a href="{{ url_for('recorder') }}">Record</a>{% endif %}
     <a href="{{ url_for('style_page') }}">Your style</a>
     <a href="{{ url_for('find') }}">Find music</a>
     {% if user %}
@@ -208,7 +225,7 @@
     {% endif %}
   </nav>
 </div></header>
-<main>
+<main id="main" tabindex="-1">
   {% block content %}{% endblock %}
 </main>
 <div id="tip" role="tooltip"></div>
@@ -440,14 +457,40 @@
   })();
 </script>
 <footer><span>Music Inspiration Analyzer — key, chords, structure, groove and ideas for instrumental tracks ·
+  <a href="{{ url_for('about') }}">About</a> ·
   <a href="{{ url_for('privacy') }}">Privacy: your unreleased music stays yours</a> ·
+  {% if user %}<a href="{{ url_for('groups_page') }}">Groups</a> ·{% endif %}
   <button type="button" class="limits-link" data-open-intro>What the app can't do</button> ·
+  <span class="looks" role="group" aria-label="Text size">Text: <button type="button" data-text="normal">Normal</button> /
+    <button type="button" data-text="large">Larger</button></span> ·
   <span class="looks" role="group" aria-label="Look">Look: <button type="button" data-look="pro">Professional</button> /
     <button type="button" data-look="studio">Studio</button></span></span>
   {% if version %}<span>Version {{ version }}</span>{% endif %}</footer>
 <script>
+  (function () {  // text size: remembered in this browser only
+    const btns = document.querySelectorAll('footer .looks button[data-text]');
+    const now = () => document.documentElement.dataset.text || 'normal';
+    const mark = () => btns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.text === now())));
+    btns.forEach(b => b.addEventListener('click', () => {
+      document.documentElement.dataset.text = b.dataset.text;
+      try { localStorage.setItem('text', b.dataset.text); } catch (e) {}
+      mark();
+    }));
+    mark();
+  })();
+  (function () {  // every tab bar works from the keyboard: arrow keys move between tabs, Home/End jump to the ends
+    document.addEventListener('keydown', e => {
+      const tab = e.target.closest && e.target.closest('[role=tab]');
+      const list = tab && tab.closest('[role=tablist]');
+      if (!list || !['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) return;
+      const tabs = [...list.querySelectorAll('[role=tab]')], i = tabs.indexOf(tab);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1
+        : (i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      e.preventDefault(); tabs[next].focus(); tabs[next].click();
+    });
+  })();
   (function () {  // the look switch: remembered in this browser only
-    const btns = document.querySelectorAll('footer .looks button');
+    const btns = document.querySelectorAll('footer .looks button[data-look]');
     const mark = () => btns.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.look === document.documentElement.dataset.look)));
     btns.forEach(b => b.addEventListener('click', () => {
       document.documentElement.dataset.look = b.dataset.look;

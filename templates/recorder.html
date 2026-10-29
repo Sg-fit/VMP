@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Record · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .rec { max-width: 720px; }
+  .rec .stage { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; margin-top: 12px; }
+  .rec .clock { font-size: clamp(2.4rem, 8vw, 3.6rem); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+  .rec .state { color: var(--muted); font-size: .92rem; margin: 6px 0 14px; min-height: 1.4em; }
+  .rec canvas { width: 100%; height: 72px; display: block; background: var(--faint); border-radius: var(--radius); }
+  .rec .meter { height: 10px; background: var(--faint); border-radius: 999px; overflow: hidden; margin: 10px 0 0; }
+  .rec .meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .06s linear; }
+  .rec .meter.hot i { background: var(--err); }
+  .rec .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .rec .btn { min-height: 44px; }   /* a comfortable target on a phone */
+  .rec .btn.rec-btn { background: var(--err); border-color: var(--err); color: #fff; }
+  .rec audio { width: 100%; margin-top: 14px; }
+  .rec .after { display: none; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .rec .after.on { display: block; }
+  .rec label.field { display: block; font-size: .85rem; font-weight: 600; margin: 0 0 4px; }
+  .rec input.text { width: 100%; font: inherit; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius);
+                    background: var(--bg); color: var(--ink); }
+  .rec .opts { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: .9rem; margin-top: 12px; color: var(--muted); }
+  .rec .opts label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .rec .tips { font-size: .85rem; color: var(--muted); margin-top: 14px; }
+  .rec .tips li { margin: 3px 0; }
+  .rec .error { margin-top: 12px; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="rec">
+  <p class="eyebrow">{{ 'A new take for “' ~ replace.title ~ '”' if replace else 'Record' }}</p>
+  <h1>{{ 'Record a new take' if replace else 'Record right here' }}</h1>
+  <p class="lede">Play or sing into your phone or computer.
+    {% if user %}{{ 'The new take replaces the old audio; its name, tags and notes stay.' if replace else
+    'Keep it in your recordings to name and tag it, and analyse it whenever you like.' }}{% else %}Analyse it straight
+    away, or <a href="{{ url_for('signup', next=request.path) }}">make a free account</a> to keep your recordings.{% endif %}</p>
+
+  <div class="stage" aria-describedby="rec-state">
+    <div class="clock" id="clock" aria-live="off">0:00</div>
+    <p class="state" id="rec-state" role="status" aria-live="polite">Press Record when you're ready.</p>
+    <canvas id="wave" aria-hidden="true"></canvas>
+    <div class="meter" id="meter" aria-hidden="true"><i></i></div>
+    <div class="opts">
+      <label><input type="checkbox" id="countin"> Count me in (3 seconds)</label>
+      <label><input type="checkbox" id="raw" checked> Music mode (no voice-call processing)</label>
+    </div>
+    <div class="buttons">
+      <button type="button" class="btn rec-btn" id="go">● Record</button>
+      <button type="button" class="btn secondary" id="pause" disabled>Pause</button>
+      <button type="button" class="btn secondary" id="stop" disabled>Stop</button>
+    </div>
+    <div class="error" id="err" role="alert" hidden></div>
+
+    <div class="after" id="after">
+      <audio id="play" controls preload="metadata"></audio>
+      {% if user %}
+      {% if not replace %}
+      <label class="field" for="title" style="margin-top:12px">Name</label>
+      <input class="text" id="title" maxlength="120" placeholder="e.g. Chorus idea, slower">
+      {% endif %}
+      <div class="buttons">
+        <button type="button" class="btn primary" id="keep">{{ 'Use this take' if replace else 'Keep it in my recordings' }}</button>
+        {% if not replace %}<button type="button" class="btn secondary" id="analyse">Analyse it now</button>{% endif %}
+        <button type="button" class="btn secondary" id="again">Record again</button>
+      </div>
+      <p class="note muted small" style="margin:8px 0 0">Kept recordings stay on our server until you delete them, and only you
+        can play them. Nothing is analysed until you pick it.</p>
+      {% else %}
+      <div class="buttons">
+        <button type="button" class="btn primary" id="analyse">Analyse it now</button>
+        <button type="button" class="btn secondary" id="again">Record again</button>
+        <a class="btn secondary" id="download" download>Save it to this device</a>
+      </div>
+      <p class="note muted small" style="margin:8px 0 0">Analysing uploads it once; we delete the audio as soon as it's analysed.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <ul class="tips">
+    <li>Phone recordings lose the lowest notes; a little distance from the instrument helps.</li>
+    <li>Headphones stop a backing track from leaking into the microphone.</li>
+    <li>On an iPhone, allow the microphone when asked. If you said no, change it in Settings → Safari → Microphone.</li>
+  </ul>
+</div>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const go = $('go'), pause = $('pause'), stop = $('stop'), state = $('rec-state'), clock = $('clock');
+  const canvas = $('wave'), meter = $('meter'), after = $('after'), play = $('play'), err = $('err');
+  let stream, recorder, chunks = [], blob, ctx, analyser, raf, wake, startedAt = 0, elapsed = 0, levels = [];
+  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const say = t => { state.textContent = t; };
+  const fail = t => { err.textContent = t; err.hidden = false; };
+  // the first type this browser can record: Opus in WebM (Chrome, Firefox, Android), AAC in MP4 (Safari, iPhone)
+  const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus', 'audio/webm']
+    .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+  const ext = type.includes('mp4') || type.includes('aac') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
+
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    go.disabled = true;
+    fail("This browser can't record audio. Try Safari on iPhone (iOS 14.3 or later), or Chrome, Firefox or Edge.");
+  }
+
+  function draw() {  // the level meter, and a running picture of the take
+    const buf = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buf);
+    let peak = 0; for (const v of buf) peak = Math.max(peak, Math.abs(v));
+    meter.querySelector('i').style.width = Math.min(100, peak * 120) + '%';
+    meter.classList.toggle('hot', peak > 0.95);
+    if (recorder && recorder.state === 'recording') {
+      levels.push(peak);
+      const now = elapsed + (performance.now() - startedAt) / 1000;
+      clock.textContent = fmt(now);
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio, h = canvas.height = 72 * devicePixelRatio;
+      const g = canvas.getContext('2d'); g.fillStyle = getComputedStyle(document.body).color;
+      const step = Math.max(1, Math.ceil(levels.length / (w / 2)));
+      for (let x = 0, i = 0; i < levels.length; x += 2, i += step) {
+        const v = Math.max(...levels.slice(i, i + step)), bh = Math.max(1, v * h);
+        g.fillRect(x, (h - bh) / 2, 1.2, bh);
+      }
+    }
+    raf = requestAnimationFrame(draw);
+  }
+
+  async function start() {
+    err.hidden = true;
+    try {
+      const raw = $('raw').checked;  // phone call processing (echo cancelling, noise suppression, auto gain) mangles music
+      stream = await navigator.mediaDevices.getUserMedia({audio: raw ? {echoCancellation: false, noiseSuppression: false,
+                                                                         autoGainControl: false} : true});
+    } catch (e) {
+      fail("We couldn't use the microphone. Allow it for this site (on an iPhone: Settings → Safari → Microphone), then try again.");
+      return;
+    }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') await ctx.resume();
+    analyser = ctx.createAnalyser(); analyser.fftSize = 2048;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    cancelAnimationFrame(raf); draw();
+    if ($('countin').checked) {
+      for (let n = 3; n > 0; n--) { say(`Starting in ${n}…`); await new Promise(r => setTimeout(r, 1000)); }
+    }
+    try { wake = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; } catch (e) { wake = null; }
+    chunks = []; levels = []; elapsed = 0;
+    recorder = new MediaRecorder(stream, type ? {mimeType: type} : undefined);
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = finished;
+    recorder.start(1000);
+    startedAt = performance.now();
+    say('Recording…');
+    go.disabled = true; pause.disabled = false; stop.disabled = false; after.classList.remove('on');
+  }
+
+  function finished() {
+    stream.getTracks().forEach(t => t.stop());
+    if (wake) { wake.release().catch(() => {}); wake = null; }
+    blob = new Blob(chunks, {type: recorder.mimeType || type || 'audio/webm'});
+    play.src = URL.createObjectURL(blob);
+    const dl = $('download'); if (dl) { dl.href = play.src; dl.download = `recording.${ext}`; }
+    say(`Recorded ${fmt(elapsed)}. Listen back, then keep it or record again.`);
+    go.disabled = false; go.textContent = '● Record again'; pause.disabled = true; stop.disabled = true;
+    after.classList.add('on');
+  }
+
+  go.addEventListener('click', start);
+  pause.addEventListener('click', () => {
+    if (recorder.state === 'recording') {
+      recorder.pause(); elapsed += (performance.now() - startedAt) / 1000; pause.textContent = 'Resume'; say('Paused.');
+    } else {
+      recorder.resume(); startedAt = performance.now(); pause.textContent = 'Pause'; say('Recording…');
+    }
+  });
+  stop.addEventListener('click', () => {
+    if (recorder.state === 'recording') elapsed += (performance.now() - startedAt) / 1000;
+    recorder.stop(); pause.textContent = 'Pause';
+  });
+  const again = $('again'); if (again) again.addEventListener('click', start);
+
+  async function send(url, field, extra) {
+    const fd = new FormData();
+    fd.append(field, blob, `recording.${ext}`);
+    Object.entries(extra).forEach(([k, v]) => fd.append(k, v));
+    say('Uploading…');
+    try {
+      const r = await fetch(url, {method: 'POST', body: fd, headers: {Accept: 'application/json'}});
+      if (r.redirected) { location.href = r.url; return; }
+      const j = await r.json().catch(() => ({}));
+      if (j.url) { location.href = j.url; return; }
+      fail(j.error || "That didn't go through. Try again in a moment.");
+    } catch (e) { fail("That didn't go through: check your connection and try again."); }
+  }
+  const keep = $('keep');
+  if (keep) keep.addEventListener('click', () => {
+    {% if replace %}
+    send("{{ url_for('recording_replace', rec_id=replace.id) }}", 'audio', {json: '1', duration: elapsed.toFixed(2)});
+    {% else %}
+    send("{{ url_for('recordings_upload') }}", 'audio',
+         {json: '1', source: 'recorded', duration: elapsed.toFixed(2), title: ($('title') || {}).value || ''});
+    {% endif %}
+  });
+  const an = $('analyse');
+  if (an) an.addEventListener('click', () => send("{{ url_for('analyze') }}", 'tracks', {mode: 'musician', ai: '1'}));
+})();
+</script>
+{% endblock %}
