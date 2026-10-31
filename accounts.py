@@ -188,7 +188,7 @@ def delete_memory_item(user_id, table, item_id):
 # ---------------------------------------------------------------- which parts of the report you use
 # Only the section's name and three counts are kept - never which track, when, or for how long. The report opens
 # the parts you use most and lists them first in its "jump to" bar.
-INTEREST_SECTIONS = ("admire", "harmony", "structure", "energy", "instruments", "melody", "dna", "groove",
+INTEREST_SECTIONS = ("admire", "picture", "harmony", "structure", "energy", "instruments", "melody", "dna", "groove",
                      "producer", "past", "gaps", "ideas", "ai", "sheet", "midi")
 INTEREST_KINDS = {"open": "opens", "read": "reads", "chart": "charts"}  # unfolded it / read it / explored its charts
 # What each kind says about interest: unfolding a section's details is a deliberate choice, exploring its charts

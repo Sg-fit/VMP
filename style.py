@@ -18,6 +18,7 @@ from collections import Counter
 
 import charts
 import musicanalyze as ma
+import portrait
 
 MIN_TRACKS = 3          # a habit needs at least three examples: with two, any shared value may be a coincidence
 MAJORITY = 2 / 3        # a choice two thirds of the tracks make is a habit
@@ -490,6 +491,8 @@ def pictures(p):
             "vocab": charts.hbars([(k, n, f"{k}: in {n} of {len(rows)} tracks, {100 * s:.0f}% of all chord time")
                                    for k, n, s in p["vocabulary"][:10]], width=420, unit=" tracks", top=len(rows),
                                   label="Chords you use, as numerals, by how many tracks use them")}
+    # every track as its picture, side by side: the same drawing rules, so habits show as shared colours and shapes
+    pics["portraits"] = [(t["name"], svg) for t in rows if (svg := portrait.svg(t["r"], small=True, width=130))]
     if len(p["sessions"]) >= 2:
         whens = [t["when"] for t in rows]
         for key, label in (("tempo", "Tempo over time"), ("energy", "Energy over time")):

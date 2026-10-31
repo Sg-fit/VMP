@@ -1348,13 +1348,13 @@ def analyze():
 
 
 # Each report section's key (for folding and for remembering which parts a musician uses), by a word of its title
-SECTION_WORDS = [("admire", "you admire"), ("harmony", "Harmony"), ("structure", "Structure"),
+SECTION_WORDS = [("admire", "you admire"), ("picture", "Picture of the track"), ("harmony", "Harmony"), ("structure", "Structure"),
                  ("energy", "Energy"), ("instruments", "Instruments"), ("melody", "Melody"), ("dna", "Shared DNA"),
                  ("groove", "Groove"), ("producer", "Producer"), ("past", "earlier tracks"),
                  ("gaps", "what's missing"), ("ideas", "Ideas to try"), ("ai", "AI brainstorm"),
                  ("sheet", "Sheet music"), ("midi", "MIDI")]
 assert {k for k, _ in SECTION_WORDS} == set(accounts.INTEREST_SECTIONS)
-SECTION_NAMES = {"admire": "Songs you admire", "harmony": "Harmony", "structure": "Structure", "energy": "Energy & mood",
+SECTION_NAMES = {"admire": "Songs you admire", "picture": "Picture", "harmony": "Harmony", "structure": "Structure", "energy": "Energy & mood",
                  "instruments": "Instruments", "melody": "Melody", "dna": "Shared DNA", "groove": "Groove & sound",
                  "producer": "Producer's view", "past": "Earlier tracks", "gaps": "What's missing", "ideas": "Ideas",
                  "ai": "AI ideas", "sheet": "Sheet music", "midi": "MIDI"}
@@ -1453,6 +1453,8 @@ def tab_tracks(report_html, focus=None):
         gallery = (f'<div class="gallery" aria-label="Every picture in this report"><p class="eyebrow">All the '
                    f'pictures · click one to open its part</p><div class="thumbs">{"".join(thumbs)}</div></div>'
                    if thumbs else "")
+        # a summary picture that opens its own part (musicanalyze.glance marks it with the section's key)
+        intro = re.sub(r'data-go-sec="(\w+)"', lambda m: f'data-go="t{n}-{m.group(1)}"', intro)
         first = FOCUS_ORDER.get(focus, [])
         pairs = sorted(zip(tabs, panels[-len(tabs):] if tabs else []),
                        key=lambda tp: first.index(tp[0].split('data-sec="')[1].split('"')[0])

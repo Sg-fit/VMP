@@ -46,6 +46,7 @@ import gaps as gapmap
 import inspiration
 import instruments
 import notation
+import portrait
 
 # What phones and browsers make, besides the usual files: iPhone Voice Memos (.m4a, and .qta for iOS 18's layered
 # recordings), recordings made in the browser (.mp4 on iPhone/Safari, .webm/.ogg elsewhere), and Apple's .caf/.aiff.
@@ -1635,7 +1636,7 @@ def _analyze_audio(path, light=False):
 
 
 # Bump when the analysis changes, so cached results from older code aren't reused.
-ANALYSIS_VERSION = "2026-10-26a"
+ANALYSIS_VERSION = "2026-10-31a"
 
 
 def _cache_key(path, light=False):
@@ -2154,6 +2155,9 @@ def check_melody(chroma, bounds, pcs, key):
     return {"notes": notes, "weak_notes": weak, "order_beats_shuffles_pct": order_pct, "verdict": verdict}
 
 
+TOP_EVENTS = 1500  # note changes kept: a 16th-note line at 120 BPM for over three minutes; bounds the results file
+
+
 def top_line_summary(notes, grid, chords, key):
     """Describe the loudest pitched line, and say honestly when it's just following the chords."""
     voiced = [(grid[i], n) for i, n in enumerate(notes) if n is not None]
@@ -2179,6 +2183,9 @@ def top_line_summary(notes, grid, chords, key):
         "main_notes": [{"note": k, "pct": round(100 * v / len(voiced))} for k, v in pcs.most_common(5)],
         "note_pct": {k: round(100 * v / len(voiced), 1) for k, v in pcs.items()},
         "motifs": motifs,
+        # each new note and when it starts (for the track's picture); a held note is one event
+        "events": [[round(float(grid[i]), 2), int(n)] for i, n in enumerate(notes)
+                   if n is not None and (i == 0 or n != notes[i - 1])][:TOP_EVENTS],
     }
 
 
@@ -3035,6 +3042,7 @@ Below is an automatic analysis of the track. Reply with ONLY this JSON (no other
  "mood": {{"now": "<the mood in a few words, from the data>", "directions": [{{"towards": "<a mood>", "how": "<under 20 words: which levers - chords, the colour note, tempo, register, rhythm density, brightness>"}}]}},
  "ideas": [{{"area": "<harmony|melody|rhythm|arrangement|sound|structure>", "idea": "<under 25 words, specific: cite a time, section, chord or note>"}}],
  "alt_progressions": [{{"name": "<short>", "chords": ["<chord>", "..."], "why": "<one short sentence>"}}],
+ "picture": [{{"see": "<under 20 words: a pattern in the PICTURE - a colour, the petal's shape, an empty or crowded part - with its time>", "try": "<under 20 words: what it suggests trying>"}}],
  "title_ideas": ["<title>", "<title>", "<title>"]}}
 
 Rules: one gap_idea for each GAP listed below, in the same order, using its id (none if there are no GAPS); each
@@ -3044,6 +3052,8 @@ Then 2 more ideas on anything else; no generic advice.
 At most one rhythm idea and one sound/production idea; favour harmony, melody, arrangement and structure.
 Only cite times that appear in the analysis (chord timeline, section starts, key moments) - never invent one.
 When explaining a chord, be musically exact (e.g. a dominant 7th leads to the chord a fifth below it).
+picture: exactly 2 items, each about a different layer of the PICTURE (the track drawn as one round picture),
+saying what the eye would notice and what it suggests; cite only times the PICTURE gives.
 Titles: evocative but specific to this track; avoid stock words like "Midnight", "Echo", "Pulse".
 2 alt_progressions in {key}, 3-6 chords each (names like Bm, F#7, Gmaj7), preferring chords the track doesn't use.
 If a blues Form is given (8-, 12- or 16-bar), the alt_progressions must keep that form: exactly one chord per bar,
@@ -3168,6 +3178,10 @@ def ai_summary(r):
         lines.append("Scale degrees (share of chord time as root / of the melody): " + "; ".join(
             f"{x['degree']} {x['note']}{' (colour note)' if x['colour'] else ''} {x['harmony']:.0%}"
             + (f" / {x['melody']:.0%}" if x["melody"] is not None else "") for x in g["degrees"]) + ".")
+    seen = portrait.reading(r)
+    if seen:
+        lines.append("PICTURE (the track drawn as one round picture; time runs clockwise; what it shows):\n"
+                     + "\n".join(f"- {layer}: {line}" for layer, line in seen))
     if g.get("gaps"):
         lines.append("GAPS (what's missing, by id):\n" + "\n".join(gapmap.ai_lines(g)))
     if r.get("memory_profile"):
@@ -3186,6 +3200,7 @@ def _key_moments(r):
         out.append((snd["biggest_build"]["time"], "biggest build"))
     if snd.get("quietest_moment"):
         out.append((snd["quietest_moment"], "quietest moment"))
+    out += [(fmt_time(t), "loudness swell") for t in portrait.swells(r)]  # the picture's widest petals
     return sorted(out, key=lambda x: _to_sec(x[0]))
 
 
@@ -3482,6 +3497,8 @@ def ai_brainstorm(r, llm):
                               "chords": [_clean(c) for c in p["chords"]]}
                              for p in obj.get("alt_progressions", [])
                              if isinstance(p, dict) and isinstance(p.get("chords"), list)],
+        "picture": [{"see": _check_times(_clean(p["see"]), r), "try": _check_times(_clean(p.get("try") or ""), r)}
+                    for p in obj.get("picture") or [] if isinstance(p, dict) and p.get("see")][:3],
         "title_ideas": [_clean(t) for t in obj.get("title_ideas", [])][:5],
         "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
                        for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
@@ -3952,6 +3969,7 @@ def track_report(r, focus=None):
         L += where_to_start(r)
     L += glance(r)
     L += comparison_report(r)  # what the musician came for, when they brought songs they admire
+    L += picture_report(r)
 
     # Harmony
     conf = r["key_confidence"]
@@ -4667,6 +4685,26 @@ def _figure(svg, caption):
     return f'<figure>{svg}<figcaption>{html.escape(caption)}</figcaption></figure>' if svg else ""
 
 
+def picture_report(r):
+    """The whole track as one picture (portrait.py): what it shows, the AI's reading of it, and how it's drawn."""
+    pic = portrait.svg(r)
+    if not pic:
+        return []
+    L = ["", "### 🎨 Picture of the track", "", "_The whole track in one picture, drawn from what we measured. Time "
+         "runs clockwise from the top; hover any part to see what it is._", "", f'<figure class="portrait-fig">{pic}</figure>',
+         "", "**What the picture shows**", ""]
+    L += [f"- **{layer}:** {line}" for layer, line in portrait.reading(r)]
+    ai = r.get("ai") or {}
+    if ai.get("picture"):
+        L += ["", "**The AI's reading of the picture**", "",
+              "_It reads the picture from the values that draw it (never your audio)._", ""]
+        L += [f"- {p['see']}" + (f" **Try:** {p['try']}" if p.get("try") else "") for p in ai["picture"]]
+    elif ai.get("pending"):
+        L += ["", "_⏳ The AI is reading the picture. Its take will show up here in a moment._"]
+    L += ["", MORE, "", "**How it's drawn**", ""] + [f"- **{k}:** {v}" for k, v in portrait.LEGEND] + [""]
+    return L
+
+
 def glance(r):
     """The track at a glance, as pictures: its key on the Camelot wheel, its tempo on a ruler, its sections on the
     energy/mood map, and its loudness against Spotify's level. One HTML block (no blank lines inside)."""
@@ -4674,7 +4712,12 @@ def glance(r):
     genre = (r.get("context") or {}).get("genre_key")
     usual = GENRES[genre][1] if genre in GENRES else None
     secs = (r.get("feel") or {}).get("sections") or []
+    pic = portrait.svg(r, small=True)
     figs = [
+        # the whole track as one picture; a click opens its own part of the report (tab_tracks points data-go-sec)
+        f'<figure><button type="button" class="thumb pic" data-go-sec="picture" aria-label="Open the picture of '
+        f'the track">{pic}</button><figcaption>The whole track as a picture · click to open</figcaption></figure>'
+        if pic else "",
         _figure(charts.camelot_wheel(CAMELOT_NAMES, highlight=r.get("camelot"), size=170,
                                      label=f"Key {r['key']}, {r['camelot']} on the Camelot wheel"),
                 f"Key {r['key']} · tinted keys mix smoothly with it"),
@@ -4904,7 +4947,8 @@ DEFAULT_CACHE_DIR = Path(os.environ.get("MUSIC_CACHE_DIR", Path.home() / ".cache
 def _code_version():
     import hashlib
     h = hashlib.sha256()
-    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py", "charts.py", "gaps.py"):
+    for name in ("musicanalyze.py", "instruments.py", "inspiration.py", "notation.py", "electronic.py", "charts.py", "gaps.py",
+                 "portrait.py"):
         try:
             h.update(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
         except OSError:

@@ -1181,6 +1181,10 @@ def style_web_checks(base, files):
     page = cara.get(f"{base}/jobs/{job}", timeout=20).text
     mine = cara.get(base + "/style", timeout=20)
     theirs = words(stranger.get(base + "/style", timeout=20).text)
+    strip = page[page.find('<div class="portraits">'):]
+    check("web", "a style upload shows every track as its picture, side by side, and each track's own picture",
+          strip[:strip.find("</div>")].count('<svg class="portrait"') == 3 and 'id="t1-picture"' in page
+          and 'data-go="t3-picture"' in page)
     check("web", "a style upload reads its tracks together, then shows each on its own",
           "Your style in these 3 tracks" in page and 'id="st-there"' in page and "Each track on its own" in page
           and "Harmony" in page)
@@ -2313,6 +2317,89 @@ def report_ui_checks(tmp):
           and "Vocals" not in lu, re.sub(r"<[^>]+>", " ", lu)[:200])
 
 
+def picture_checks(tmp):
+    """The track's picture: each layer drawn by its rule (chords coloured round the circle of fifths, the petal by
+    loudness and tinted by mood, the notes, the key in the middle); its reading says only what those values show,
+    and the AI is given it, with the times it may cite."""
+    import markdown
+    import musicanalyze as ma
+    import portrait
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import app as webapp
+    print("\n== Picture of the track ==")
+    P = portrait
+    check("picture", "colours go round the circle of fifths (C red, G next to it, F# opposite); a chord's root and "
+          "kind are read from its name",
+          (P.hue(0), P.hue(7), P.hue(5), P.hue(6)) == (0, 30, 330, 180)
+          and (P.fifths_steps(7, 0), P.fifths_steps(9, 0), P.fifths_steps(6, 0)) == (1, 3, 6)
+          and P.parse_chord("F#m7") == (6, "minor") and P.parse_chord("D5") == (2, "power")
+          and P.parse_chord("Bbmaj7") == (10, "major") and P.parse_chord("Bdim") == (11, "dim")
+          and P.parse_chord("N") == (None, None))
+
+    # known answer, generated audio: G D Em C in G major, so three of the four chords sit within one step of home
+    r = ma.analyze(write(Path(tmp) / "pic_song.wav", song([("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100, 4,
+                                                          loops=6)), cache_dir=Path(tmp) / "pic_cache")
+    pic, small = P.svg(r), P.svg(r, small=True)
+    said = dict(P.reading(r))
+    arcs = re.findall(r'<path d="[^"]+" fill="[^"]+" stroke="#151b26" stroke-width=".6" data-t0="([\d.]+)"', pic)
+    ev = (r.get("top_line") or {}).get("events") or []
+    check("picture", "the chords' ring has one arc per chord, each at its own second, and the key in the middle",
+          r["key"] == "G major" and len(arcs) == len(r["chord_timeline"])
+          and [float(a) for a in arcs] == [round(c["start"], 2) for c in r["chord_timeline"]]
+          and 'data-pdur="' in pic and ">G</text>" in pic, f"{r['key']}; {len(arcs)} arcs, {len(r['chord_timeline'])} chords")
+    check("picture", "its reading: the ring stays near home (G, D, C), with Em, the furthest, three steps round",
+          "stays close" in said.get("Chords", "") and "Em" in said.get("Chords", "")
+          and "3 steps away" in said.get("Chords", "") and "outside the key" not in said.get("Chords", ""),
+          said.get("Chords"))
+    check("picture", "the tune's notes are kept with their times, so the picture can place them",
+          len(ev) > 20 and all(0 <= t <= r["duration_sec"] for t, _ in ev)
+          and all(a[0] <= b[0] for a, b in zip(ev, ev[1:])) and "The tune's dots" in said.get("Notes", ""),
+          f"{len(ev)} notes")
+    check("picture", "the small summary copy is a picture only: no tooltips, no timeline links, hidden from readers",
+          small and "<title>" not in small and "data-t0" not in small and 'aria-hidden="true"' in small
+          and "<title>" in pic)
+    check("picture", "nothing to draw, nothing drawn (no length, or an unreadable file)",
+          P.svg({"duration_sec": 0}) == "" and P.reading({"duration_sec": 0}) == []
+          and P.svg({"file": "x", "error": "unreadable", "duration_sec": 10}) == "")
+
+    # negative cases on made-up values: a far chord off the key's scale is named; a swell at the very start isn't one
+    fake = {"duration_sec": 120.0, "key": "C major", "key_index": 0, "scale_notes": ["C", "D", "E", "F", "G", "A", "B"],
+            "chord_timeline": [{"start": 0.0, "chord": "C"}, {"start": 40.0, "chord": "F#"}, {"start": 80.0, "chord": "C"}],
+            "sound": {"energy_line": [1.0] * 4 + [.3] * 40 + [.95] * 4 + [.3] * 72}, "sections": [],
+            "feel": {"sections": [{"label": "A", "start": 0, "end": 60, "mood": "calm, peaceful"},
+                                  {"label": "B", "start": 60, "end": 120, "valence": 70, "arousal": 70}]}}
+    said = dict(P.reading(fake))
+    check("picture", "a chord far round the wheel, on a root outside the key, is named; one near home isn't",
+          "travels" in said["Chords"] and "F# (first at 0:40), 6 steps away, on a root from outside" in said["Chords"]
+          and "furthest" not in dict(P.reading({**fake, "chord_timeline": fake["chord_timeline"][:1]}))["Chords"],
+          said["Chords"])
+    check("picture", "the petal's swell is found where the track is loudest, not at its first seconds",
+          [round(t, 1) for t in P.swells(fake)] == [45.5], str(P.swells(fake)))
+    check("picture", "each section's tint is the mood the analysis named (worked out from energy and positivity "
+          "when not given)", said["Mood"] == "The tints: teal (calm, peaceful) in A; gold (uplifting, energetic) in B.",
+          said["Mood"])
+
+    # in the report: its own part, opened from the summary; the AI is told what the picture shows
+    page = webapp.tab_tracks(webapp.fold_sections(markdown.markdown(
+        "\n".join(ma.track_report(r)), extensions=["tables", "fenced_code", "md_in_html"])))
+    check("picture", "the report gives the picture its own part, and its small copy in the summary opens it",
+          'id="t1-picture"' in page and 'data-go="t1-picture"' in page and "data-go-sec" not in page
+          and "What the picture shows" in page and "How it's drawn" in page)
+    summary = ma.ai_summary(r)
+    swell = [ma.fmt_time(t) for t in P.swells(r)]
+    check("picture", "the AI gets the picture's reading, and may cite the swells it names without being flagged",
+          "PICTURE (" in summary and all(line in summary for _, line in P.reading(r))
+          and all("⚠" not in ma._check_times(f"The petal swells at {t}", r) for t in swell)
+          and "⚠" in ma._check_times("The petal swells at 9:59", r), f"swells {swell}")
+    reply = json.dumps({"vibe": "x", "ideas": [], "alt_progressions": [], "title_ideas": [],
+                        "picture": [{"see": "The ring glows warm.", "try": "Add a cool colour at 9:59."},
+                                    {"try": "no observation"}]})
+    ai = ma.ai_brainstorm(r, lambda prompt, info: reply)
+    check("picture", "the AI's reading of the picture is kept, fact-checked like its ideas; an empty one is dropped",
+          len(ai["picture"]) == 1 and ai["picture"][0]["see"] == "The ring glows warm." and "⚠" in ai["picture"][0]["try"],
+          str(ai.get("picture")))
+
+
 def style_checks(tmp):
     """Your style across tracks and sessions: habits only where the tracks agree (and never from too few), the same
     loop counted in any key, the outlier found, drift between sessions, and unexplored ground."""
@@ -2642,6 +2729,10 @@ def main():
             report_ui_checks(tmp)
         except Exception:
             check("report", "report UI checks ran", False, traceback.format_exc(limit=3))
+        try:
+            picture_checks(tmp)
+        except Exception:
+            check("picture", "picture checks ran", False, traceback.format_exc(limit=3))
         try:
             misread_checks(tmp)
         except Exception:

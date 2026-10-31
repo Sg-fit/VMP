@@ -7,6 +7,8 @@
   @media (max-width: 860px) { .style .sum { grid-template-columns: 1fr; } }
   .style .side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .style figure { margin: 0; } .style figure svg { margin: 0 auto; }
+  .style .portraits { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin: 6px 0 14px; }
+  .style .portraits figcaption { text-align: center; font-size: .8rem; overflow-wrap: anywhere; }
   .style .habits { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
   .style .habits li { display: flex; gap: 10px; align-items: baseline; font-size: .92rem; }
   .style .habits .area { flex: none; min-width: 9em; font-size: .85rem; font-weight: 600;
@@ -124,6 +126,13 @@
 
   <section class="spanel" id="st-tracks" role="tabpanel" aria-label="Each track">
     <h3>Each track</h3>
+    {% if pics.portraits %}
+    <p class="note">Each track as a picture, drawn by the same rules: chords round the rim (coloured by the circle of
+      fifths), loudness as the petal (tinted by mood), the key in the middle. Shared habits show as shared colours and
+      shapes.</p>
+    <div class="portraits">{% for name, svg in pics.portraits %}<figure data-trk="{{ loop.index0 }}">{{ svg|safe }}
+      <figcaption>{{ loop.index }}. {{ name }}</figcaption></figure>{% endfor %}</div>
+    {% endif %}
     <table>
       <tr><th>#</th><th>Track</th><th>When</th><th>Key</th><th>Tempo</th><th>Energy · mood</th><th>Away from your usual</th></tr>
       {% for t in v.rows %}
