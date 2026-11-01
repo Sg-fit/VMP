@@ -30,7 +30,7 @@ RUN if [ "$WITH_STYLE_MODEL" = "1" ]; then \
       || echo "!! style model not installed - tags will come from measurements and names only"; \
     fi
 
-COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py memory.py electronic.py charts.py trends.py gaps.py crosscompare.py style.py ./
+COPY musicanalyze.py instruments.py inspiration.py notation.py accounts.py job_runner.py app.py selftest.py discover.py demos.py memory.py electronic.py charts.py trends.py gaps.py crosscompare.py style.py portrait.py ./
 COPY templates ./templates
 
 RUN useradd --create-home appuser && mkdir -p /data && chown appuser /data

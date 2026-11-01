@@ -632,6 +632,48 @@ def ai_checks(res):
 
 # ---------------------------------------------------------------- unit checks (logic that has bitten us)
 
+def missing_from_image(dockerfile_text, folder, entry=("app", "job_runner", "selftest")):
+    """The app's own modules (everything app.py, the worker and the self-test import, followed through) that the
+    Dockerfile's COPY lines leave out: the image would start without them and fail on its first import."""
+    import ast
+    folder = Path(folder)
+    local = {p.stem for p in folder.glob("*.py")}
+    copied = {Path(w).stem for line in dockerfile_text.splitlines() if line.startswith("COPY")
+              for w in line.split()[1:-1] if w.endswith(".py")}
+    need, todo = set(), list(entry)
+    while todo:
+        m = todo.pop()
+        if m in need or m not in local:
+            continue
+        need.add(m)
+        for n in ast.walk(ast.parse((folder / f"{m}.py").read_text(encoding="utf-8"))):
+            names = ([a.name for a in n.names] if isinstance(n, ast.Import)
+                     else [n.module] if isinstance(n, ast.ImportFrom) and n.module else [])
+            todo += [x.split(".")[0] for x in names]
+    return sorted(need - copied)
+
+
+def image_checks(tmp):
+    """Every module the app imports is copied into the Docker image (a new file left off the COPY list starts
+    the site with an import error, which shows as a 502)."""
+    here = Path(__file__).resolve().parent
+    if not (here / "Dockerfile").exists():
+        return  # running inside the image: there is no Dockerfile to check
+    print("\n== Docker image ==")
+    fake = Path(tmp) / "image_fake"
+    fake.mkdir(exist_ok=True)
+    (fake / "app.py").write_text("import os\nimport helper\nfrom pkg_extra import thing\n", encoding="utf-8")
+    (fake / "helper.py").write_text("from deep import x\n", encoding="utf-8")
+    (fake / "deep.py").write_text("", encoding="utf-8")
+    (fake / "unused.py").write_text("", encoding="utf-8")
+    check("image", "the image check finds a module imported two steps down and left off COPY, and nothing unused",
+          missing_from_image("COPY app.py helper.py ./\n", fake, ("app",)) == ["deep"]
+          and missing_from_image("COPY app.py helper.py deep.py ./\n", fake, ("app",)) == [])
+    missing = missing_from_image((here / "Dockerfile").read_text(encoding="utf-8"), here)
+    check("image", "every module the app imports is copied into the Docker image", not missing,
+          "add to the Dockerfile's COPY line: " + ", ".join(f"{m}.py" for m in missing) if missing else "")
+
+
 def unit_checks():
     import inspiration as ins
     import musicanalyze as ma
@@ -2684,6 +2726,10 @@ def main():
     print(f"Music Inspiration Analyzer self-test — version {ma.CODE_VERSION}")
     tmp = tempfile.mkdtemp(prefix="music-selftest-")
     try:
+        try:
+            image_checks(tmp)
+        except Exception:
+            check("image", "image checks ran", False, traceback.format_exc(limit=3))
         try:
             res = analysis_checks(tmp)
         except Exception:
