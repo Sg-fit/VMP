@@ -46,6 +46,7 @@ import accounts
 import charts
 import crosscompare
 import demos
+import icons
 import trends
 import memory
 import musicanalyze as ma
@@ -327,7 +328,7 @@ def intro_seen():
     return resp
 
 
-app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES)
+app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES, icon=icons.icon)
 
 
 PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style", "/recordings", "/groups")
@@ -1365,6 +1366,24 @@ def section_key(title):
     return next((k for k, w in SECTION_WORDS if w.lower() in t), None)
 
 
+_IDEA_ITEM = r"<li><strong>([a-z]+):</strong>((?:(?!<li[ >]|</li>).)*)</li>"  # one item, never running into the next
+IDEA_LIST = re.compile(rf"<ul>\s*((?:{_IDEA_ITEM}\s*)+)</ul>", re.S)
+
+
+def idea_cards(report_html):
+    """A list of ideas (every item led by its area, "harmony:", "drums:", as the analysis writes them) shown as cards,
+    each with its area's icon. Lists of facts ("Key: G major") and any list with an item outside the idea areas
+    stay as they are."""
+    def cards(m):
+        items = re.findall(_IDEA_ITEM, m.group(1), re.S)
+        if len(items) < 2 or any(area not in icons.AREA_ICONS for area, _ in items):
+            return m.group(0)
+        return '<ul class="idea-cards">' + "".join(
+            f'<li><span class="ico-badge">{icons.icon(icons.AREA_ICONS[area], 22)}</span>'
+            f'<div><strong>{area}:</strong>{text}</div></li>' for area, text in items) + "</ul>"
+    return IDEA_LIST.sub(cards, report_html)
+
+
 def fold_sections(report_html):
     """Each report section (an <h3> and what follows it, up to the next heading) becomes a <section> with its key.
     Where the report marked the gist (<!--more-->, musicanalyze.MORE), what follows the mark goes into a folded
@@ -1492,7 +1511,7 @@ def job(job_id):
         own = [r for _, r in tracks_of(job_id)]
         has_refs = bool(s.get("references"))
         focus = "admire" if has_refs else "ideas" if len(own) == 1 else None
-        report_html = tab_tracks(fold_sections(report_html), focus)
+        report_html = tab_tracks(fold_sections(idea_cards(report_html)), focus)
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)

@@ -12,7 +12,10 @@
     :root {
       --bg: #f7f7f8; --surface: #ffffff; --ink: #1f2328;
       --muted: rgba(31, 35, 40, .64); --line: rgba(31, 35, 40, .12); --faint: rgba(31, 35, 40, .04);
-      --accent: #1f3a5f; --on-accent: #ffffff; --err: #b42318; --radius: 6px;
+      --accent: #1f3a5f; --on-accent: #ffffff; --err: #b42318;
+      /* three corner sizes only (Apple HIG: fixed, concentric, capsule): controls, cards, pills. A shape inside a card
+         takes the card's radius minus the padding between them, never less than the control radius. */
+      --radius: 8px; --r-card: 16px; --r-pill: 999px;
       /* chart series: blue, orange, aqua - checked for colour-blind separation on these surfaces (charts.py) */
       --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a;
       --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -32,7 +35,7 @@
     figure { margin: 0; }
     figcaption { font-size: .78rem; color: var(--muted); margin-top: 6px; line-height: 1.35; }
     html[data-text="large"] { font-size: 118.75%; }  /* the "Larger text" switch in the footer */
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1rem/1.55 var(--sans);
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1rem/1.7 var(--sans);
            -webkit-font-smoothing: antialiased; }
     ::selection { background: var(--accent); color: var(--on-accent); }
 
@@ -52,15 +55,34 @@
     .bar nav a.me { color: var(--ink); font-weight: 600; }
     @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 12px; } .bar nav a { font-size: .86rem; } }
 
-    main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 56px; }
+    main { max-width: 1080px; margin: 0 auto; padding: 40px 16px 88px; }
     footer { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
              color: var(--muted); font-size: .8rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
     /* type */
     .eyebrow { font-size: .85rem; font-weight: 500; color: var(--muted); margin: 0 0 6px; }
     h1 { font-size: clamp(1.7rem, 3.4vw, 2.3rem); line-height: 1.2; letter-spacing: -.01em; font-weight: 600; margin: 0 0 10px; }
-    .lede { font-size: 1.05rem; max-width: 40em; color: var(--muted); margin: 0 0 18px; }
+    .lede { font-size: 1.08rem; line-height: 1.75; max-width: 36em; color: var(--muted); margin: 0 0 30px; }
     .muted { color: var(--muted); }
+    /* room to breathe: plain lists get space between items */
+    main ul:not([class]) > li, main ol:not([class]) > li { margin: .6em 0; }
+    /* icons (icons.py): drawn in the text's colour, never the link colour, so colour keeps one meaning: blue is
+       something you can press. Each icon keeps one meaning across the site. */
+    .ico { flex: none; vertical-align: -4px; }
+    .ico-badge { flex: none; display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: var(--radius);
+                 background: var(--faint); color: var(--ink); }
+    /* a list where each item leads with its icon */
+    ul.ilist { list-style: none; padding: 0; margin: 18px 0 8px; display: grid; gap: 22px; }
+    ul.ilist > li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 16px; align-items: start; margin: 0; }
+    ul.ilist > li > div { padding-top: 8px; }
+    ul.ilist > li b { display: block; margin-bottom: 2px; }
+    /* cards, each with its icon on top: grouped by a soft fill and space, no outline (hierarchy from layout,
+       not decoration) */
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin: 20px 0 10px; }
+    .tile { background: var(--surface); border-radius: var(--r-card); padding: 22px 20px; }
+    .tile .ico-badge { margin-bottom: 14px; }
+    .tile b { display: block; font-size: 1.02rem; margin-bottom: 6px; }
+    .tile p, .tile span { margin: 0; color: var(--muted); font-size: .93rem; }
     .small { font-size: .85rem; }
     a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
     a:hover { text-decoration-thickness: 2px; }
@@ -79,7 +101,13 @@
     .error { color: var(--err); border: 1px solid var(--err); border-radius: var(--radius); background: var(--faint);
              padding: 10px 14px; margin-bottom: 16px; }
 
-    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
+    .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 22px; }
+    /* phones: body text at Apple's 17 pt default, and every control at least 44 px tall to tap (HIG Accessibility) */
+    @media (max-width: 600px) { body { font-size: 1.0625rem; } }
+    @media (pointer: coarse) {
+      .btn, .bar nav a, .linkish, .linkbtn, footer .limits-link { min-height: 44px; display: inline-flex; align-items: center; }
+      .chip span { min-height: 40px; display: inline-flex; align-items: center; padding: 6px 12px; }
+    }
     input, select, textarea { border-radius: var(--radius); }
     code, pre { font-family: var(--mono); background: var(--faint); border-radius: 2px; }
     code { padding: 1px 5px; font-size: .86em; }

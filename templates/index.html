@@ -2,29 +2,64 @@
 {% block bodyclass %}mode-{{ mode }}{% endblock %}
 {% block head %}
 <style>
-  .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px 32px; align-items: start;
-          grid-template-areas: "pitch form" "peek form"; }
-  .hero > .pitch { grid-area: pitch; } .hero > .panel { grid-area: form; } .hero > .peek { grid-area: peek; }
-  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; grid-template-areas: "pitch" "form" "peek"; gap: 16px; } }
-  .hero h1 { max-width: 13em; }
+  .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px 48px; align-items: start;
+          grid-template-areas: "pitch form" "perks form"; grid-template-rows: auto 1fr; }
+  .hero > .pitch { grid-area: pitch; } .hero > .panel { grid-area: form; } .hero > .perks { grid-area: perks; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; grid-template-areas: "pitch" "perks" "form"; gap: 20px; } }
+  .hero h1 { max-width: 13em; font-size: clamp(2rem, 4.4vw, 3rem); line-height: 1.12; letter-spacing: -.02em; }
+  .hero .pitch { padding-top: 16px; }
+  .hero .lede { margin-bottom: 4px; }
 
-  /* a look inside a report: four pictures to flip through and hover */
-  .peek { border-top: 1px solid var(--line); margin-top: 4px; }
-  .peek .tabs { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 12px; }
-  .peek .tabs button { font: inherit; font-size: .85rem; font-weight: 600; background: none; color: var(--muted);
-                       border: 0; border-bottom: 2px solid transparent; padding: 9px 12px 7px 0; margin-right: 14px;
-                       cursor: pointer; }
-  .peek .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
-  .peek .tabs button:hover { color: var(--ink); }
-  .peek figure { display: none; min-height: 150px; }
-  .peek figure.on { display: block; }
-  .peek figcaption { font-size: .9rem; color: var(--ink); margin-top: 8px; max-width: 34em; }
-  .peek .hint { font-size: .76rem; color: var(--muted); margin: 6px 0 0; }
-  .peek .dots { display: flex; gap: 6px; margin-top: 10px; }
-  .peek .dots i { width: 18px; height: 3px; background: var(--line); }
-  .peek .dots i.on { background: var(--accent); }
+  /* the short promises under the headline, as soft badges */
+  ul.perks { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 10px; align-self: start; }
+  ul.perks li { display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 8px 14px 8px 12px;
+                border-radius: var(--r-pill); background: var(--surface); font-size: .9rem; }
+  ul.perks li .ico { color: var(--muted); }
 
-  .drop { display: flex; gap: 14px; align-items: center; border: 1px dashed var(--muted); border-radius: 8px; padding: 18px; cursor: pointer;
+  /* what you get back: four cards to pick from, and the example of the one picked on a sheet in an arch */
+  .explore { margin-top: 96px; }
+  .explore-head { max-width: 36em; margin-bottom: 28px; }
+  .explore-head h2 { font-size: clamp(1.7rem, 3.4vw, 2.3rem); line-height: 1.15; letter-spacing: -.02em;
+                     font-weight: 600; margin: 0 0 10px; }
+  .explore-head p { margin: 0; color: var(--muted); font-size: 1.05rem; }
+  .explore-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 40px; align-items: center; }
+  .xcards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  button.xcard { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; font: inherit;
+                 position: relative; color: var(--ink); background: var(--surface); border: 0; border-radius: var(--r-card);
+                 padding: 22px 20px 20px; cursor: pointer; transition: transform .18s, box-shadow .18s, border-color .18s; }
+  button.xcard:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(15, 25, 40, .08); }
+  /* the card being shown: a ring and a "Showing" label, so it isn't told by colour alone */
+  button.xcard[aria-selected="true"] { box-shadow: 0 0 0 2px var(--accent) inset; }
+  button.xcard[aria-selected="true"]::after { content: "Showing"; position: absolute; top: 18px; right: 18px;
+      font-size: .72rem; font-weight: 600; padding: 2px 10px; border-radius: var(--r-pill);
+      background: var(--accent); color: var(--on-accent); }
+  button.xcard .xi { display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: var(--radius);
+                     background: var(--faint); color: var(--ink); margin-bottom: 6px; }
+  button.xcard b { font-size: 1.08rem; letter-spacing: -.01em; }
+  button.xcard .xt { color: var(--muted); font-size: .9rem; line-height: 1.6; }
+  button.xcard .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  button.xcard .tags i { font-style: normal; font-size: .74rem; font-weight: 600; padding: 3px 10px; border-radius: var(--r-pill);
+                         background: var(--faint); color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { button.xcard, button.xcard:hover { transition: none; transform: none; } }
+  .arch { position: relative; border-radius: 260px 260px 28px 28px; padding: 92px 36px 30px;
+          background: color-mix(in srgb, var(--accent) 9%, var(--bg)); }
+  .arch .sheet { position: relative; background: var(--surface); border-radius: var(--radius); padding: 26px 22px 20px;
+                 box-shadow: 0 14px 30px rgba(15, 25, 40, .12); transform: rotate(-1.2deg); min-height: 250px; }
+  .arch .tape { position: absolute; top: -10px; width: 64px; height: 20px; background: rgba(214, 186, 140, .55); }
+  .arch .tape.l { left: 18px; transform: rotate(-6deg); } .arch .tape.r { right: 18px; transform: rotate(5deg); }
+  .arch figure { display: none; } .arch figure.on { display: block; animation: rise .35s ease-out; }
+  .arch figure svg + svg { margin-top: 12px; }
+  .arch figcaption { font-size: .9rem; color: var(--ink); margin-top: 12px; line-height: 1.55; }
+  .arch .hint { font-size: .78rem; color: var(--muted); margin: 18px 4px 0; text-align: center; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .arch figure.on { animation: none; } }
+  @media (max-width: 860px) {
+    .explore-grid { grid-template-columns: 1fr; }
+    .arch { order: -1; padding: 64px 18px 22px; border-radius: 180px 180px 22px 22px; }
+  }
+  @media (max-width: 520px) { .xcards { grid-template-columns: 1fr; } }
+
+  .drop { display: flex; gap: 14px; align-items: center; border: 1px dashed var(--muted); border-radius: var(--radius); padding: 18px; cursor: pointer;
           transition: border-color .15s, background .15s; margin: 0 0 12px; background: var(--bg); }
   .drop:hover, .drop.over { border: 1px solid var(--accent); background: var(--faint); }
   .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -49,7 +84,7 @@
                 margin: 0 0 3px; }
   .chip { position: relative; cursor: pointer; }
   .chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-  .chip span { display: inline-block; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; user-select: none; }
+  .chip span { display: inline-block; padding: 4px 9px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: .82rem; user-select: none; }
   .chip input:checked + span { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
   .chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
   select { width: 100%; font: inherit; font-size: .9rem; padding: 8px 10px; border: 1px solid var(--line);
@@ -93,32 +128,39 @@
   .limits li { margin: 0 0 5px; } .limits b { color: var(--ink); font-weight: 600; }
 
   /* what's in a report, then the demos, then privacy: three compact bands */
-  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 36px; border-top: 1px solid var(--line); }
-  .features > div { padding: 14px 16px 0 0; font-size: .88rem; color: var(--muted); }
-  .features > div + div { padding-left: 16px; border-left: 1px solid var(--line); }
+  .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 64px; border-top: 1px solid var(--line); }
+  .features > div { padding: 22px 20px 4px 0; font-size: .9rem; color: var(--muted); }
+  .features > div + div { padding-left: 20px; border-left: 1px solid var(--line); }
   .features .pic { display: block; height: 78px; margin-bottom: 8px; color: var(--ink); }
   .features .pic svg { max-height: 78px; width: auto; max-width: 100%; }
-  .features b { display: block; color: var(--ink); font-size: 1rem; letter-spacing: -.01em; margin-bottom: 3px; }
+  .features b { display: block; color: var(--ink); font-size: 1.02rem; letter-spacing: -.01em; margin: 6px 0 6px; }
   @media (max-width: 860px) {
     .features { grid-template-columns: 1fr 1fr; }
     .features > div, .features > div + div { padding: 12px 12px 12px 0; border-left: 0; border-bottom: 1px solid var(--line); }
   }
   @media (max-width: 480px) { .features { grid-template-columns: 1fr; } }
-  .demos { margin-top: 32px; }
-  .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .demos { margin-top: 72px; }
+  .demos > .eyebrow, .privacy-strip > .eyebrow { margin-bottom: 16px; }
+  .demos .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
   @media (max-width: 860px) { .demos .row3 { grid-template-columns: 1fr; } }
-  .demos a.demo { display: block; padding: 12px 14px; border: 1px solid var(--line); color: inherit;
-                  text-decoration: none; transition: border-color .15s, background .15s; }
-  .demos a.demo:hover, .demos a.demo:focus-visible { border-color: var(--accent); background: var(--faint); }
-  .demos a.demo b { display: block; font-size: 1rem; margin-bottom: 2px; }
-  .demos a.demo span { color: var(--muted); font-size: .85rem; }
-  .demos a.demo .thumb { display: block; margin: -4px 0 6px; color: var(--ink); }
-  .privacy-strip { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 10px;
-                   display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 20px; }
-  .privacy-strip > p { grid-column: 1 / -1; margin: 0 0 4px; }
-  .privacy-strip div { padding: 6px 0; font-size: .85rem; color: var(--muted); }
-  .privacy-strip b { display: block; color: var(--ink); font-size: .92rem; }
-  .account-note { margin-top: 18px; font-size: .85rem; color: var(--muted); max-width: 52em; }
+  .demos a.demo { display: block; padding: 22px 20px; border-radius: var(--r-card); color: inherit;
+                  background: var(--surface); text-decoration: none;
+                  transition: border-color .15s, transform .18s, box-shadow .18s; }
+  .demos a.demo:hover, .demos a.demo:focus-visible { transform: translateY(-3px);
+                                                     box-shadow: 0 10px 24px rgba(15, 25, 40, .08); }
+  @media (prefers-reduced-motion: reduce) { .demos a.demo, .demos a.demo:hover { transition: none; transform: none; } }
+  .demos a.demo .ico-badge { margin-bottom: 14px; background: var(--bg); }
+  .demos a.demo b { display: block; font-size: 1.02rem; margin-bottom: 6px; }
+  .demos a.demo > span:not(.thumb):not(.ico-badge) { color: var(--muted); font-size: .88rem; }
+  .demos a.demo .thumb { display: block; margin: -4px 0 10px; color: var(--ink); }
+  .demos .demo-note { margin: 14px 0 0; }
+  .privacy-strip { margin-top: 72px; border-top: 1px solid var(--line); padding-top: 22px;
+                   display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px 28px; }
+  .privacy-strip > p { grid-column: 1 / -1; margin: 0; }
+  .privacy-strip div { font-size: .88rem; color: var(--muted); }
+  .privacy-strip .ico-badge { margin-bottom: 12px; }
+  .privacy-strip b { display: block; color: var(--ink); font-size: .96rem; margin-bottom: 4px; }
+  .account-note { margin-top: 40px; font-size: .88rem; color: var(--muted); max-width: 52em; }
 </style>
 {% endblock %}
 {% block content %}
@@ -146,28 +188,12 @@
       common and turn it into searches that reach artists the big apps tend to skip.</p>
     </div>
   </div>
-    <div class="peek" data-only="musician" aria-label="A look inside a report">
-      <div class="tabs" role="tablist">
-        <button type="button" role="tab" aria-selected="true" data-peek="0">Side by side</button>
-        <button type="button" role="tab" aria-selected="false" data-peek="1">Who plays when</button>
-        <button type="button" role="tab" aria-selected="false" data-peek="2">Chords</button>
-        <button type="button" role="tab" aria-selected="false" data-peek="3">Groove</button>
-      </div>
-      <figure class="on" role="tabpanel">{{ charts.example_overlay(width=520, height=150)|safe }}
-        <figcaption>Your track's energy over the song you admire. Theirs hits harder at the drop, so that's where
-          we'd start.</figcaption></figure>
-      <figure role="tabpanel">{{ charts.example_lineup(width=520)|safe }}
-        <figcaption>Every instrument, section by section. We only show drums or a bass when we can actually hear
-          them.</figcaption></figure>
-      <figure role="tabpanel">{{ charts.example_chords(width=520)|safe }}
-        <figcaption>Your chords along the song, coloured by what they do: home, moving away, or pulling back
-          home.</figcaption></figure>
-      <figure role="tabpanel">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=520, bpm=96)|safe }}
-        <figcaption>One bar of the beat: where the kick and snare land, and the hats on top.</figcaption></figure>
-      <div class="dots" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i></div>
-      <p class="hint">An example. Hover over (or tap) the pictures for the details: every chart in a report works the
-        same way.</p>
-    </div>
+    <ul class="perks" data-only="musician style" aria-label="In short">
+      <li>{{ icon('check', 18) }}Free</li>
+      <li>{{ icon('check', 18) }}No account needed</li>
+      <li>{{ icon('check', 18) }}Audio deleted at once</li>
+      <li>{{ icon('check', 18) }}A phone memo is enough</li>
+    </ul>
 
   <div class="panel">
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
@@ -311,33 +337,72 @@
   <div><b>Weighed</b>Every tag gets a share of your list. What we heard counts for more than what others wrote.</div>
   <div><b>Searched</b>Specific tags and pairs of tags, linked straight to Bandcamp, Last.fm, RYM, YouTube and Spotify.</div>
 </section>
-<section class="features" data-only="musician style" aria-label="What's in a report">
-  <div><span class="pic" aria-hidden="true">{{ charts.example_overlay(width=260, height=90)|safe }}</span><b>Next to songs you love</b>Tempo,
-    arrangement, groove, loudness and tone on one scale, and what they all share.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.camelot_wheel(camelot_names, highlight="8A", size=78)|safe }}</span><b>Harmony &amp; shape</b>Your
-    key, chord loops and sections, and how the energy and mood move.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=260)|safe }}</span><b>Who plays, and how</b>Who
-    plays when, the beat as a grid, the bass as sheet music, and the mix for producers.</div>
-  <div><span class="pic" aria-hidden="true">{{ charts.example_roll(width=260, height=78)|safe }}</span><b>Ideas to take away</b>What
-    your track leaves out, things to try, and MIDI and sheet music for your DAW.</div>
+<section class="explore" data-only="musician style" aria-labelledby="explore-h">
+  <div class="explore-head">
+    <h2 id="explore-h">What you get back</h2>
+    <p>Four parts to every report. Pick one to see an example.</p>
+  </div>
+  <div class="explore-grid">
+    <div class="xcards" role="tablist" aria-label="Parts of a report">
+      <button type="button" class="xcard" role="tab" aria-selected="true" aria-controls="xshow" data-x="0">
+        <span class="xi">{{ icon('compare', 22) }}</span><b>Next to songs you love</b>
+        <span class="xt">Tempo, arrangement, groove, loudness and tone on one scale, and what they all share.</span>
+        <span class="tags"><i>Energy</i><i>Tempo</i><i>Groove</i></span></button>
+      <button type="button" class="xcard" role="tab" aria-selected="false" aria-controls="xshow" data-x="1">
+        <span class="xi">{{ icon('music', 22) }}</span><b>Harmony &amp; shape</b>
+        <span class="xt">Your key, chord loops and sections, and how the energy and mood move.</span>
+        <span class="tags"><i>Key</i><i>Chords</i><i>Sections</i></span></button>
+      <button type="button" class="xcard" role="tab" aria-selected="false" aria-controls="xshow" data-x="2">
+        <span class="xi">{{ icon('drum', 22) }}</span><b>Who plays, and how</b>
+        <span class="xt">Who plays when, the beat as a grid, the bass as sheet music, and the mix for producers.</span>
+        <span class="tags"><i>Instruments</i><i>Beat</i><i>Mix</i></span></button>
+      <button type="button" class="xcard" role="tab" aria-selected="false" aria-controls="xshow" data-x="3">
+        <span class="xi">{{ icon('spark', 22) }}</span><b>Ideas to take away</b>
+        <span class="xt">What your track leaves out, things to try, and MIDI and sheet music for your DAW.</span>
+        <span class="tags"><i>Ideas</i><i>MIDI</i><i>Sheet music</i></span></button>
+    </div>
+    <div class="arch" id="xshow" role="tabpanel" aria-live="polite">
+      <div class="sheet">
+        <i class="tape l" aria-hidden="true"></i><i class="tape r" aria-hidden="true"></i>
+        <figure class="on">{{ charts.example_overlay(width=420, height=150)|safe }}
+          <figcaption>Your track's energy over the song you admire. Theirs hits harder at the drop, so that's where
+            we'd start.</figcaption></figure>
+        <figure>{{ charts.example_chords(width=420)|safe }}
+          <figcaption>Your chords along the song, coloured by what they do: home, moving away, or pulling back
+            home.</figcaption></figure>
+        <figure>{{ charts.example_lineup(width=420)|safe }}
+          {{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=420, bpm=96)|safe }}
+          <figcaption>Every instrument, section by section (drums or a bass only when we can actually hear them), and
+            one bar of the beat: where the kick and snare land, and the hats on top.</figcaption></figure>
+        <figure>{{ charts.example_roll(width=420, height=120)|safe }}
+          <figcaption>Ideas built on what your track leaves out, with the notes ready as MIDI and sheet
+            music.</figcaption></figure>
+      </div>
+      <p class="hint">An example. Hover over (or tap) the pictures for the details: every chart in a report works the
+        same way.</p>
+    </div>
+  </div>
 </section>
 <section class="demos" data-only="musician" aria-labelledby="demos-title">
   <p class="eyebrow" id="demos-title">Not ready to upload? Open a finished report</p>
   <div class="row3">
     {% for slug, d in demos.items() %}
-      <a class="demo" href="{{ url_for('demo', slug=slug) }}">{% if demo_pictures.get(slug) %}<span class="thumb" aria-hidden="true">{{ demo_pictures[slug]|safe }}</span>{% endif %}<b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
+      <a class="demo" href="{{ url_for('demo', slug=slug) }}">{% if demo_pictures.get(slug) %}<span class="thumb" aria-hidden="true">{{ demo_pictures[slug]|safe }}</span>{% else %}<span class="ico-badge">{{ icon({'blues': 'guitar', 'band': 'users', 'electronic': 'disc'}.get(slug, 'music'), 22) }}</span>{% endif %}<b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
     {% endfor %}
   </div>
-  <p class="muted small" style="margin:6px 0 0">Made from computer-generated audio, so they sound simpler than a real
+  <p class="muted small demo-note">Made from computer-generated audio, so they sound simpler than a real
     recording. The first visit takes a minute while one is made.</p>
 </section>
 <section class="privacy-strip" aria-labelledby="privacy-h">
   <p class="eyebrow" id="privacy-h">Private by default · made for unreleased music</p>
-  <div><b>Your audio is deleted at once</b>As soon as we've listened, songs you compare with too.</div>
-  <div><b>Only you can open it</b>{% if user %}It's in your account.{% else %}In this browser.{% endif %} Sharing is a
-    switch you turn on, and “Delete now” is always there.</div>
-  <div><b>No titles leave the server</b>The optional AI sees numbers only: no audio, no file names.</div>
-  <div><b>No ads, no trackers</b>Nothing sold, nothing used for training. <a href="{{ url_for('privacy') }}">Read how →</a></div>
+  <div><span class="ico-badge">{{ icon('trash', 22) }}</span><b>Your audio is deleted at once</b>As soon as we've
+    listened, songs you compare with too.</div>
+  <div><span class="ico-badge">{{ icon('lock', 22) }}</span><b>Only you can open it</b>{% if user %}It's in your
+    account.{% else %}In this browser.{% endif %} Sharing is a switch you turn on, and “Delete now” is always there.</div>
+  <div><span class="ico-badge">{{ icon('shield', 22) }}</span><b>No titles leave the server</b>The optional AI sees
+    numbers only: no audio, no file names.</div>
+  <div><span class="ico-badge">{{ icon('ban', 22) }}</span><b>No ads, no trackers</b>Nothing sold, nothing used for
+    training. <a href="{{ url_for('privacy') }}">Read how →</a></div>
 </section>
 <p class="account-note">No account needed: without one, results stay {{ ttl|round|int }} hours, in this browser.
   {% if user %}You're signed in, so this goes straight into your private <a href="{{ url_for('history') }}">library</a>.{% else %}<a href="{{ url_for('signup') }}">A free
@@ -424,22 +489,27 @@
     const btn = ev.submitter || go;
     btn.disabled = true; btn.textContent = input.files.length ? 'Uploading…' : 'Starting…';
   });
-  // the look inside a report: tabs, and it moves on by itself until you touch it
+  // what you get back: pick a card to see its example. It changes only when you pick (nothing moves by itself).
   (function () {
-    const peek = document.querySelector('.peek');
-    if (!peek) return;
-    const tabs = [...peek.querySelectorAll('[data-peek]')], figs = [...peek.querySelectorAll('figure')],
-          dots = [...peek.querySelectorAll('.dots i')];
-    let at = 0, timer = null;
+    const box = document.querySelector('.explore');
+    if (!box) return;
+    const cards = [...box.querySelectorAll('[data-x]')], figs = [...box.querySelectorAll('.arch figure')];
+    let at = 0;
     const pick = n => {
       at = n;
-      tabs.forEach((t, i) => t.setAttribute('aria-selected', String(i === n)));
+      cards.forEach((c, i) => { c.setAttribute('aria-selected', String(i === n)); c.tabIndex = i === n ? 0 : -1; });
       figs.forEach((f, i) => f.classList.toggle('on', i === n));
-      dots.forEach((d, i) => d.classList.toggle('on', i === n));
     };
-    tabs.forEach((t, i) => t.addEventListener('click', () => { clearInterval(timer); pick(i); }));
-    peek.addEventListener('pointerenter', () => clearInterval(timer));
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) timer = setInterval(() => pick((at + 1) % figs.length), 6000);
+    cards.forEach((c, i) => c.addEventListener('click', () => pick(i)));
+    // arrow keys move between the cards, as in any tab list
+    box.querySelector('.xcards').addEventListener('keydown', ev => {
+      const step = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1}[ev.key];
+      if (!step) return;
+      ev.preventDefault();
+      const n = (at + step + cards.length) % cards.length;
+      pick(n); cards[n].focus();
+    });
+    pick(0);
   })();
 </script>
 {% endblock %}

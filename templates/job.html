@@ -34,16 +34,23 @@
                             color: var(--muted); margin-top: 4px; }
   .linkbtn { font: inherit; font-size: .88rem; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
              text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
-  .privacy-box { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin-top: 10px; padding: 6px 0;
-                 font-size: .82rem; color: var(--muted); }
+  .privacy-box { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-top: 18px; padding: 8px 0;
+                 font-size: .84rem; color: var(--muted); }
+  /* the lines under the title, each led by its icon */
+  .iline { display: flex; align-items: center; gap: 10px; }
+  .iline > .ico { color: var(--muted); }
+  .privacy-box > .ico { color: var(--muted); margin-right: -6px; }
+  p.iline { margin: 16px 0 0; }
   .privacy-box b { color: var(--ink); }
   .privacy-box form { margin: 0; }
   .linkish { font: inherit; font-size: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer;
              text-decoration: underline; text-underline-offset: 2px; }
   .privacy-box .linkish { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer;
                           text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
-  .organise { margin-top: 10px; font-size: .9rem; }
-  .organise summary { cursor: pointer; color: var(--muted); }
+  .organise { margin-top: 16px; font-size: .9rem; }
+  .organise summary { cursor: pointer; color: var(--muted); list-style: none; display: flex; align-items: center; gap: 10px; }
+  .organise summary::-webkit-details-marker { display: none; }
+  .organise summary .ico { color: var(--muted); }
   .organise form { display: grid; gap: 8px; max-width: 460px; margin-top: 10px; }
   .organise label { display: grid; gap: 3px; font-size: .78rem; color: var(--muted); }
   .organise label.inline { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: .9rem; }
@@ -60,16 +67,29 @@
                      padding: 3px 9px; font-size: .84rem; max-width: 100%; overflow-wrap: anywhere; }
   .midis a:hover, a.midi:hover { border-color: var(--accent); background: var(--faint); }
 
-  .report { margin-top: 14px; }
+  .report { margin-top: 24px; }
   h2.style-h { margin: 26px 0 6px; font-size: clamp(1.4rem, 3vw, 1.9rem); letter-spacing: -.02em; }
   .report h1 { display: none; }  /* the page already has a title */
-  .report h2 { margin: 36px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); font-size: clamp(1.3rem, 2.6vw, 1.65rem);
+  .report h2 { margin: 52px 0 10px; padding-top: 18px; border-top: 1px solid var(--line); font-size: clamp(1.3rem, 2.6vw, 1.65rem);
                line-height: 1.25; letter-spacing: -.01em; font-weight: 600; overflow-wrap: anywhere; }
   .report h2 + p { font-size: 1.05rem; }
-  .report h3 { margin: 26px 0 8px; font-size: 1.05rem; font-weight: 600;
+  .report h3 { margin: 36px 0 12px; font-size: 1.05rem; font-weight: 600;
                display: flex; align-items: center; gap: 8px; }
-  .report ul { padding-left: 18px; } .report li { margin: 5px 0; } .report li::marker { color: var(--muted); }
-  .report blockquote { margin: 0 0 12px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--faint); }
+  .report p { margin: 0 0 16px; }
+  .report ul { padding-left: 18px; margin: 12px 0 18px; } .report li { margin: 10px 0; } .report li::marker { color: var(--muted); }
+  .report blockquote { margin: 0 0 22px; padding: 18px 22px; border-left: 3px solid var(--accent); background: var(--faint); }
+  .report blockquote p { margin: 0; }
+  /* lines of text kept to a readable width; pictures and cards still use the whole page */
+  .report p, .report ul:not(.idea-cards), .report ol { max-width: 48rem; }
+  .report blockquote { max-width: 56rem; }
+  /* ideas as cards, each with its area's icon (app.idea_cards) */
+  .report ul.idea-cards { list-style: none; padding: 0; margin: 18px 0 24px; display: grid; gap: 16px;
+                          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .report ul.idea-cards > li { margin: 0; display: grid; gap: 14px; align-content: start; padding: 20px 18px;
+                               background: var(--surface); border-radius: var(--r-card); }
+  .report ul.idea-cards > li .ico-badge { background: var(--bg); }
+  .report ul.idea-cards strong { display: block; margin-bottom: 4px; font-size: .78rem; letter-spacing: .04em;
+                                 text-transform: uppercase; color: var(--muted); }
   .report details { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
   .report summary { cursor: pointer; font-weight: 600; }
   .report summary::marker { color: var(--accent); }
@@ -78,8 +98,8 @@
   .report li code, .report p code { overflow-wrap: anywhere; }  /* long sparklines wrap on phones */
   .report details ul { padding-left: 20px; }
   .report svg.chart { margin: 8px 0 4px; }
-  .report .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px 20px;
-                    align-items: start; margin: 10px 0 14px; padding: 12px 0; border-top: 1px solid var(--line);
+  .report .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 24px 28px;
+                    align-items: start; margin: 24px 0 28px; padding: 24px 0; border-top: 1px solid var(--line);
                     border-bottom: 1px solid var(--line); }
   .report .glance svg.chart { margin: 0 auto; }
   .report .muted.small { font-size: .8rem; }
@@ -94,11 +114,12 @@
   .report details.more > summary:hover { color: var(--ink); }
   /* each track: a summary with every picture, then one tab per part */
   .report .tsum { padding-bottom: 6px; }
-  .report .gallery { margin: 6px 0 4px; }
-  .report .gallery .eyebrow { margin: 0 0 6px; }
-  .report .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
-  .report button.thumb { display: grid; gap: 4px; align-content: start; text-align: left; font: inherit; color: inherit;
-                         background: var(--surface); border: 1px solid var(--line); padding: 8px 10px; cursor: pointer; }
+  .report .gallery { margin: 16px 0 12px; }
+  .report .gallery .eyebrow { margin: 0 0 12px; }
+  .report .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .report button.thumb { display: grid; gap: 8px; align-content: start; text-align: left; font: inherit; color: inherit;
+                         background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 12px 14px;
+                         cursor: pointer; }
   .report button.thumb:hover, .report button.thumb:focus-visible { border-color: var(--accent); }
   .report button.thumb .tl { font-size: .74rem; color: var(--muted); white-space: nowrap; overflow: hidden;
                              text-overflow: ellipsis; }
@@ -114,6 +135,7 @@
   .report nav.tabs .tab { flex: none; padding: 9px 12px 7px; font-size: .86rem; font-weight: 600; color: var(--muted);
                           text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -2px; }
   .report nav.tabs .tab:hover { color: var(--ink); }
+  @media (pointer: coarse) { .report nav.tabs .tab { min-height: 44px; display: inline-flex; align-items: center; } }
   .report nav.tabs .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
   .report nav.tabs .tab.fav::after { content: "●"; color: var(--accent); font-size: .6rem; margin-left: 5px;
                                      vertical-align: 2px; }
@@ -140,7 +162,7 @@
 {% endblock %}
 {% macro privacy_box() %}
 <div class="privacy-box" id="privacy">
-  <b>Who can see this:</b>
+  {{ icon('lock', 18) }}<b>Who can see this:</b>
   {% if s.demo %}<span>Everyone: it's a demo, made from generated audio.</span>
   {% elif s.shared %}<span><b>Anyone with this link</b> can open it{% if not saved %}, until {{ expires|datetime }}{% endif %}.</span>
   {% elif saved %}<span><b>Only you.</b> It's in your private history, until you delete it.</span>
@@ -159,9 +181,9 @@
   <span>Your audio's already deleted. <a href="{{ url_for('privacy') }}">How we handle your music</a></span>
 </div>
 {% if meta %}
-<p class="small" style="margin:10px 0 0"><a href="{{ url_for('compare_page', t=job_id ~ ':0') }}">Compare with your other
+<p class="small iline">{{ icon('compare', 18) }}<a href="{{ url_for('compare_page', t=job_id ~ ':0') }}">Compare with your other
   tracks →</a></p>
-<details class="organise"><summary>Organise: {{ meta.project or 'no project' }}{{ ' · ' ~ meta.status if meta.status }}{% for lab in meta.labels %} · {{ lab }}{% endfor %}{{ ' · ★' if meta.starred }}</summary>
+<details class="organise"><summary>{{ icon('folder', 18) }}Organise: {{ meta.project or 'no project' }}{{ ' · ' ~ meta.status if meta.status }}{% for lab in meta.labels %} · {{ lab }}{% endfor %}{{ ' · ★' if meta.starred }}</summary>
   <form method="post" action="{{ url_for('job_organise', job_id=job_id) }}">
     <label>Project <input name="project" value="{{ meta.project }}" maxlength="60" list="project-names" placeholder="e.g. EP 2027"></label>
     <label>Status <select name="status"><option value="">—</option>{% for st in statuses %}<option {{ 'selected' if meta.status == st }}>{{ st }}</option>{% endfor %}</select></label>
@@ -397,7 +419,7 @@
       where you can delete them.</p>
   </details>
   {% elif user and saved and s.mode != 'tags' and not s.demo %}
-  <p class="muted small" style="margin-top:14px">Want the app to learn from your feedback? <a href="{{ url_for('memory_page') }}">Switch on your memory</a>.</p>
+  <p class="muted small iline" style="margin-top:16px">{{ icon('bookmark', 18) }}<span>Want the app to learn from your feedback? <a href="{{ url_for('memory_page') }}">Switch on your memory</a>.</span></p>
   {% endif %}
   {% if style_view %}
   {{ style_css() }}

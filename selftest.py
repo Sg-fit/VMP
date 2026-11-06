@@ -2321,6 +2321,21 @@ def report_ui_checks(tmp):
           '<section class="rsec" data-sec="harmony"' in h and '<details class="more" data-sec="harmony">' in h
           and h.index("Key") < h.index("<details") < h.index("Scale") and h.count("<details") == 1
           and '<section class="rsec" data-sec="melody"' in h and ma.MORE not in h and "<p>intro</p>" in h, h[:400])
+    # ideas become cards, each with its area's icon; lists of facts, and lists with anything else in them, stay a list
+    import icons
+    ideas = "<ul>\n<li><strong>harmony:</strong> Try Dm.</li>\n<li><strong>drums:</strong> Drop the hats.</li>\n</ul>"
+    facts = "<ul><li><strong>Key:</strong> G major</li><li><strong>Mode:</strong> Ionian</li></ul>"
+    mixed = ("<ul><li><strong>harmony:</strong> Try Dm.</li><li><strong>drums:</strong> Drop the hats.</li>"
+             "<li><strong>vibe:</strong> Moody.</li></ul>")
+    plain = "<ul><li><strong>harmony:</strong> Try Dm.</li><li><strong>melody:</strong> Rise.</li><li>Then rest.</li></ul>"
+    carded = webapp.idea_cards(ideas)
+    check("report", "a list of ideas becomes cards, each with its area's icon, every word kept",
+          carded.startswith('<ul class="idea-cards">') and carded.count('class="ico-badge"') == 2
+          and icons.icon("drum", 22) in carded and icons.icon("music", 22) in carded
+          and "<strong>harmony:</strong> Try Dm." in carded and "Drop the hats." in carded, carded[:200])
+    check("report", "facts, an unknown area, or an item without an area keep the list as it was (nothing dropped)",
+          all(webapp.idea_cards(x) == x for x in (facts, mixed, plain)) and webapp.idea_cards(ideas + facts) ==
+          carded + facts and icons.icon("no-such-icon") == "" and 'aria-hidden="true"' in icons.icon("lock"))
     r = ma.analyze(write(Path(tmp) / "ui_song.wav", song([("G", ""), ("D", ""), ("E", "m"), ("C", "")], 100, 4, loops=6)),
                    cache_dir=Path(tmp) / "ui_cache")
     import markdown
