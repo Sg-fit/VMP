@@ -3,18 +3,28 @@
 {% block head %}
 <style>
   .hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px 48px; align-items: start;
-          grid-template-areas: "pitch form" "perks form"; grid-template-rows: auto 1fr; }
-  .hero > .pitch { grid-area: pitch; } .hero > .panel { grid-area: form; } .hero > .perks { grid-area: perks; }
-  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; grid-template-areas: "pitch" "perks" "form"; gap: 20px; } }
+          grid-template-areas: "pitch form" "peek form"; grid-template-rows: auto 1fr; }
+  .hero > .pitch { grid-area: pitch; } .hero > .panel { grid-area: form; } .hero > .peek { grid-area: peek; }
+  @media (max-width: 860px) { .hero { grid-template-columns: 1fr; grid-template-areas: "pitch" "form" "peek"; gap: 20px; } }
   .hero h1 { max-width: 13em; font-size: clamp(2rem, 4.4vw, 3rem); line-height: 1.12; letter-spacing: -.02em; }
   .hero .pitch { padding-top: 16px; }
-  .hero .lede { margin-bottom: 4px; }
 
-  /* the short promises under the headline, as soft badges */
-  ul.perks { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 10px; align-self: start; }
-  ul.perks li { display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 8px 14px 8px 12px;
-                border-radius: var(--r-pill); background: var(--surface); font-size: .9rem; }
-  ul.perks li .ico { color: var(--muted); }
+  /* a look inside a report: four pictures to flip through and hover */
+  .peek { border-top: 1px solid var(--line); margin-top: 4px; }
+  .peek .tabs { display: flex; flex-wrap: wrap; gap: 0; margin: 0 0 16px; }
+  .peek .tabs button { font: inherit; font-size: .88rem; font-weight: 600; background: none; color: var(--muted);
+                       border: 0; border-bottom: 2px solid transparent; padding: 12px 12px 9px 0; margin-right: 16px;
+                       cursor: pointer; }
+  .peek .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .peek .tabs button:hover { color: var(--ink); }
+  @media (pointer: coarse) { .peek .tabs button { min-height: 44px; } }
+  .peek figure { display: none; min-height: 150px; }
+  .peek figure.on { display: block; }
+  .peek figcaption { font-size: .92rem; color: var(--ink); margin-top: 12px; max-width: 34em; line-height: 1.6; }
+  .peek .hint { font-size: .78rem; color: var(--muted); margin: 10px 0 0; }
+  .peek .dots { display: flex; gap: 6px; margin-top: 14px; }
+  .peek .dots i { width: 18px; height: 3px; border-radius: var(--r-pill); background: var(--line); }
+  .peek .dots i.on { background: var(--accent); }
 
   /* what you get back: four cards to pick from, and the example of the one picked on a sheet in an arch */
   .explore { margin-top: 96px; }
@@ -149,16 +159,14 @@
   .demos a.demo:hover, .demos a.demo:focus-visible { transform: translateY(-3px);
                                                      box-shadow: 0 10px 24px rgba(15, 25, 40, .08); }
   @media (prefers-reduced-motion: reduce) { .demos a.demo, .demos a.demo:hover { transition: none; transform: none; } }
-  .demos a.demo .ico-badge { margin-bottom: 14px; background: var(--bg); }
   .demos a.demo b { display: block; font-size: 1.02rem; margin-bottom: 6px; }
-  .demos a.demo > span:not(.thumb):not(.ico-badge) { color: var(--muted); font-size: .88rem; }
+  .demos a.demo > span:not(.thumb) { color: var(--muted); font-size: .88rem; }
   .demos a.demo .thumb { display: block; margin: -4px 0 10px; color: var(--ink); }
   .demos .demo-note { margin: 14px 0 0; }
   .privacy-strip { margin-top: 72px; border-top: 1px solid var(--line); padding-top: 22px;
                    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px 28px; }
   .privacy-strip > p { grid-column: 1 / -1; margin: 0; }
   .privacy-strip div { font-size: .88rem; color: var(--muted); }
-  .privacy-strip .ico-badge { margin-bottom: 12px; }
   .privacy-strip b { display: block; color: var(--ink); font-size: .96rem; margin-bottom: 4px; }
   .account-note { margin-top: 40px; font-size: .88rem; color: var(--muted); max-width: 52em; }
 </style>
@@ -188,12 +196,28 @@
       common and turn it into searches that reach artists the big apps tend to skip.</p>
     </div>
   </div>
-    <ul class="perks" data-only="musician style" aria-label="In short">
-      <li>{{ icon('check', 18) }}Free</li>
-      <li>{{ icon('check', 18) }}No account needed</li>
-      <li>{{ icon('check', 18) }}Audio deleted at once</li>
-      <li>{{ icon('check', 18) }}A phone memo is enough</li>
-    </ul>
+    <div class="peek" data-only="musician" aria-label="A look inside a report">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-peek="0">Side by side</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="1">Who plays when</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="2">Chords</button>
+        <button type="button" role="tab" aria-selected="false" data-peek="3">Groove</button>
+      </div>
+      <figure class="on" role="tabpanel">{{ charts.example_overlay(width=520, height=150)|safe }}
+        <figcaption>Your track's energy over the song you admire. Theirs hits harder at the drop, so that's where
+          we'd start.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.example_lineup(width=520)|safe }}
+        <figcaption>Every instrument, section by section. We only show drums or a bass when we can actually hear
+          them.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.example_chords(width=520)|safe }}
+        <figcaption>Your chords along the song, coloured by what they do: home, moving away, or pulling back
+          home.</figcaption></figure>
+      <figure role="tabpanel">{{ charts.drum_grid("K...S...K.K.S...", "h.h.h.h.h.h.h.h.", 4, width=520, bpm=96)|safe }}
+        <figcaption>One bar of the beat: where the kick and snare land, and the hats on top.</figcaption></figure>
+      <div class="dots" aria-hidden="true"><i class="on"></i><i></i><i></i><i></i></div>
+      <p class="hint">An example. Hover over (or tap) the pictures for the details: every chart in a report works the
+        same way.</p>
+    </div>
 
   <div class="panel">
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
@@ -387,7 +411,7 @@
   <p class="eyebrow" id="demos-title">Not ready to upload? Open a finished report</p>
   <div class="row3">
     {% for slug, d in demos.items() %}
-      <a class="demo" href="{{ url_for('demo', slug=slug) }}">{% if demo_pictures.get(slug) %}<span class="thumb" aria-hidden="true">{{ demo_pictures[slug]|safe }}</span>{% else %}<span class="ico-badge">{{ icon({'blues': 'guitar', 'band': 'users', 'electronic': 'disc'}.get(slug, 'music'), 22) }}</span>{% endif %}<b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
+      <a class="demo" href="{{ url_for('demo', slug=slug) }}">{% if demo_pictures.get(slug) %}<span class="thumb" aria-hidden="true">{{ demo_pictures[slug]|safe }}</span>{% endif %}<b>{{ d.title }} →</b><span>{{ d.about }}</span></a>
     {% endfor %}
   </div>
   <p class="muted small demo-note">Made from computer-generated audio, so they sound simpler than a real
@@ -395,14 +419,11 @@
 </section>
 <section class="privacy-strip" aria-labelledby="privacy-h">
   <p class="eyebrow" id="privacy-h">Private by default · made for unreleased music</p>
-  <div><span class="ico-badge">{{ icon('trash', 22) }}</span><b>Your audio is deleted at once</b>As soon as we've
-    listened, songs you compare with too.</div>
-  <div><span class="ico-badge">{{ icon('lock', 22) }}</span><b>Only you can open it</b>{% if user %}It's in your
-    account.{% else %}In this browser.{% endif %} Sharing is a switch you turn on, and “Delete now” is always there.</div>
-  <div><span class="ico-badge">{{ icon('shield', 22) }}</span><b>No titles leave the server</b>The optional AI sees
-    numbers only: no audio, no file names.</div>
-  <div><span class="ico-badge">{{ icon('ban', 22) }}</span><b>No ads, no trackers</b>Nothing sold, nothing used for
-    training. <a href="{{ url_for('privacy') }}">Read how →</a></div>
+  <div><b>Your audio is deleted at once</b>As soon as we've listened, songs you compare with too.</div>
+  <div><b>Only you can open it</b>{% if user %}It's in your account.{% else %}In this browser.{% endif %} Sharing is a
+    switch you turn on, and “Delete now” is always there.</div>
+  <div><b>No titles leave the server</b>The optional AI sees numbers only: no audio, no file names.</div>
+  <div><b>No ads, no trackers</b>Nothing sold, nothing used for training. <a href="{{ url_for('privacy') }}">Read how →</a></div>
 </section>
 <p class="account-note">No account needed: without one, results stay {{ ttl|round|int }} hours, in this browser.
   {% if user %}You're signed in, so this goes straight into your private <a href="{{ url_for('history') }}">library</a>.{% else %}<a href="{{ url_for('signup') }}">A free
@@ -489,6 +510,19 @@
     const btn = ev.submitter || go;
     btn.disabled = true; btn.textContent = input.files.length ? 'Uploading…' : 'Starting…';
   });
+  // the look inside a report: a tab shows its picture (it changes only when you pick, nothing moves by itself)
+  (function () {
+    const peek = document.querySelector('.peek');
+    if (!peek) return;
+    const tabs = [...peek.querySelectorAll('[data-peek]')], figs = [...peek.querySelectorAll('figure')],
+          dots = [...peek.querySelectorAll('.dots i')];
+    const pick = n => {
+      tabs.forEach((t, i) => t.setAttribute('aria-selected', String(i === n)));
+      figs.forEach((f, i) => f.classList.toggle('on', i === n));
+      dots.forEach((d, i) => d.classList.toggle('on', i === n));
+    };
+    tabs.forEach((t, i) => t.addEventListener('click', () => pick(i)));
+  })();
   // what you get back: pick a card to see its example. It changes only when you pick (nothing moves by itself).
   (function () {
     const box = document.querySelector('.explore');

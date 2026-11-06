@@ -69,20 +69,6 @@
     /* icons (icons.py): drawn in the text's colour, never the link colour, so colour keeps one meaning: blue is
        something you can press. Each icon keeps one meaning across the site. */
     .ico { flex: none; vertical-align: -4px; }
-    .ico-badge { flex: none; display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: var(--radius);
-                 background: var(--faint); color: var(--ink); }
-    /* a list where each item leads with its icon */
-    ul.ilist { list-style: none; padding: 0; margin: 18px 0 8px; display: grid; gap: 22px; }
-    ul.ilist > li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 16px; align-items: start; margin: 0; }
-    ul.ilist > li > div { padding-top: 8px; }
-    ul.ilist > li b { display: block; margin-bottom: 2px; }
-    /* cards, each with its icon on top: grouped by a soft fill and space, no outline (hierarchy from layout,
-       not decoration) */
-    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin: 20px 0 10px; }
-    .tile { background: var(--surface); border-radius: var(--r-card); padding: 22px 20px; }
-    .tile .ico-badge { margin-bottom: 14px; }
-    .tile b { display: block; font-size: 1.02rem; margin-bottom: 6px; }
-    .tile p, .tile span { margin: 0; color: var(--muted); font-size: .93rem; }
     .small { font-size: .85rem; }
     a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
     a:hover { text-decoration-thickness: 2px; }

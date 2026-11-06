@@ -80,16 +80,8 @@
   .report blockquote { margin: 0 0 22px; padding: 18px 22px; border-left: 3px solid var(--accent); background: var(--faint); }
   .report blockquote p { margin: 0; }
   /* lines of text kept to a readable width; pictures and cards still use the whole page */
-  .report p, .report ul:not(.idea-cards), .report ol { max-width: 48rem; }
+  .report p, .report ul, .report ol { max-width: 48rem; }
   .report blockquote { max-width: 56rem; }
-  /* ideas as cards, each with its area's icon (app.idea_cards) */
-  .report ul.idea-cards { list-style: none; padding: 0; margin: 18px 0 24px; display: grid; gap: 16px;
-                          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .report ul.idea-cards > li { margin: 0; display: grid; gap: 14px; align-content: start; padding: 20px 18px;
-                               background: var(--surface); border-radius: var(--r-card); }
-  .report ul.idea-cards > li .ico-badge { background: var(--bg); }
-  .report ul.idea-cards strong { display: block; margin-bottom: 4px; font-size: .78rem; letter-spacing: .04em;
-                                 text-transform: uppercase; color: var(--muted); }
   .report details { margin: 10px 0; border-top: 1px solid var(--line); padding-top: 10px; }
   .report summary { cursor: pointer; font-weight: 600; }
   .report summary::marker { color: var(--accent); }

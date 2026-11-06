@@ -2,14 +2,13 @@
 {% block title %}About · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
-  .ab { max-width: 880px; }
-  .ab > p:not([class]), .ab .narrow { max-width: 680px; }
+  .ab { max-width: 780px; }
   .ab h2 { font-size: 1.3rem; font-weight: 600; margin: 64px 0 12px; display: flex; align-items: center; gap: 12px; }
   .ab h2 .ico { color: var(--muted); }
-  .ab ul:not([class]) { padding-left: 20px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin: 20px 0 14px; }
-  .stat { background: var(--surface); border-radius: var(--r-card); padding: 20px 18px; }
-  .stat b { display: block; font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ab ul { padding-left: 20px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0 14px; }
+  .stat { background: var(--surface); border-radius: var(--r-card); padding: 18px 14px; }
+  .stat b { display: block; font-size: 1.45rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .stat span { font-size: .85rem; color: var(--muted); }
   table.acc td:last-child, table.acc th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   .note { font-size: .85rem; color: var(--muted); }
@@ -24,38 +23,31 @@
     for free, on the recordings people already make: a phone memo is enough.</p>
 
   <h2>{{ icon('users', 24) }}Who it's for</h2>
-  <div class="tiles">
-    <div class="tile"><span class="ico-badge">{{ icon('user', 22) }}</span><b>Self-taught musicians</b>
-      <p>With no teacher to ask what's working, what's missing, and how they're progressing.</p></div>
-    <div class="tile"><span class="ico-badge">{{ icon('users', 22) }}</span><b>Teachers and community programmes</b>
-      <p>With more students than hours: a <a href="{{ url_for('groups_page') }}">group</a> sees the work members choose to
-        share, and what's there and not there across it.</p></div>
-    <div class="tile"><span class="ico-badge">{{ icon('disc', 22) }}</span><b>Anyone with unreleased music</b>
-      <p>Who wants feedback without handing their work to a platform.</p></div>
-  </div>
+  <ul>
+    <li><b>Self-taught musicians</b> with no teacher to ask what's working, what's missing, and how they're progressing.</li>
+    <li><b>Teachers and community programmes</b> with more students than hours: a <a href="{{ url_for('groups_page') }}">group</a>
+      sees the work members choose to share, and what's there and not there across it.</li>
+    <li><b>Anyone with unreleased music</b> who wants feedback without handing their work to a platform.</li>
+  </ul>
 
   <h2>{{ icon('wave', 24) }}What it does</h2>
-  <div class="tiles">
-    <div class="tile"><span class="ico-badge">{{ icon('wave', 22) }}</span><b>Reads a recording back</b>
-      <p>In plain words and pictures: key, chords, form, groove, who plays when, energy and mood.</p></div>
-    <div class="tile"><span class="ico-badge">{{ icon('spark', 22) }}</span><b>Ideas, and what's missing</b>
-      <p>One track: ideas to try first, built on what it leaves out. Several, or next to a song you admire: what's there in
-        all of them, and what none of them has yet.</p></div>
-    <div class="tile"><span class="ico-badge">{{ icon('trend', 22) }}</span><b>Follows you over time</b>
-      <p><a href="{{ url_for('style_page') }}">Your style</a> across sessions, and how it changes.</p></div>
-    <div class="tile"><span class="ico-badge">{{ icon('phone', 22) }}</span><b>Works on a phone</b>
-      <p>Record in the browser or send a Voice Memo; keep recordings, tag them, analyse when you choose.</p></div>
-  </div>
+  <ul>
+    <li>Reads a recording back in plain words and pictures: key, chords, form, groove, who plays when, energy and mood.</li>
+    <li>One track: ideas to try first, built on what it leaves out. Several, or next to a song you admire: what's there in
+      all of them, and what none of them has yet.</li>
+    <li>Follows you over time: <a href="{{ url_for('style_page') }}">your style</a> across sessions, and how it changes.</li>
+    <li>Works on a phone: record in the browser or send a Voice Memo; keep recordings, tag them, analyse when you choose.</li>
+  </ul>
 
   <h2>{{ icon('lock', 24) }}Your music stays yours</h2>
-  <ul class="ilist narrow">
-    <li><span class="ico-badge">{{ icon('trash', 22) }}</span><div>Audio sent for analysis is deleted as soon as it's
-      analysed. Recordings you choose to keep are only playable by you, and deleted with one click.</div></li>
-    <li><span class="ico-badge">{{ icon('eyeoff', 22) }}</span><div>Nothing you upload trains any model. The optional AI sees
-      numbers only - never audio, never file names.</div></li>
-    <li><span class="ico-badge">{{ icon('compass', 22) }}</span><div>“Find music like this” deliberately points to artists
-      with between 20 and 10,000 listeners, not the names everyone already hears.</div></li>
+  <ul>
+    <li>Audio sent for analysis is deleted as soon as it's analysed. Recordings you choose to keep are only playable by you,
+      and deleted with one click.</li>
+    <li>Nothing you upload trains any model. The optional AI sees numbers only - never audio, never file names.</li>
+    <li>“Find music like this” deliberately points to artists with between 20 and 10,000 listeners, not the names
+      everyone already hears.</li>
   </ul>
+
   <p><a href="{{ url_for('privacy') }}">The full privacy page →</a></p>
 
   <h2>{{ icon('gauge', 24) }}How sure it is</h2>

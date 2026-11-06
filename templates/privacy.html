@@ -2,14 +2,18 @@
 {% block title %}Privacy · Music Inspiration Analyzer{% endblock %}
 {% block head %}
 <style>
-  .pv { max-width: 860px; }
-  .promise { margin: 12px 0 24px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .pv { max-width: 760px; }
+  .promise { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; border-top: 1px solid var(--line);
+             margin: 16px 0 24px; }
+  .promise div { padding: 22px 18px 24px 0; border-bottom: 1px solid var(--line); }
+  .promise b { display: block; font-size: 1.05rem; margin-bottom: 6px; }
+  .promise span { color: var(--muted); font-size: .93rem; }
   .pv h2 { font-size: 1.3rem; font-weight: 600; display: flex; align-items: center;
            gap: 12px; margin: 64px 0 14px; }
   .pv h2 .ico { color: var(--muted); }
   .pv table { width: 100%; font-size: .92rem; margin-top: 12px; }
   .pv td, .pv th { padding: 14px 18px 14px 0; }
-  .pv .ilist, .pv .narrow { max-width: 700px; }
+  @media (max-width: 600px) { .promise { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 {% block content %}
@@ -19,18 +23,15 @@
   is gone the moment it's analysed, your results are yours alone, and nothing that could identify your songs leaves
   our server.</p>
 
-<div class="promise tiles pv">
-  <div class="tile"><span class="ico-badge">{{ icon('trash', 22) }}</span><b>Audio deleted at once</b><span>Your
-    recording, and any song you compare it with, is deleted as soon as it has been analysed. We never keep, play or
-    share it.</span></div>
-  <div class="tile"><span class="ico-badge">{{ icon('lock', 22) }}</span><b>Results only you can open</b><span>A result
-    opens only in the browser that made it, or in your account once saved. Sharing by link is a switch you turn
-    on.</span></div>
-  <div class="tile"><span class="ico-badge">{{ icon('shield', 22) }}</span><b>No names leave the server</b><span>The
-    optional AI ideas get the analysis numbers (key, chords, tempo, sections), never your audio, file names or
-    titles.</span></div>
-  <div class="tile"><span class="ico-badge">{{ icon('ban', 22) }}</span><b>No ads, no trackers</b><span>No analytics, no
-    third-party scripts or fonts, nothing sold or shared. Your music is never used to train anything.</span></div>
+<div class="promise pv">
+  <div><b>Audio deleted at once</b><span>Your recording, and any song you compare it with, is deleted as soon as it has
+    been analysed. We never keep, play or share it.</span></div>
+  <div><b>Results only you can open</b><span>A result opens only in the browser that made it, or in your account once
+    saved. Sharing by link is a switch you turn on.</span></div>
+  <div><b>No names leave the server</b><span>The optional AI ideas get the analysis numbers (key, chords, tempo,
+    sections), never your audio, file names or titles.</span></div>
+  <div><b>No ads, no trackers</b><span>No analytics, no third-party scripts or fonts, nothing sold or shared. Your music
+    is never used to train anything.</span></div>
 </div>
 
 <div class="pv">
@@ -61,42 +62,36 @@
   </table>
 
   <h2>{{ icon('server', 24) }}What leaves our server</h2>
-  <ul class="ilist">
-    <li><span class="ico-badge">{{ icon('spark', 22) }}</span><div><b>AI ideas</b> ({{ 'switched on here' if ai_on else
-      'switched off on this server' }}; you can untick them for any upload): the analysis numbers go to the AI provider
-      to write suggestions. No audio, no file names, no song titles, no account details.</div></li>
-    <li><span class="ico-badge">{{ icon('compass', 22) }}</span><div><b>“Find music like this”</b>, only when you use it:
-      the song names and playlist links you type are looked up on MusicBrainz, ListenBrainz and Last.fm, and a public
-      Spotify or YouTube playlist is read for its song names. Songs you upload there are analysed here, like everything
-      else.</div></li>
-    <li><span class="ico-badge">{{ icon('server', 22) }}</span><div><b>Nothing else.</b> The style and instrument models
-      run on our own server. Pages load nothing from other sites.</div></li>
+  <ul>
+    <li><b>AI ideas</b> ({{ 'switched on here' if ai_on else 'switched off on this server' }}; you can untick them for any upload):
+      the analysis numbers go to the AI provider to write suggestions. No audio, no file names, no song titles, no
+      account details.</li>
+    <li><b>“Find music like this”</b>, only when you use it: the song names and playlist links you type are looked up on
+      MusicBrainz, ListenBrainz and Last.fm, and a public Spotify or YouTube playlist is read for its song names.
+      Songs you upload there are analysed here, like everything else.</li>
+    <li><b>Nothing else.</b> The style and instrument models run on our own server. Pages load nothing from other
+      sites.</li>
   </ul>
 
   <h2>{{ icon('shield', 24) }}How the site protects it</h2>
-  <ul class="ilist">
-    <li><span class="ico-badge">{{ icon('eyeoff', 22) }}</span><div>Result pages, your library and your profile tell
-      search engines not to index them and browsers not to keep copies in shared caches.</div></li>
-    <li><span class="ico-badge">{{ icon('link', 22) }}</span><div>When you follow a link out of a result (a search link,
-      say), the other site isn't told where you came from, so a result's address can't leak.</div></li>
-    <li><span class="ico-badge">{{ icon('lock', 22) }}</span><div>Two small cookies only: your sign-in (it also holds this
-      browser's private key to its own results), and whether you've closed the welcome note.</div></li>
-    <li><span class="ico-badge">{{ icon('chart', 22) }}</span><div>Like any website, the server's log records which pages
-      were requested and from where. The site runs behind Cloudflare, which carries the traffic.</div></li>
+  <ul>
+    <li>Result pages, your library and your profile tell search engines not to index them and browsers not to keep
+      copies in shared caches.</li>
+    <li>When you follow a link out of a result (a search link, say), the other site isn't told where you came from, so a
+      result's address can't leak.</li>
+    <li>Two small cookies only: your sign-in (it also holds this browser's private key to its own results), and
+      whether you've closed the welcome note.</li>
+    <li>Like any website, the server's log records which pages were requested and from where. The site runs behind
+      Cloudflare, which carries the traffic.</li>
   </ul>
 
   <h2>{{ icon('user', 24) }}Your controls</h2>
-  <div class="tiles">
-    <div class="tile"><span class="ico-badge">{{ icon('trash', 22) }}</span><b>Delete now</b><span>On any result, saved
-      or not.</span></div>
-    <div class="tile"><span class="ico-badge">{{ icon('link', 22) }}</span><b>Share by link</b><span>And <b
-      style="display:inline">Stop sharing</b>, on any result of yours.</span></div>
-    <div class="tile"><span class="ico-badge">{{ icon('download', 22) }}</span><b>Your data</b><span><a
-      href="{{ url_for('account_page') }}">Download all your data</a> as one zip, or delete your account and everything
-      in it, straight away.</span></div>
-    <div class="tile"><span class="ico-badge">{{ icon('bookmark', 22) }}</span><b>What we remember</b><span><a
-      href="{{ url_for('memory_page') }}">What we remember</a>: off by default; see it, edit it, or forget
-      everything.</span></div>
-  </div>
+  <ul>
+    <li><b>Delete now</b> on any result, saved or not.</li>
+    <li><b>Share by link</b> and <b>Stop sharing</b>, on any result of yours.</li>
+    <li><a href="{{ url_for('account_page') }}">Download all your data</a> as one zip, or <b>delete your account</b> and
+      everything in it, straight away.</li>
+    <li><a href="{{ url_for('memory_page') }}">What we remember</a>: off by default; see it, edit it, or forget everything.</li>
+  </ul>
 </div>
 {% endblock %}
