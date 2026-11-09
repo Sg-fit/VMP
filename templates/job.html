@@ -321,11 +321,16 @@
     <div class="rhead">
       <div>
         <p class="eyebrow">{{ 'Demo' if s.demo else 'Results' }}</p>
-        <h1>{{ demos[s.demo].title if s.demo and s.demo in demos else 'Your style' if s.mode == 'style' else 'Your analysis' }}</h1>
+        {# someone opening a report shared with them: it's not theirs, so no "your", and no save or library lines #}
+        {% set visitor_view = not creator and not s.demo %}
+        <h1>{{ demos[s.demo].title if s.demo and s.demo in demos else ('A shared style' if s.mode == 'style' else 'A shared analysis') if visitor_view else 'Your style' if s.mode == 'style' else 'Your analysis' }}</h1>
         <p class="sub">
         {% if s.demo %}
           <span>This is a demo report, made from computer-generated audio: simpler than a real recording, and no AI
             ideas. <a href="{{ url_for('index') }}">Try yours →</a></span>
+        {% elif visitor_view %}
+          <span>{{ s.files|length }} track{{ 's' if s.files|length != 1 }}, shared by the musician who made it.</span>
+          <a href="{{ url_for('index') }}">Try it on your own track →</a>
         {% else %}
           <span>{{ s.files|length }} track{{ 's' if s.files|length != 1 }}</span>
           {% if saved %}
@@ -351,7 +356,7 @@
             {% for m in midi_files %}<a href="{{ url_for('job_file', job_id=job_id, name='midi/' + m) }}">{{ m }}</a>{% endfor %}{% endif %}
           </div>
         </details>
-        <a class="btn secondary" href="{{ url_for('index') }}">Analyse another</a>
+        <a class="btn secondary" href="{{ url_for('index') }}">{{ 'Analyse your own' if visitor_view else 'Analyse another' }}</a>
       </div>
     </div>
     {% if s.ai_pending %}<p class="muted small" style="margin:8px 0 0">The AI ideas aren't in the download yet: wait for them to get everything in one go.</p>{% endif %}

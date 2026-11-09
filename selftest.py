@@ -1069,10 +1069,17 @@ def account_checks(base, job, browser):
     anon.post(f"{base}/jobs/{job}/share", data={"on": "1"}, timeout=10)  # a stranger can't switch sharing on
     still_private = anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404
     browser.post(f"{base}/jobs/{job}/share", data={"on": "1"}, timeout=10)
-    shared = anon.get(f"{base}/jobs/{job}", timeout=10).ok
+    seen = anon.get(f"{base}/jobs/{job}", timeout=10)
+    owner_view = browser.get(f"{base}/jobs/{job}", timeout=10).text
+    shared = seen.ok
     browser.post(f"{base}/jobs/{job}/share", data={"on": "0"}, timeout=10)
     check("web", "sharing by link is the owner's switch: on, the link works for anyone; off, it doesn't again",
           still_private and shared and anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404)
+    check("web", "someone opening a shared link sees “A shared analysis”, an invitation to try their own, and none of "
+          "the owner's own lines (“Your analysis”, keep it, delete it); the owner still sees theirs",
+          "A shared analysis" in seen.text and "Try it on your own track" in seen.text
+          and "Your analysis" not in seen.text and "Kept for a day" not in seen.text and "Delete now" not in seen.text
+          and "Your analysis" in owner_view and "A shared analysis" not in owner_view)
     res = browser.get(f"{base}/jobs/{job}/files/music_results.json", timeout=10).json()[0]
     key, tempo = res["key"], (f"{int(res['tempo_bpm'] + 0.5)} BPM" if res.get("tempo_bpm") else res["duration"])
     alice, bob = requests.Session(), requests.Session()
