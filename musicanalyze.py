@@ -637,7 +637,7 @@ def rhythm_features(y, y_perc, y_harm, beat_times, clear_beat, duration, sr):
             out["groove"] = ("mostly on the beat" if sync < 0.15 else
                              "some syncopation" if sync < 0.35 else "heavily syncopated")
     else:
-        out["tempo_feel"] = "no clear pulse (ambient / free time)"
+        out["tempo_feel"] = "free time (ambient)"  # said as what it is, not as a missing beat
     return out
 
 
@@ -1812,11 +1812,7 @@ def lineup(r):
     if d.get("present"):
         row("drums", "Drums", "measured", lambda s: {"on": bool(s.get("drums")), "p": 1.0 if s.get("drums") else 0.0,
                                                       "note": "drum kit" if s.get("drums") else "no drums"})
-    elif d.get("possible"):
-        row("drums", "Drums?", "measured", lambda s: {"on": False, "unsure": bool(s.get("drums_heard")), "p": 0.0,
-                                                       "note": "percussive, but maybe not drums" if s.get("drums_heard")
-                                                       else "no percussion"})
-    b = r.get("bass") or {}
+    b = r.get("bass") or {}  # unconfirmed drums get no row: the report only shows what's there
     if b.get("present"):
         row("bass", "Bass", "measured", lambda s: {"on": bool(s.get("bass")), "p": 1.0 if s.get("bass") else 0.0,
                                                     "note": "bass plays" if s.get("bass") else "no bass"})
@@ -3060,6 +3056,8 @@ If a blues Form is given (8-, 12- or 16-bar), the alt_progressions must keep tha
 as many chords as the form has bars (e.g. a quick change, dominant 7ths throughout, a ii-V before the turnaround).
 Chord names ending in 5 (D5, C#5) are power chords (root and fifth), not single notes; call single notes "the note C#".
 If the musician named the instruments, write ideas for that line-up; suggesting an added instrument is fine if you say so.
+vibe, mood and picture describe only what IS there: never point out an instrument or feature the track lacks
+("no drums", "without bass"); what's missing belongs only in gap_ideas and ideas, as something to try.
 Use only facts given below; the analysis is approximate, so don't build on anything marked uncertain.
 
 ANALYSIS
@@ -3779,7 +3777,7 @@ GUIDE = {
     },
     "Instruments": {
         "Who plays when": "One row per instrument, one block per section: filled where it plays (stronger = surer), "
-                          "a dashed outline where it might (drums we couldn't confirm), faint where it doesn't. The "
+                          "faint where it doesn't. Only instruments we found get a row. The "
                           "vocals come from a trained model listening second by second; the drums, bass and "
                           "chords from our own measurements (or, with Demucs, from each separated part). Hover "
                           "over a block for the evidence.",
@@ -3950,7 +3948,7 @@ def track_report(r, focus=None):
         return L + [f"⚠️ We couldn't analyse this file ({r['error']}). If it plays on your computer, try "
                     "exporting it again as mp3 or wav and uploading that.", ""]
     rh, s = r["rhythm"], r["sound"]
-    tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
+    tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else ""  # no beat: the header just leaves tempo out
     if r["tempo_bpm"] and r.get("tempo_approximate"):
         tempo = f"~{tempo} (approximate: there are hardly any clear attacks to measure the beat from)"
     meter = r.get("meter") or {}
@@ -3961,8 +3959,9 @@ def track_report(r, focus=None):
     if ctx:
         told = [x for x in (", ".join(ctx["instruments"]), ctx.get("genre")) if x]
         L += [f"_You told us: {' · '.join(told)}._"] + [f"- _{n}_" for n in ctx.get("notes", [])] + [""]
-    L += [f"**{tip(r['duration'], 'Length')}** · **{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · "
-          f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
+    L += [f"**{tip(r['duration'], 'Length')}** · "
+          + (f"**{tip(tempo, explanation=GLOSSARY['Tempo'] + ' ' + GLOSSARY['Meter'])}** · " if tempo else "")
+          + f"**{tip(r['key'], 'Key')}** ({tip(r['camelot'], 'Camelot')}) · **{mode_tip(r['mode'])}** · "
           f"{tip(rh['tempo_feel'], 'Pulse')} · {tip(s['tone'], 'Tone')}", ""]
     L += [f"> **In short:** {in_short(r)}", ""]
     if focus == "ideas":
@@ -4183,7 +4182,7 @@ def melody_report(r):
         L.append("")
     t = r.get("top_line") or {}
     if t.get("present"):
-        motif = "; ".join(f"`{' '.join(x['notes'])}` ×{x['times']}" for x in t["motifs"]) or "none clearly repeating"
+        motif = "; ".join(f"`{' '.join(x['notes'])}` ×{x['times']}" for x in t["motifs"])
         main = ", ".join(f"{n['note']} {n['pct']}%" for n in t["main_notes"])
         verdict = ("it's {0}% chord notes, so it's probably following the chords rather than playing a melody "
                    "of its own".format(t["chord_tone_pct"]) if t["follows_chords"] else
@@ -4195,7 +4194,7 @@ def melody_report(r):
             verdict += (f". It's most likely the {named_instrument(r, lead)} line, since that's the only lead "
                         "instrument you named")
         L += [f"**{tip('Top line', 'Top line')} (automatic):** range {t['range']} · main notes {main} · "
-              f"repeating 4-note figures: {motif} · {verdict}."]
+              + (f"repeating 4-note figures: {motif} · " if motif else "") + f"{verdict}."]
         if not m:
             L += ["", "_Want a proper melody analysis? Type the melody or riff when you upload "
                   "(for example `A E F E A E D E`)._"]
@@ -4249,17 +4248,15 @@ def in_short(r):
     kind = ((r.get("blues_form") or {}).get("name") or ("AABA song" if r.get("song_form") else None)
             or ("dance track" if (r.get("producer") or {}).get("map") else "track"))
     mood = f.get("mood", "").replace(", ", " and ")
-    first = (f"A {pace}{', ' + mood if mood else ''} {kind} in {r['key']}"
+    first = (f"{'An' if pace[0] in 'aeiou' else 'A'} {pace}{', ' + mood if mood else ''} {kind} in {r['key']}"
              + (f" at {bpm:.0f} BPM" if bpm else "") + ".")
     rows = lineup(r)
     plays = [rw["name"].split(" (")[0].lower() for rw in rows if rw["key"] != "drums" and any(c["on"] for c in rw["cells"])]
     plays = [p.replace("chords & melody", "the chords and tune") for p in plays]
     d = r.get("drums") or {}
-    tail = ", with no drum kit that we can hear" if d.get("possible") or d.get("string_attacks") else ""
     if d.get("present"):
         plays = ["drums"] + plays
-    second = ("" if not plays else f"It's {plays[0]} on its own{tail}." if len(plays) == 1 else
-              f"It's {_and(plays)}{tail}.")
+    second = ("" if not plays else f"It's {plays[0]} on its own." if len(plays) == 1 else f"It's {_and(plays)}.")
     third = ""
     if f.get("arc"):
         peak = f.get("peak") if f.get("contrast", 0) >= 10 else None
@@ -4299,9 +4296,7 @@ def lineup_summary(rows, r):
     parts = []
     for rw in rows:
         on = [c["label"] for c in rw["cells"] if c["on"]]
-        if rw["key"] == "drums" and not on:
-            parts.append("drums unconfirmed (see below)")
-        elif on:
+        if on:
             where = "throughout" if len(on) == n else "in " + " ".join(on)
             parts.append(f"**{rw['name']}** {where}" + {"model": " (the model hears singing)",
                                                          "guessed": " (which instrument is the model's guess)"}.get(rw["how"], ""))
@@ -4317,16 +4312,19 @@ def instruments_report(r):
     named = [i for i in melodic  # the solo instrument's low part is written out below, so it isn't "other"
              if not (solo and family(i) == r.get("low_part_instrument") and len(melodic) == 1)]
     rows = lineup(r)
-    if not d.get("present") and not b.get("present") and not solo and not d.get("string_attacks") and not named \
-            and not d.get("possible") and not rows:
+    if not d.get("present") and not b.get("present") and not solo and not named and not rows:
         return []
     how = ("with Demucs, an AI model built for the job" if r.get("separation") == "demucs" else
            "with a lighter split that tells sharp hits from held notes")
-    L = ["", "### Instruments", "", "_Who's playing when, and what the drums and bass are up to._", ""]
+    up_to = _and([x for x, on in (("the drums", d.get("present")), ("the bass", b.get("present"))) if on])
+    verb = "is" if up_to == "the bass" else "are"  # "the drums are", "the drums and bass are", "the bass is"
+    L = ["", "### Instruments", "", f"_Who's playing when{f', and what {up_to} {verb} up to' if up_to else ''}._", ""]
     if rows:
         L += [f"**{tip('Who plays when')}**", "", charts.lineup_map(rows, r.get("duration_sec")), "",
               lineup_summary(rows, r), ""]
-    L += [MORE, "", f"_To hear the drums on their own, we split them from everything else {tip(how, 'Separation')}._", ""]
+    L += [MORE, ""]
+    if d.get("present"):
+        L += [f"_To hear the drums on their own, we split them from everything else {tip(how, 'Separation')}._", ""]
     L += heard_report(r)
     if d.get("present") and d.get("grid"):
         where = [sec["label"] for sec in r["sections"] if sec.get("drums")]
@@ -4345,29 +4343,6 @@ def instruments_report(r):
               '<details markdown="1"><summary>As text</summary>', "", "```", *rows, "```", "", "</details>", ""]
     elif d.get("present"):
         L += ["**🥁 Drums** — they're there, but we couldn't find a clear repeating pattern.", ""]
-    together = (r.get("evidence") or {}).get("voices", 0) >= instruments.VOICES_APART
-    if d.get("possible") and not d.get("user_said_none") and together:
-        L += ["**🥁 Drums** — we don't think there's a drum kit, so we haven't assumed one. The hits are noisy, but "
-              "every frequency band hits at the same moment, bar after bar: that's one instrument's strums or "
-              "picking (a bright or distorted guitar is as noisy as a snare). In a kit, the snare or the hats hit at "
-              "moments the kick doesn't. If there are drums, tick “drums” when you upload and we'll show their groove.", ""]
-    elif d.get("possible") and not d.get("user_said_none"):
-        L += ["**🥁 Drums** — we can't tell, so we haven't assumed any. The percussive sound is only slightly "
-              "noise-like: it could be light percussion (a shaker, brushes) or just the scrape of strummed or "
-              "hard-picked strings. If there are drums, tick “drums” when you upload and we'll show their groove.", ""]
-    elif d.get("user_said_none"):
-        L += ["**🥁 Drums** — none, as you said. Any percussive sound is just the attack of the notes.", ""]
-    elif d.get("string_attacks"):
-        L += ["**🥁 Drums** — none. The percussive sound you can hear is plucked or strummed strings, not a drum kit.", ""]
-    if solo and b.get("user_said_none"):
-        L += ["**🎸 Bass** — no bass instrument, as you said. The low notes belong to the main instrument, and "
-              "we've analysed them below as its lowest part.", ""]
-    elif solo:
-        L += ["**🎸 Bass** — we haven't assumed one. We didn't hear notes below a guitar's lowest string "
-              "(E2, 82 Hz), where a bass plays, with real sound there. The low notes are "
-              f"{low_part_range(r)[1]} (like a guitarist's "
-              "thumb or a pianist's left hand), and we've analysed them below as the lowest part. Phone microphones "
-              "often lose a bass's low end, so if there is a bass, tick it when you upload.", ""]
     if solo:
         b = dict(r.get("low_part") or {}, present=True)
         if r.get("octave_raised"):
@@ -4381,8 +4356,8 @@ def instruments_report(r):
                   "Check their octave by ear._", ""]
     if named:
         L += [f"**Other instruments you named** — {', '.join(INSTRUMENTS.get(i, i) for i in named)}. We don't write these "
-              "out one by one. We transcribe the drums (as a grid) and the lowest part (the bass, or the main "
-              "instrument's own low notes), and what everyone else plays together shows up under Harmony (the "
+              "out one by one. We transcribe " + ("the drums (as a grid) and " if d.get("present") else "")
+              + "the lowest part (the bass, or the main instrument's own low notes), and what everyone else plays together shows up under Harmony (the "
               "chords) and Melody (the top line).", ""]
     if b.get("present"):
         notes = ", ".join(f"{n['note']} {n['pct']}%" for n in b["main_notes"])
@@ -4553,10 +4528,10 @@ def reference_report(r):
     if "error" in r:
         return L + [f"⚠️ We couldn't analyse the reference ({r['error']}), so there's no comparison this time. "
                     "Try exporting it again as mp3 or wav.", ""]
-    tempo = f"{r['tempo_bpm']:.0f} BPM" if r["tempo_bpm"] else "no clear beat"
+    tempo = f"**{r['tempo_bpm']:.0f} BPM** · " if r["tempo_bpm"] else ""
     L += ["_A song you're measuring yourself against. We analysed it the same way as yours; the comparison is at "
           "the top of each of your tracks._", "",
-          f"**{r['duration']}** · **{tempo}** · **{r['key']}** · {mode_tip(r['mode'])} · form "
+          f"**{r['duration']}** · {tempo}**{r['key']}** · {mode_tip(r['mode'])} · form "
           f"**{' '.join(s['label'] for s in r['sections'])}**", ""]
     svg = timeline_svg(r)
     if svg:
@@ -4813,12 +4788,11 @@ def producer_report(r):
          "pumping, the arrangement in bars, and how the mix holds up on a club system or a phone._", ""]
     if v.get("kick"):
         L.append(f"- **{tip('Drum pattern', 'Drum grid')}:** " + ", ".join(v["kick"]))
-    p = v.get("pump")
-    if p:
-        L.append(f"- **{tip('Sidechain pumping', 'Sidechain')}:** " + (
-            f"{p['kind']}, the sustained sounds duck about {p['depth_db']} dB after each beat and swell back"
-            if p.get("kind") else "none: the pads and synths hold steady under the kick"))
-    if p and p.get("shape"):
+    p = v.get("pump") or {}
+    if p.get("kind"):  # no pumping: nothing to say about it
+        L.append(f"- **{tip('Sidechain pumping', 'Sidechain')}:** {p['kind']}, the sustained sounds duck about "
+                 f"{p['depth_db']} dB after each beat and swell back")
+    if p.get("kind") and p.get("shape"):
         L += ["", charts.pump_shape(p["shape"]), "",
               '<span class="muted small">One beat\'s level, averaged over the track: pumping dips at the kick and '
               'swells back.</span>', ""]

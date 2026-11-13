@@ -331,7 +331,7 @@ def measured_tags(r):
     rh = r.get("rhythm") or {}
     if rh.get("groove") == "heavily syncopated":
         out["rhythm"]["syncopated"] = 0.8
-    if (rh.get("tempo_feel") or "").startswith("free"):
+    if rh.get("tempo_feel") == "free / rubato":  # a beat that bends (a track with no beat at all isn't rubato)
         out["rhythm"]["rubato"] = 0.8
     mode, conf = r.get("mode"), r.get("mode_confidence")
     if mode in ("Dorian", "Phrygian", "Lydian", "Mixolydian") and conf != "low":

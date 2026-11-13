@@ -2118,6 +2118,7 @@ def gap_checks(tmp):
 
 def lineup_checks(tmp):
     """Drums and a bass are never assumed: each needs its own evidence, and one never implies the other."""
+    import discover
     import instruments as ins
     import musicanalyze as ma
     print("\n== Who's playing (never assumed) ==")
@@ -2150,9 +2151,41 @@ def lineup_checks(tmp):
           bass_only["bass"].get("present") and not bass_only["drums"].get("present"),
           str(bass_only.get("evidence")))
     guitar = ma.analyze(write(Path(tmp) / "lu_guitar.wav", guitar_blues()), cache_dir=cache)
-    rep = "\n".join(ma.track_report(guitar))
-    check("lineup", "solo guitar: no drums, no bass, and the report says the low notes are the guitar's",
-          not guitar["drums"].get("present") and not guitar["bass"].get("present") and "haven't assumed" in rep)
+    # Only what's there: an absent instrument gets no line, no row and no "none" anywhere it's described
+    seen = lambda lines: re.sub(r"<[^>]*>", "", re.sub(r"<svg.*?</svg>", "", "\n".join(lines), flags=re.S))  # as read
+    ins_g, short_g = seen(ma.instruments_report(guitar)), ma.in_short(guitar)
+    told_g = json.loads(json.dumps(guitar))
+    ma.apply_context(told_g, ma.clean_context(["guitar"]))  # "no drums, no bass" said by the musician
+    ins_t = seen(ma.instruments_report(told_g))
+    absent = ("🥁", "🎸 Bass", "drums and bass", "haven't assumed", "as you said", "no drum", "no bass", "none")
+    check("lineup", "solo guitar (NEGATIVE): no drums or bass found, and the report says nothing about them, "
+          "measured or told; its low notes are still analysed as the guitar's lowest part",
+          not guitar["drums"].get("present") and not guitar["bass"].get("present")
+          and not any(w in x for w in absent for x in (ins_g, ins_t)) and "drum" not in short_g.lower()
+          and "Lowest part" in ins_g and "Lowest part" in ins_t
+          and not any(rw["key"] in ("drums", "bass") for rw in ma.lineup(guitar)),
+          f"in short: {short_g}")
+    ins_d, ins_b = seen(ma.instruments_report(no_bass)), seen(ma.instruments_report(bass_only))
+    check("lineup", "what is there is still reported: drums alone get their drum line and no bass line, a bass "
+          "alone gets its bass line and no drum line",
+          "🥁 Drums" in ins_d and "🎸 Bass" not in ins_d and "what the drums are up to" in ins_d
+          and "drums" in ma.in_short(no_bass) and "🎸 Bass" in ins_b and "🥁" not in ins_b
+          and "what the bass is up to" in ins_b and "drum" not in ins_b.lower(), ins_b[:300])
+    check("lineup", "the summary's article fits its first word (“An upbeat …”, “A slow …”)",
+          ma.in_short(dict(guitar, tempo_bpm=120.0)).startswith("An upbeat")
+          and ma.in_short(dict(guitar, tempo_bpm=60.0)).startswith("A slow"), ma.in_short(dict(guitar, tempo_bpm=120.0)))
+    beatless = dict(guitar, tempo_bpm=None, rhythm=dict(guitar["rhythm"], tempo_feel="free time (ambient)"))
+    head_b = "\n".join(ma.track_report(beatless)[:8])
+    head_g = "\n".join(ma.track_report(guitar)[:8])
+    sr_ = 22050
+    pad = 0.2 * np.sin(2 * np.pi * 220 * np.arange(4 * sr_) / sr_)
+    feel_free = ma.rhythm_features(pad, pad * 0, pad, np.array([]), False, 4.0, sr_)["tempo_feel"]
+    check("lineup", "no beat: the header leaves tempo out (no “no clear beat”), the pulse reads as free time, and "
+          "a beatless track isn't tagged rubato (a bending beat still is)",
+          "BPM" not in head_b and "no clear" not in head_b and "BPM" in head_g and feel_free == "free time (ambient)"
+          and "rubato" not in discover.measured_tags(beatless).get("rhythm", {})
+          and "rubato" in discover.measured_tags(dict(guitar, rhythm=dict(guitar["rhythm"], tempo_feel="free / rubato")))
+          .get("rhythm", {}), head_b)
     # a "possible": not reported as drums, no groove anywhere, and the musician's tick turns them on
     r = dict(no_bass, drums={"present": False, "possible": True, "held": no_bass["drums"], "energy_share_pct": 20},
              sections=[dict(x, drums=False, drums_heard=x["drums"]) for x in no_bass["sections"]])
@@ -2172,8 +2205,9 @@ def lineup_checks(tmp):
           and ev_k.get("voices", 1) < ins.VOICES_APART,
           f"strums {ev_b}; kit + strums {ev_k}")
     rep_b = "\n".join(ma.instruments_report(bright))
-    check("lineup", "the report says why: every band hits together, as one instrument's strums do",
-          "every frequency band hits at the same moment" in rep_b and "Drum groove" not in rep_b)
+    check("lineup", "strums that aren't a kit (NEGATIVE): no drum line, no drum row, no “no drum kit” in the summary",
+          "🥁" not in rep_b and "Drum groove" not in rep_b and "drum" not in ma.in_short(bright).lower()
+          and not any(rw["key"] == "drums" for rw in ma.lineup(bright)), ma.in_short(bright))
     # who plays when: vocals from the model's second-by-second answer, the rest measured; nothing assumed
     secs = [{"label": "A", "start": 0.0, "end": 20.0, "harmony_db": 30.0, "loudness_db": -28.0, "drums": False, "bass": True},
             {"label": "B", "start": 20.0, "end": 50.0, "harmony_db": 42.0, "loudness_db": -16.0, "drums": True, "bass": True},
@@ -2196,8 +2230,10 @@ def lineup_checks(tmp):
     check("lineup", "with Demucs's separated parts: each part where it's loud enough; bleed into empty stems "
           "(drums, piano here) isn't a part", rows == {"vocals": [False, True, True], "bass": [True, True, True],
                                                       "guitar": [True, True, True]}, str(rows))
-    check("lineup", "unsure drums are a question, not a claim; ticking “drums” brings their groove back",
-          "we can't tell" in rep and "Drum groove" not in rep and "grid" not in r["drums"]
+    check("lineup", "unsure drums aren't mentioned at all (no line, no “Drums?” row); ticking “drums” brings "
+          "their groove back",
+          "🥁" not in rep and "Drums?" not in rep and "we can't tell" not in rep and "grid" not in r["drums"]
+          and not any(rw["key"] == "drums" for rw in ma.lineup(r)) and "🥁 Drums" in "\n".join(ma.instruments_report(told))
           and told["drums"].get("present") and told["drums"].get("grid") and any(x["drums"] for x in told["sections"]))
 
 
