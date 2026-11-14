@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_lexicon.html" import lexicon_css, entry_card %}
+{% block title %}{{ e.name }} · Theory library · Music Inspiration Analyzer{% endblock %}
+{% block head %}{{ lexicon_css() }}<style>.tm-wrap { max-width: 820px; } .tm-wrap .lx-card h1 { margin: 0 0 4px; }</style>{% endblock %}
+{% block content %}
+<div class="tm-wrap">
+  <p class="small"><a href="{{ url_for('theory') }}">← Theory library</a></p>
+  {{ entry_card(e, heading='h1') }}
+  {% if e.in_report %}
+  <p class="muted small" style="max-width:46em"><b>In our reports:</b> {{ e.in_report }}</p>
+  {% endif %}
+  {% if related %}
+  <p class="lx-h">Related</p>
+  <ul class="chips">{% for x in related %}<li><a href="{{ url_for('theory_term', slug=x.slug) }}">{{ x.name }}</a></li>{% endfor %}</ul>
+  {% endif %}
+  <p class="muted" style="margin-top:32px">Want to find it in your own music? <a href="{{ url_for('index') }}">Upload a
+    track</a>, then switch to <b>Learn</b> at the top: the patterns we find in it come with their lessons.</p>
+</div>
+{% endblock %}

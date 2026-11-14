@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Community · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .cm-wrap { max-width: 900px; }
+  .cm-top { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 28px; }
+  .cm-top input { font: inherit; flex: 1 1 240px; min-height: 44px; padding: 9px 12px; border: 1px solid var(--line);
+                  border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+  .posts { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; }
+  .pcard { display: block; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card);
+           padding: 18px 20px; color: var(--ink); text-decoration: none; }
+  .pcard:hover { border-color: var(--muted); }
+  .pcard h2 { font-size: 1.15rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+  .pcard .by { font-size: .85rem; color: var(--muted); margin: 0 0 10px; }
+  .pcard .body { margin: 0 0 10px; max-width: 46em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3;
+                 -webkit-box-orient: vertical; overflow: hidden; }
+  .pcard .nums { font-size: .88rem; color: var(--muted); margin: 8px 0 0; }
+  .pcard .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+  .pcard .tags span { font-size: .8rem; padding: 2px 10px; border-radius: var(--r-pill); background: var(--faint); }
+  .pcard svg { max-width: 100%; height: auto; }
+  .how { background: var(--faint); border-radius: var(--r-card); padding: 16px 20px; margin: 0 0 28px; max-width: 56rem; }
+  .how p { margin: 0; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="cm-wrap">
+  <p class="eyebrow">Share a track, get feedback, hear what others make</p>
+  <h1>Community</h1>
+  <p class="lede">Musicians share an analysis of their track (and, if they like, the recording itself) and ask for
+    feedback. Read any of them in Pro or Learn view, and leave a comment.</p>
+  {% if request.args.get('reported') %}<p class="ok">Thanks for telling us. When a few people report the same thing,
+    it's hidden.</p>{% endif %}
+  <div class="how"><p><b>Share yours:</b> {% if user %}open one of your saved analyses in your
+    <a href="{{ url_for('history') }}">Library</a> and choose <b>Share with the community</b>.{% else %}
+    <a href="{{ url_for('login', next=request.path) }}">sign in</a>, save an analysis, then choose
+    <b>Share with the community</b> on its page.{% endif %} Nothing is shared until you do, and you can take it down
+    any time.</p></div>
+  <form class="cm-top" method="get" action="{{ url_for('community') }}" role="search">
+    <input name="q" value="{{ q }}" placeholder="Search titles, notes or musicians" aria-label="Search the community">
+    <button class="btn secondary" type="submit">Search</button>
+  </form>
+  {% if posts %}
+  <ul class="posts">
+    {% for p in posts %}
+    <li><a class="pcard" href="{{ url_for('community_post', post_id=p.id) }}">
+      <h2>{{ p.title }}</h2>
+      <p class="by">{{ p.username }} · {{ p.created|datetime(True) }} · {{ p.n_comments }} comment{{ 's' if p.n_comments != 1 }}{{ ' · 🎧 listen' if p.recording_id }}</p>
+      {% if p.body %}<p class="body">{{ p.body }}</p>{% endif %}
+      {% if p.track %}
+        {% if p.track.timeline %}{{ p.track.timeline|safe }}{% endif %}
+        <p class="nums">{{ p.track.key }}{{ ' · ' ~ p.track.tempo if p.track.tempo }}{{ ' · ' ~ p.track.meter if p.track.meter }} · {{ p.track.duration }}{{ ' · +' ~ p.track.more ~ ' more' if p.track.more }}</p>
+        {% if p.track.patterns %}<div class="tags">{% for e in p.track.patterns %}<span>{{ e.name }}</span>{% endfor %}</div>{% endif %}
+      {% endif %}
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">{{ 'Nothing matches that search.' if q else 'No posts yet. Be the first to share a track!' }}</p>
+  {% endif %}
+</div>
+{% endblock %}

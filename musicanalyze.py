@@ -45,6 +45,7 @@ import electronic
 import gaps as gapmap
 import inspiration
 import instruments
+import lexicon
 import notation
 import portrait
 
@@ -3901,7 +3902,9 @@ BLUES_TIP = ("The 12-bar blues: 4 bars on the home chord (I), 2 on the IV chord,
 def tip(text, term=None, explanation=None):
     """Wrap text in a hover tooltip (an <abbr>). Works in the web app and most Markdown viewers."""
     title = explanation or GLOSSARY[term or text]
-    return f'<abbr title="{html.escape(title, quote=True)}">{text}</abbr>'
+    # a report word names its term, so the page can link it to the same entry in the theory library (lexicon.py)
+    named = "" if explanation else f' data-term="{lexicon.slug(term or text)}"'
+    return f'<abbr title="{html.escape(title, quote=True)}"{named}>{text}</abbr>'
 
 
 def mode_tip(mode):

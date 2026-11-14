@@ -986,6 +986,7 @@ def web_checks(tmp, files):
         check("web", "the next job works after a crash", s4["state"] == "done", s4["state"])
         account_checks(base, job4, browser)
         memory_web_checks(base, files)
+        community_web_checks(base, files)
         style_web_checks(base, files)
         inventory_web_checks(base, files)
         home = browser.get(base + "/", timeout=10).text
@@ -2753,6 +2754,178 @@ def tag_checks(tmp, online=False):
 
 # ---------------------------------------------------------------- main
 
+
+def learn_checks(tmp):
+    """The educational view and the theory library: each lesson comes from a pattern the analysis really found (known
+    answers on generated audio, and none where the pattern isn't there), and the library the Pro report and the Learn
+    view share has an entry for every word, pattern and progression either of them uses."""
+    import inspiration
+    import learn
+    import lexicon
+    import musicanalyze as ma
+    print("\n== Learn view and theory library ==")
+    cache = Path(tmp) / "learn_cache"
+    chords = [("A", "m"), ("F", ""), ("C", ""), ("G", "")]
+    blues = ma.analyze(write(Path(tmp) / "le_blues.wav", guitar_blues()), cache_dir=cache)
+    pop = ma.analyze(write(Path(tmp) / "le_pop.wav", song(chords, 110, 4, loops=8)), cache_dir=cache)
+    waltz = ma.analyze(write(Path(tmp) / "le_waltz.wav", song([("A", ""), ("E", "7"), ("A", ""), ("D", "")], 120, 3,
+                                                               loops=5, drums=False, waltz=True, soft=True)),
+                       cache_dir=cache)  # the same waltz the analysis checks read as 3/4
+    names = lambda r, main=True: [c["entry"]["name"] for c in learn.patterns(r) if c["main"] == main]
+    bc = next((c for c in learn.patterns(blues) if c["entry"]["name"] == "12-bar blues"), None)
+    check("learn", "a 12-bar blues in A becomes a 12-bar blues lesson: your choruses, its chords in your key (A, D, "
+          "E), and the twelve bars drawn",
+          bc is not None and "A (I), D (IV) and E (V)" in " ".join(bc["seen"]) and bc["visual"].count('class="bar"') == 12
+          and bc["how_sure"] and bc["entry"]["examples"], str(names(blues)))
+    check("learn", "a 4/4 pop loop (NEGATIVE): no blues, AABA, waltz or odd-meter lesson",
+          not {"12-bar blues", "8-bar blues", "16-bar blues", "AABA", "Waltz time (3/4)", "Odd meters (5/4, 7/4)"}
+          & set(names(pop)), str(names(pop)))
+    check("learn", "a waltz in 3/4 gets the waltz lesson (only when the meter was detected, not assumed)",
+          ("Waltz time (3/4)" in names(waltz)) == ((waltz.get("meter") or {}).get("confidence") == "detected"
+                                                    and waltz["meter"]["beats_per_bar"] == 3)
+          and "Waltz time (3/4)" in names(waltz), str(waltz.get("meter")))
+    # the same evidence as the Pro report: a groove lesson for each drum trait the report shows, and only then
+    for r in (pop, blues):
+        traits = " ".join((r.get("drums") or {}).get("traits", [])) if (r.get("drums") or {}).get("present") else ""
+        want = {n for w, n in (("backbeat", "Backbeat"), ("four-on-the-floor", "Four-on-the-floor"),
+                               ("half-time", "Half-time feel"), ("3+3+2", "Tresillo (3+3+2)")) if w in traits}
+        got = set(names(r)) & {"Backbeat", "Four-on-the-floor", "Half-time feel", "Tresillo (3+3+2)"}
+        check("learn", f"{r['file']}: a groove lesson exactly for each drum trait the report found", want == got,
+              f"traits {traits!r}, lessons {got}")
+    # one library for both views: every progression, mode, form and report word resolves
+    progs = []
+    for name, _, _ in inspiration.PROGRESSIONS:
+        r = dict(pop, references={"progressions": [{"progression": name, "match": "same loop", "examples": [],
+                                                     "your_chords": ["Am", "F", "C", "G"]}]})
+        progs.append(name in [c["entry"]["name"] for c in learn.patterns(r)] or lexicon.find(name) is not None
+                     and any(c["entry"]["slug"] == lexicon.find(name)["slug"] for c in learn.patterns(r)))
+    check("learn", "every famous progression the report can name has its lesson in the library",
+          all(progs), str([n for (n, _, _), ok in zip(inspiration.PROGRESSIONS, progs) if not ok]))
+    missing = [m for m in list(ma.MODE_INFO) + list(inspiration.MODE_REFERENCES) + [f.split(" (")[0] for f in ma.BLUES_FORMS]
+               + list(ma.GLOSSARY) if not lexicon.find(m)]
+    check("learn", "every mode, blues form and report word has a library entry", not missing, str(missing))
+    idx = lexicon.index()
+    bad_terms = [t for t in ma.GLOSSARY if 'data-term="' not in ma.tip("x", t)
+                 or ma.tip("x", t).split('data-term="')[1].split('"')[0] not in idx]
+    check("learn", "each underlined word in the Pro report names a library entry (so its tooltip links there)",
+          not bad_terms, str(bad_terms[:5]))
+    es = lexicon.entries()
+    broken = [(e["name"], s) for e in es for s in e["related"] if not lexicon.get(s)]
+    urls = [x["url"] for e in es for x in e["examples"]] + [e["lesson"] for e in es]
+    check("learn", "the library's links all work: related terms exist, every YouTube link is a search (no guessed "
+          "video ids), slugs are unique",
+          not broken and all(u.startswith(lexicon.YOUTUBE) for u in urls) and len({e["slug"] for e in es}) == len(es),
+          str(broken[:5]))
+    check("learn", "every lesson explains itself, says how to hear it and is grouped",
+          all(e["short"] and e["long"] and e["group"] in lexicon.GROUPS for e in lexicon.LESSONS)
+          and sum(len(e["examples"]) for e in lexicon.LESSONS) >= 100, f"{len(lexicon.LESSONS)} lessons")
+
+
+def community_web_checks(base, files):
+    """The theory library, the Pro/Learn switch and the community end to end: posting is the owner's choice, others
+    can read and comment, comments are plain text, only the right people delete, reports hide, and taking a post
+    down closes it again."""
+    import requests
+    print("\n== Theory, Learn view and Community ==")
+    fran, gus, hal, ivy, anon = (requests.Session() for _ in range(5))
+    for sess, name in ((fran, "fran"), (gus, "gus"), (hal, "hal"), (ivy, "ivy")):
+        sess.post(base + "/signup", data={"username": name, "password": "selftest-pw8", "password2": "selftest-pw8"},
+                  timeout=10)
+    lib = anon.get(base + "/theory", timeout=10)
+    found = anon.get(base + "/theory", params={"q": "dorian"}, timeout=10).text
+    term = anon.get(base + "/theory/12-bar-blues", timeout=10).text
+    check("community", "the theory library: browse, search, a lesson's page with examples and YouTube searches; an "
+          "unknown term is a 404",
+          lib.ok and "12-bar blues" in lib.text and "Dorian" in found and "Backbeat" not in found
+          and "Sweet Home Chicago" in term and "youtube.com/results?search_query=" in term
+          and anon.get(base + "/theory/no-such-thing", timeout=10).status_code == 404)
+    up = [("tracks", (Path(files["guitar_blues"]).name, open(files["guitar_blues"], "rb")))]
+    job = fran.post(base + "/analyze", files=up, allow_redirects=False, timeout=60).headers["Location"].rsplit("/", 1)[-1]
+    t0 = time.time()
+    while time.time() - t0 < 300 and fran.get(f"{base}/jobs/{job}/status", timeout=10).json()["state"] not in ("done", "error"):
+        time.sleep(1)
+    fran.post(f"{base}/jobs/{job}/save", timeout=10)
+    pro = fran.get(f"{base}/jobs/{job}", timeout=10).text
+    lrn = fran.get(f"{base}/jobs/{job}", params={"view": "learn"}, timeout=10).text
+    fran.post(base + "/view", data={"view": "learn", "next": f"/jobs/{job}"}, timeout=10)
+    kept = fran.get(f"{base}/jobs/{job}", timeout=10).text
+    fran.post(base + "/view", data={"view": "pro", "next": f"/jobs/{job}"}, timeout=10)
+    back = fran.get(f"{base}/jobs/{job}", timeout=10).text
+    evil = fran.post(base + "/view", data={"view": "pro", "next": "//evil.example"}, allow_redirects=False, timeout=10)
+    check("community", "the Pro/Learn switch: Learn shows the patterns as lessons from the same analysis, the choice is "
+          "remembered, Pro brings the full report back; the switch never sends you off-site",
+          "Patterns in your track" in lrn and "12-bar blues" in lrn and "Patterns in your track" not in pro
+          and "In short" in pro and 'data-term="' in pro and "Patterns in your track" in kept
+          and "Patterns in your track" not in back and evil.headers.get("Location", "").endswith("/")
+          and "evil" not in evil.headers.get("Location", ""))
+    stolen = gus.post(f"{base}/jobs/{job}/post", data={"title": "mine now"}, allow_redirects=False, timeout=10)
+    before = anon.get(f"{base}/jobs/{job}", timeout=10).status_code
+    r = fran.post(f"{base}/jobs/{job}/post", data={"title": "<b>My first blues</b>", "body": "Is bar 12 clear?"},
+                  allow_redirects=False, timeout=10)
+    post_url = base + r.headers.get("Location", "/community/0")
+    pid = post_url.rsplit("/", 1)[-1]
+    listing = anon.get(base + "/community", timeout=10).text
+    check("community", "only the owner can post an analysis; once posted, anyone can read the post and the analysis "
+          "(titles shown as text, never as HTML)",
+          stolen.status_code == 403 and before == 404 and r.status_code == 302
+          and "&lt;b&gt;My first blues&lt;/b&gt;" in listing and "<b>My first blues</b>" not in listing
+          and anon.get(f"{base}/jobs/{job}", timeout=10).ok and anon.get(post_url, timeout=10).ok
+          and "noindex" in anon.get(post_url, timeout=10).headers.get("X-Robots-Tag", ""))
+    nobody = anon.post(post_url + "/comment", data={"body": "drive-by"}, allow_redirects=False, timeout=10)
+    gus.post(post_url + "/comment", data={"body": "<script>alert(1)</script> love the bends"}, timeout=10)
+    page = anon.get(post_url, timeout=10).text
+    check("community", "comments need an account and are shown as plain text",
+          nobody.status_code == 302 and "/login" in nobody.headers.get("Location", "") and "drive-by" not in page
+          and "&lt;script&gt;alert(1)&lt;/script&gt; love the bends" in page and "<script>alert(1)" not in page)
+    comment_id = lambda html_: re.search(r'<li id="c(\d+)"', html_).group(1)  # a comment, not id="comments"
+    cid = comment_id(page)
+    by_stranger = hal.post(f"{base}/community/comment/{cid}/delete", allow_redirects=False, timeout=10)
+    by_owner = fran.post(f"{base}/community/comment/{cid}/delete", allow_redirects=False, timeout=10)
+    gus.post(post_url + "/comment", data={"body": "second thoughts"}, timeout=10)
+    cid2 = comment_id(anon.get(post_url, timeout=10).text)
+    by_author = gus.post(f"{base}/community/comment/{cid2}/delete", allow_redirects=False, timeout=10)
+    check("community", "a comment is deleted by its author or the post's owner, never by anyone else",
+          by_stranger.status_code == 403 and by_owner.status_code == 302 and by_author.status_code == 302
+          and "love the bends" not in anon.get(post_url, timeout=10).text
+          and "second thoughts" not in anon.get(post_url, timeout=10).text)
+    check("community", "a post without a recording plays no audio",
+          anon.get(post_url + "/audio", timeout=10).status_code == 404)
+    fran.post(base + "/community/report", data={"kind": "post", "id": pid}, timeout=10)  # your own: doesn't count
+    for sess in (gus, hal):
+        sess.post(base + "/community/report", data={"kind": "post", "id": pid}, timeout=10)
+        sess.post(base + "/community/report", data={"kind": "post", "id": pid}, timeout=10)  # twice counts once
+    still = anon.get(post_url, timeout=10).ok
+    ivy.post(base + "/community/report", data={"kind": "post", "id": pid}, timeout=10)
+    check("community", "reports hide a post only when several different people send them (the owner's and repeats "
+          "don't count); hidden, it closes for everyone but its owner",
+          still and anon.get(post_url, timeout=10).status_code == 404 and "My first blues" not in
+          anon.get(base + "/community", timeout=10).text and "only you can see it" in fran.get(post_url, timeout=10).text
+          and anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404)
+    data = fran.get(base + "/account/export", timeout=30)
+    import io
+    import zipfile
+    exported = json.loads(zipfile.ZipFile(io.BytesIO(data.content)).read("account.json"))
+    gone = gus.post(f"{base}/community/{pid}/delete", allow_redirects=False, timeout=10)
+    down = fran.post(f"{base}/community/{pid}/delete", allow_redirects=False, timeout=10)
+    check("community", "your data download includes your posts; only the owner can take a post down, and then it's "
+          "gone and the analysis is private again",
+          [p_["title"] for p_ in exported.get("community_posts", [])] == ["<b>My first blues</b>"]
+          and gone.status_code == 403 and down.status_code == 302
+          and fran.get(post_url, timeout=10).status_code == 404 and anon.get(f"{base}/jobs/{job}", timeout=10).status_code == 404
+          and fran.get(f"{base}/jobs/{job}", timeout=10).ok)
+    r = fran.post(f"{base}/jobs/{job}/post", data={"title": "Again"}, allow_redirects=False, timeout=10)
+    again = base + r.headers["Location"]
+    ivy.post(again + "/comment", data={"body": "ivy was here"}, timeout=10)
+    had = "ivy was here" in fran.get(again, timeout=10).text
+    ivy.post(base + "/account/delete", data={"password": "selftest-pw8"}, timeout=10)
+    after = fran.get(again, timeout=10)
+    check("community", "deleting your account removes your comments (the post stays)",
+          had and after.ok and "ivy was here" not in after.text)
+    fran.post(f"{base}/jobs/{job}/delete", timeout=10)
+    check("community", "deleting the analysis removes its post",
+          fran.get(again, timeout=10).status_code == 404 and "Again" not in anon.get(base + "/community", timeout=10).text)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--full", action="store_true", help="also run logic checks and a full web-app run")
@@ -2810,6 +2983,10 @@ def main():
             lineup_checks(tmp)
         except Exception:
             check("lineup", "line-up checks ran", False, traceback.format_exc(limit=3))
+        try:
+            learn_checks(tmp)
+        except Exception:
+            check("learn", "learn checks ran", False, traceback.format_exc(limit=3))
         try:
             model_memory_checks(tmp)
         except Exception:

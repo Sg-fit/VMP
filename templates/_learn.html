@@ -1,0 +1,50 @@
+{# The educational view of an analysis (learn.py): the patterns found in each track, as lessons. #}
+{% from "_lexicon.html" import lexicon_css, entry_card %}
+{{ lexicon_css() }}
+<style>
+  .learn { margin-top: 36px; }
+  .learn-intro { background: var(--faint); border-radius: var(--r-card); padding: 16px 20px; margin: 0 0 28px; max-width: 56rem; }
+  .learn-intro p { margin: 0; }
+  .learn h2.track { font-size: 1.4rem; margin: 48px 0 12px; overflow-wrap: anywhere; }
+  .learn h2.track:first-of-type { margin-top: 0; }
+  .facts { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 26px; padding: 0; list-style: none; }
+  .facts a { display: block; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-card);
+             background: var(--surface); color: var(--ink); text-decoration: none; min-width: 7em; }
+  .facts a:hover { border-color: var(--muted); }
+  .facts span { display: block; font-size: .75rem; color: var(--muted); }
+  .facts b { font-size: 1.05rem; }
+  .learn h3.part { font-size: 1.05rem; margin: 28px 0 12px; }
+  .basics { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .basics .lx-card { margin: 0; padding: 18px; }
+  .basics .lx-card h3 { font-size: 1.05rem; }
+</style>
+<div class="learn">
+  <div class="learn-intro">
+    <p><b>Learn view.</b> The patterns we found in your music, each with what it is, famous songs that use it (with a
+      YouTube search for each), a lesson to watch and something to try. Every word links to the
+      <a href="{{ url_for('theory') }}">theory library</a>.
+      <a href="{{ request.path }}?view=pro">See the full Pro analysis →</a></p>
+  </div>
+  {% for t in lessons %}
+  <h2 class="track">{{ t.name }}</h2>
+  <ul class="facts">
+    {% for label, value, slug in t.facts %}
+    <li>{% if slug %}<a href="{{ url_for('theory_term', slug=slug) }}"><span>{{ label }}</span><b>{{ value }}</b></a>
+        {% else %}<a><span>{{ label }}</span><b>{{ value }}</b></a>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% if t.main %}
+  <h3 class="part">Patterns in your track</h3>
+  {% for c in t.main %}{{ entry_card(c.entry, c.seen, c.how_sure, c.visual) }}{% endfor %}
+  {% else %}
+  <p class="muted">We didn't find a named pattern (a blues form, a famous progression, a mode, a groove) clearly
+    enough to teach from in this track. The building blocks below are still there.</p>
+  {% endif %}
+  {% if t.basics %}
+  <h3 class="part">The building blocks it uses</h3>
+  <div class="basics">
+    {% for c in t.basics %}{{ entry_card(c.entry, c.seen, c.how_sure, c.visual, full=False) }}{% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>

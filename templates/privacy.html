@@ -59,6 +59,11 @@
     <tr><td>The picture of a track, and the PNG you save of it</td><td>Drawn from the analysis's numbers, as part of the result; the PNG is made in your own browser</td><td>Whoever can see the result</td></tr>
     <tr><td>A track you load into “Listen along”</td><td>Never uploaded: it plays from your own device</td><td>No one</td></tr>
     <tr><td>Your account</td><td>Until you delete it: a username and a hashed password, no email</td><td>Only you</td></tr>
+    <tr><td>A post in the Community (only if you choose to share an analysis there)</td><td>Until you take it down,
+      delete the analysis or delete your account</td><td>Everyone signed in or not, on this site; search engines are
+      told not to index it. The recording plays only if you picked one for the post</td></tr>
+    <tr><td>Your comments</td><td>Until you (or the post's owner) delete them, or you delete your account</td>
+      <td>Everyone who can see the post</td></tr>
   </table>
 
   <h2>{{ icon('server', 24) }}What leaves our server</h2>
@@ -79,8 +84,9 @@
       copies in shared caches.</li>
     <li>When you follow a link out of a result (a search link, say), the other site isn't told where you came from, so a
       result's address can't leak.</li>
-    <li>Two small cookies only: your sign-in (it also holds this browser's private key to its own results), and
-      whether you've closed the welcome note.</li>
+    <li>Two small cookies only: your sign-in (it also holds this browser's private key to its own results and your
+      Pro or Learn choice), and whether you've closed the welcome note.</li>
+    <li>The theory library's YouTube links are plain links: nothing from YouTube loads until you click one.</li>
     <li>Like any website, the server's log records which pages were requested and from where. The site runs behind
       Cloudflare, which carries the traffic.</li>
   </ul>
@@ -89,6 +95,9 @@
   <ul>
     <li><b>Delete now</b> on any result, saved or not.</li>
     <li><b>Share by link</b> and <b>Stop sharing</b>, on any result of yours.</li>
+    <li><b>Share with the community</b> is off until you choose it for one saved analysis; <b>Take it down</b> removes
+      the post and its comments. Delete any comment of yours, or any comment on your post. <b>Report</b> anything
+      that shouldn't be there: once several people do, it's hidden.</li>
     <li><a href="{{ url_for('account_page') }}">Download all your data</a> as one zip, or <b>delete your account</b> and
       everything in it, straight away.</li>
     <li><a href="{{ url_for('memory_page') }}">What we remember</a>: off by default; see it, edit it, or forget everything.</li>

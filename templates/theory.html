@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_lexicon.html" import lexicon_css %}
+{% block title %}Theory library · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+{{ lexicon_css() }}
+<style>
+  .th-wrap { max-width: 900px; }
+  .th-search { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 28px; }
+  .th-search input { font: inherit; flex: 1 1 260px; min-height: 44px; padding: 9px 12px; border: 1px solid var(--line);
+                     border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+  .th-group { margin: 40px 0 0; }
+  .th-group h2 { font-size: 1.15rem; margin: 0 0 12px; }
+  .th-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px;
+             grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .th-list a { display: block; height: 100%; box-sizing: border-box; padding: 14px 16px; border: 1px solid var(--line);
+               border-radius: var(--r-card); background: var(--surface); color: var(--ink); text-decoration: none; }
+  .th-list a:hover { border-color: var(--muted); }
+  .th-list b { display: block; margin-bottom: 4px; }
+  .th-list span { display: block; font-size: .88rem; color: var(--muted); line-height: 1.5;
+                  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .th-list em { font-style: normal; font-size: .75rem; color: var(--accent); font-weight: 600; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="th-wrap">
+  <p class="eyebrow">Shared by the Pro analysis and the Learn view</p>
+  <h1>Theory library</h1>
+  <p class="lede">Every word our reports use, explained, and the patterns worth learning: what they are, how to hear
+    them, famous recordings that use them, and something to try.</p>
+  <form class="th-search" method="get" action="{{ url_for('theory') }}" role="search">
+    <input name="q" value="{{ q }}" placeholder="Search: dorian, 12-bar, backbeat, power chord…" aria-label="Search the library">
+    <button class="btn secondary" type="submit">Search</button>
+    {% if q %}<a class="btn secondary" href="{{ url_for('theory') }}">Show everything</a>{% endif %}
+  </form>
+  {% if q %}<p class="muted">{{ total }} result{{ 's' if total != 1 }} for “{{ q }}”.</p>{% endif %}
+  {% for group, items in groups.items() %}
+  <section class="th-group">
+    <h2>{{ group }}</h2>
+    <ul class="th-list">
+      {% for e in items %}
+      <li><a href="{{ url_for('theory_term', slug=e.slug) }}">{% if e.kind == 'lesson' %}<em>Lesson · {{ e.examples|length }} example{{ 's' if e.examples|length != 1 }}</em>{% endif %}
+        <b>{{ e.name }}</b><span>{{ e.short }}</span></a></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  <p>Nothing matches that. Try a shorter word, or <a href="{{ url_for('theory') }}">browse everything</a>.</p>
+  {% endfor %}
+</div>
+{% endblock %}

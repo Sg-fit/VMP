@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ p.title }} · Community · Music Inspiration Analyzer{% endblock %}
+{% block head %}
+<style>
+  .po-wrap { max-width: 820px; }
+  .po-wrap h1 { overflow-wrap: anywhere; margin-bottom: 4px; }
+  .po-by { color: var(--muted); margin: 0 0 18px; }
+  .po-body { white-space: pre-line; overflow-wrap: anywhere; max-width: 46em; margin: 0 0 20px; font-size: 1.05rem; }
+  .po-track { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 18px 20px; margin: 0 0 24px; }
+  .po-track h2 { font-size: 1rem; margin: 0 0 6px; overflow-wrap: anywhere; }
+  .po-track svg { max-width: 100%; height: auto; }
+  .po-track .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 14px; padding: 0; list-style: none; }
+  .po-track .tags a { font-size: .82rem; padding: 4px 12px; border-radius: var(--r-pill); border: 1px solid var(--line);
+                      color: var(--ink); text-decoration: none; }
+  .po-track .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+  audio { width: 100%; margin: 4px 0 14px; }
+  .cmts { list-style: none; padding: 0; margin: 0 0 24px; }
+  .cmts li { border-top: 1px solid var(--line); padding: 14px 0; }
+  .cmts .who { font-size: .85rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+  .cmts .who b { color: var(--ink); }
+  .cmts p { margin: 6px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+  .cmts form, .owner form { display: inline; margin: 0; }
+  .linkish { font: inherit; font-size: .85rem; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer;
+             text-decoration: underline; text-underline-offset: 2px; }
+  @media (pointer: coarse) { .linkish { min-height: 44px; } }
+  textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border: 1px solid var(--line);
+             border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+  .owner { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 20px; font-size: .9rem; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="po-wrap">
+  <p class="small"><a href="{{ url_for('community') }}">← Community</a></p>
+  <h1>{{ p.title }}</h1>
+  <p class="po-by">by <b>{{ p.username }}</b> · {{ p.created|datetime(True) }}</p>
+  {% if request.args.get('reported') %}<p class="ok">Thanks for telling us. When a few people report the same thing,
+    it's hidden.</p>{% endif %}
+  {% if p.hidden %}<p class="error" role="alert">This post was reported by several people, so only you can see it now.</p>{% endif %}
+  {% if user and user.id == p.user_id %}
+  <div class="owner"><span class="muted">It's yours:</span>
+    <form method="post" action="{{ url_for('community_post_delete', post_id=p.id) }}"
+          onsubmit="return confirm('Take this post down? Its comments go with it. Your analysis stays in your library.')">
+      <button class="linkish" type="submit">Take it down</button></form>
+  </div>
+  {% endif %}
+  {% if p.body %}<p class="po-body">{{ p.body }}</p>{% endif %}
+  <section class="po-track">
+    {% if p.recording_id %}
+    <p class="small muted" style="margin:0">The recording, shared by {{ p.username }}:</p>
+    <audio controls preload="none" src="{{ url_for('community_audio', post_id=p.id) }}"></audio>
+    {% endif %}
+    {% if p.track %}
+      <h2>{{ p.track.file }}</h2>
+      <p class="muted small" style="margin:0 0 8px">{{ p.track.key }}{{ ' · ' ~ p.track.tempo if p.track.tempo }}{{ ' · ' ~ p.track.meter if p.track.meter }} · {{ p.track.duration }}{{ ' · +' ~ p.track.more ~ ' more track' ~ ('s' if p.track.more != 1) if p.track.more }}</p>
+      {% if p.track.timeline %}{{ p.track.timeline|safe }}{% endif %}
+      {% if p.track.patterns %}<ul class="tags">{% for e in p.track.patterns %}<li><a href="{{ url_for('theory_term', slug=e.slug) }}">{{ e.name }}</a></li>{% endfor %}</ul>{% endif %}
+    {% endif %}
+    <div class="acts">
+      <a class="btn primary" href="{{ url_for('job', job_id=p.job_id, view='pro') }}">Read the analysis</a>
+      <a class="btn secondary" href="{{ url_for('job', job_id=p.job_id, view='learn') }}">Learn from it</a>
+    </div>
+  </section>
+
+  <h2 id="comments">{{ comments|length }} comment{{ 's' if comments|length != 1 }}</h2>
+  {% if comments %}
+  <ul class="cmts">
+    {% for c in comments %}
+    <li id="c{{ c.id }}">
+      <div class="who"><b>{{ c.username }}</b><span>{{ c.created|datetime }}</span>
+        {% if user and (user.id == c.user_id or user.id == p.user_id) %}
+        <form method="post" action="{{ url_for('community_comment_delete', comment_id=c.id) }}"
+              onsubmit="return confirm('Delete this comment?')"><button class="linkish" type="submit">Delete</button></form>
+        {% elif user %}
+        <form method="post" action="{{ url_for('community_report') }}">
+          <input type="hidden" name="kind" value="comment"><input type="hidden" name="id" value="{{ c.id }}">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <button class="linkish" type="submit">Report</button></form>
+        {% endif %}
+      </div>
+      <p>{{ c.body }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if user %}
+  <form method="post" action="{{ url_for('community_comment', post_id=p.id) }}">
+    <label for="body" class="small muted">Your comment. Be kind and specific: say what works, then one thing to try,
+      with a time if you can.</label>
+    <textarea id="body" name="body" rows="4" maxlength="{{ max_comment }}" required></textarea>
+    <p><button class="btn primary" type="submit">Post comment</button></p>
+  </form>
+  {% else %}
+  <p><a href="{{ url_for('login', next=request.path) }}">Sign in</a> to comment.</p>
+  {% endif %}
+  {% if user and user.id != p.user_id %}
+  <form method="post" action="{{ url_for('community_report') }}" style="margin-top:28px">
+    <input type="hidden" name="kind" value="post"><input type="hidden" name="id" value="{{ p.id }}">
+    <input type="hidden" name="next" value="{{ request.path }}">
+    <button class="linkish" type="submit">Report this post</button></form>
+  {% endif %}
+</div>
+{% endblock %}

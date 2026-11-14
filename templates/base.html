@@ -54,6 +54,15 @@
     .bar nav a:hover { color: var(--ink); }
     .bar nav a.me { color: var(--ink); font-weight: 600; }
     @media (max-width: 520px) { .brand .name { display: none; } .bar nav { gap: 12px; } .bar nav a { font-size: .86rem; } }
+    @media (max-width: 1040px) { .brand .name { display: none; } }
+    /* the Pro / Learn switch: one choice, shown as two halves of one control; the chosen half is filled */
+    .viewswitch { display: inline-flex; margin: 0 auto 0 0; border: 1px solid var(--line); border-radius: var(--r-pill);
+                  padding: 2px; flex: none; }
+    .viewswitch button { font: 500 .85rem/1 var(--sans); border: 0; background: none; color: var(--muted); cursor: pointer;
+                         padding: 7px 14px; border-radius: var(--r-pill); min-height: 32px; }
+    .viewswitch button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+    .viewswitch button:hover:not([aria-pressed="true"]) { color: var(--ink); }
+    @media (pointer: coarse) { .viewswitch button { min-height: 40px; } }
 
     main { max-width: 1080px; margin: 0 auto; padding: 40px 16px 88px; }
     footer { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; border-top: 1px solid var(--line);
@@ -228,11 +237,20 @@
 <header class="bar"><div class="bar-in">
   <a class="brand" href="{{ url_for('index') }}" aria-label="Music Inspiration Analyzer, home"><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
     <span class="name">Music Inspiration Analyzer</span></a>
+  <form class="viewswitch" method="post" action="{{ url_for('set_view') }}" aria-label="Pro analysis or Learn view">
+    <input type="hidden" name="next" value="{{ here_without_view }}">
+    <button type="submit" name="view" value="pro" aria-pressed="{{ 'true' if view == 'pro' else 'false' }}"
+            title="Every number, chart and file">Pro</button>
+    <button type="submit" name="view" value="learn" aria-pressed="{{ 'true' if view == 'learn' else 'false' }}"
+            title="The patterns in your music, explained, with examples">Learn</button>
+  </form>
   <nav>
     <a href="{{ url_for('index') }}">Analyse</a>
     {% if user %}<a href="{{ url_for('recordings_page') }}">Recordings</a>{% else %}<a href="{{ url_for('recorder') }}">Record</a>{% endif %}
     <a href="{{ url_for('style_page') }}">Your style</a>
     <a href="{{ url_for('find') }}">Find music</a>
+    <a href="{{ url_for('theory') }}">Theory</a>
+    <a href="{{ url_for('community') }}">Community</a>
     {% if user %}
       <a href="{{ url_for('history') }}">Library</a>
       <a href="{{ url_for('profile') }}" class="me">{{ user.username }}</a>
@@ -246,14 +264,23 @@
 </main>
 <div id="tip" role="tooltip"></div>
 <script>
-  // Tap or click an underlined term to read its explanation (phones have no hover).
+  // Tap or click an underlined term to read its explanation (phones have no hover), with a link to the same term in
+  // the theory library the Pro and Learn views share.
   (function () {
     const tipEl = document.getElementById('tip');
+    const THEORY = {{ theory_index|tojson }};
     document.addEventListener('click', ev => {
       const a = ev.target.closest('abbr[title]');
-      if (!a) { tipEl.style.display = 'none'; return; }
+      if (!a) { if (!ev.target.closest('#tip a')) tipEl.style.display = 'none'; return; }
       ev.preventDefault();
       tipEl.textContent = a.getAttribute('title');
+      const slug = THEORY[a.dataset.term || ''] || THEORY[a.textContent.trim().toLowerCase()];
+      if (slug) {
+        const more = document.createElement('a');
+        more.href = '/theory/' + encodeURIComponent(slug);
+        more.textContent = ' More in the theory library →';
+        tipEl.appendChild(more);
+      }
       tipEl.style.display = 'block';
       const r = a.getBoundingClientRect();
       const left = Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - tipEl.offsetWidth - 16);

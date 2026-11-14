@@ -1,0 +1,78 @@
+{# The theory library's pieces, shared by the library, a term's page, the Learn view and the community. #}
+{% macro lexicon_css() %}
+<style>
+  .lx-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 22px 24px;
+             margin: 0 0 18px; }
+  .lx-card h3 { margin: 0 0 4px; font-size: 1.2rem; }
+  .lx-card h3 a { color: var(--ink); text-decoration: none; }
+  .lx-card h3 a:hover { text-decoration: underline; }
+  .lx-group { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 0; }
+  .lx-short { font-size: 1.02rem; margin: 6px 0 14px; max-width: 46em; }
+  .lx-seen { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin: 0 0 16px; }
+  .lx-seen p { margin: 4px 0; }
+  .lx-seen .lab { font-size: .78rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; }
+  .lx-sure { font-size: .85rem; color: var(--muted); }
+  .lx-long p { max-width: 46em; margin: 0 0 10px; }
+  .lx-h { font-size: .9rem; font-weight: 600; margin: 18px 0 8px; }
+  .lx-ex { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  .lx-ex li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+  .lx-ex a.yt { font-size: .85rem; white-space: nowrap; }
+  .lx-ex .why { color: var(--muted); font-size: .9rem; }
+  .lx-try { background: var(--faint); border-radius: var(--radius); padding: 10px 14px; margin: 14px 0 0; max-width: 46em; }
+  .lx-links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; font-size: .9rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+  .chips a { display: inline-flex; align-items: center; min-height: 32px; padding: 2px 12px; border: 1px solid var(--line);
+             border-radius: var(--r-pill); color: var(--ink); text-decoration: none; font-size: .88rem; }
+  .chips a:hover { border-color: var(--muted); }
+  @media (pointer: coarse) { .chips a { min-height: 44px; } }
+  .formgrid { display: grid; gap: 6px; margin: 4px 0 16px; max-width: 520px; }
+  .formgrid .line { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .formgrid .bar, .chordrow > div { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px;
+                                    text-align: center; background: var(--bg); position: relative; }
+  .formgrid .bar b, .chordrow b { display: block; font-size: 1.05rem; }
+  .formgrid .bar span, .chordrow span { display: block; font-size: .78rem; color: var(--muted); }
+  .formgrid .bar .n { position: absolute; top: 2px; left: 6px; font-size: .65rem; }
+  .chordrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
+  .chordrow > div { min-width: 64px; }
+  .chordrow.scale .hl { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .lx-visual { margin: 0 0 8px; overflow-x: auto; }
+</style>
+{% endmacro %}
+
+{% macro examples(e) %}
+{% if e.examples %}
+<p class="lx-h">Listen for it</p>
+<ul class="lx-ex">
+  {% for x in e.examples %}
+  <li><b>“{{ x.song }}”</b> <span>{{ x.artist }}</span>{% if x.note %} <span class="why">· {{ x.note }}</span>{% endif %}
+    <a class="yt" href="{{ x.url }}" target="_blank" rel="noopener">Find it on YouTube ↗</a></li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+{# One entry. With `seen`, it's a lesson about this track: what we found in it comes first. #}
+{% macro entry_card(e, seen=None, how_sure=None, visual=None, full=True, heading='h3') %}
+<article class="lx-card" id="lx-{{ e.slug }}">
+  <p class="lx-group">{{ e.group }}</p>
+  <{{ heading }}><a href="{{ url_for('theory_term', slug=e.slug) }}">{{ e.name }}</a></{{ heading }}>
+  <p class="lx-short">{{ e.short }}</p>
+  {% if seen %}
+  <div class="lx-seen">
+    <p class="lab">In your track</p>
+    {% for line in seen %}<p>{{ line }}</p>{% endfor %}
+    {% if how_sure %}<p class="lx-sure">How sure we are: {{ how_sure }}.</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if visual %}<div class="lx-visual">{{ visual|safe }}</div>{% endif %}
+  {% if full %}
+    {% if e.long %}<div class="lx-long">{% for para in e.long %}<p>{{ para }}</p>{% endfor %}</div>{% endif %}
+    {{ examples(e) }}
+    {% if e.try_it %}<p class="lx-try"><b>Try this:</b> {{ e.try_it }}</p>{% endif %}
+  {% endif %}
+  <div class="lx-links">
+    <a href="{{ e.lesson }}" target="_blank" rel="noopener">Watch a lesson on YouTube ↗</a>
+    <a href="{{ url_for('theory_term', slug=e.slug) }}">More in the theory library →</a>
+  </div>
+</article>
+{% endmacro %}

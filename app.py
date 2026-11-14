@@ -36,6 +36,7 @@ import uuid
 import zipfile
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlencode
 
 import markdown
 from flask import (Flask, Response, abort, jsonify, redirect, render_template, request, send_file,
@@ -47,6 +48,8 @@ import charts
 import crosscompare
 import demos
 import icons
+import learn
+import lexicon
 import trends
 import memory
 import musicanalyze as ma
@@ -132,8 +135,9 @@ def can_open(job_id):
         return True
     owner = accounts.owner_of(job_id)
     if owner is not None:
-        # its owner, or someone in a group its owner shared it with
-        return owner == session.get("uid") or accounts.in_group_with_share(session.get("uid"), job_id)
+        # its owner, someone in a group its owner shared it with, or anyone when it's posted in the community
+        return (owner == session.get("uid") or accounts.in_group_with_share(session.get("uid"), job_id)
+                or accounts.in_community(job_id))
     # results from before the browser rule have no visitor and keep working by link until they expire
     return not st.get("visitor") or st["visitor"] == _browser_id()
 
@@ -315,7 +319,30 @@ def _intro_seen(user):
 @app.context_processor
 def inject_user():
     user = current_user()
-    return {"user": user, "glossary": ma.GLOSSARY, "show_intro": not _intro_seen(user)}
+    rest = [(k, v) for k, v in request.args.items(multi=True) if k != "view"]
+    here = request.path + ("?" + urlencode(rest) if rest else "")  # where the switch brings you back to
+    return {"user": user, "glossary": ma.GLOSSARY, "show_intro": not _intro_seen(user), "view": _view(),
+            "here_without_view": here, "theory_index": lexicon.index()}
+
+
+VIEWS = ("pro", "learn")
+
+
+def _view():
+    """Professional analysis or the educational view: ?view= on a link wins (so a teacher can send a Learn link),
+    else this browser's choice from the switch at the top, else Pro."""
+    v = request.args.get("view")
+    return v if v in VIEWS else session.get("view") if session.get("view") in VIEWS else "pro"
+
+
+@app.post("/view")
+def set_view():
+    """The Pro / Learn switch at the top of every page."""
+    v = request.form.get("view")
+    if v in VIEWS:
+        session["view"] = v
+        session.permanent = True
+    return redirect(_safe_next())
 
 
 @app.post("/intro/seen")
@@ -328,10 +355,12 @@ def intro_seen():
     return resp
 
 
-app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES, icon=icons.icon)
+app.jinja_env.globals.update(charts=charts, camelot_names=ma.CAMELOT_NAMES, icon=icons.icon, term=lexicon.find)
 
 
-PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style", "/recordings", "/groups")
+# unreleased music: community posts are for the site's members to read, not for search engines
+PRIVATE_PATHS = ("/jobs/", "/history", "/profile", "/memory", "/account", "/style", "/recordings", "/groups",
+                 "/community")
 
 
 @app.after_request
@@ -1472,7 +1501,7 @@ def tab_tracks(report_html, focus=None):
 def job(job_id):
     d = get_job_dir(job_id)
     s = read_status(d)
-    report_html, midi_files = None, []
+    report_html, midi_files, lessons = None, [], None
     if s.get("state") == "done" and s.get("mode") == "tags":
         report_md = (d / "output" / "tags_report.md").read_text(encoding="utf-8")
         report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code", "md_in_html"])
@@ -1494,6 +1523,9 @@ def job(job_id):
         has_refs = bool(s.get("references"))
         focus = "admire" if has_refs else "ideas" if len(own) == 1 else None
         report_html = tab_tracks(fold_sections(report_html), focus)
+        if _view() == "learn":  # the educational view, built from the same results (nothing is re-analysed)
+            lessons = learn.lesson([r for _, r in tracks_of(job_id)])
+            report_html = ""
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)
@@ -1516,7 +1548,9 @@ def job(job_id):
                            shared_groups=accounts.shared_groups(job_id) if meta else set(),
                            projects=accounts.projects(u["id"]) if meta else [],
                            expires=(s.get("created") or s.get("updated") or time.time()) + JOB_TTL_HOURS * 3600,
-                           fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"))
+                           fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"), lessons=lessons,
+                           post=accounts.post_for_job(job_id),
+                           my_recordings=accounts.recordings(u["id"]) if meta else [])
 
 
 @app.get("/jobs/<job_id>/status")
@@ -1543,6 +1577,119 @@ def job_zip(job_id):
                 z.write(p, p.relative_to(out))
     buf.seek(0)
     return send_file(buf, mimetype="application/zip", as_attachment=True, download_name="music-analysis.zip")
+
+
+# ---------------------------------------------------------------- the theory library (shared by Pro and Learn)
+
+@app.get("/theory")
+def theory():
+    q = request.args.get("q", "")[:60]
+    groups = lexicon.grouped(q)
+    return render_template("theory.html", groups=groups, q=q, total=sum(len(v) for v in groups.values()))
+
+
+@app.get("/theory/<slug>")
+def theory_term(slug):
+    e = lexicon.get(slug)
+    if not e:
+        abort(404)
+    related = [x for x in (lexicon.get(s) for s in e["related"]) if x]
+    return render_template("term.html", e=e, related=related)
+
+
+# ---------------------------------------------------------------- the community: share a track, talk about it
+
+def _post_card(p):
+    """What a post shows of its analysis: the first track's headline numbers, its timeline, the patterns found."""
+    tracks = tracks_of(p["job_id"])
+    r = tracks[0][1] if tracks else None
+    if not r:
+        return {**p, "track": None}
+    cards = learn.patterns(r)
+    return {**p, "track": {"file": r["file"], "key": r.get("key"), "duration": r.get("duration"),
+                           "tempo": f"{r['tempo_bpm']:.0f} BPM" if r.get("tempo_bpm") else None,
+                           "meter": (r.get("meter") or {}).get("label"), "timeline": ma.timeline_svg(r),
+                           "patterns": [c["entry"] for c in cards if c["main"]][:4], "more": len(tracks) - 1}}
+
+
+@app.get("/community")
+def community():
+    q = request.args.get("q", "")[:60]
+    return render_template("community.html", posts=[_post_card(p) for p in accounts.posts(q=q)], q=q)
+
+
+@app.post("/jobs/<job_id>/post")
+def job_post(job_id):
+    """Share one of your saved analyses in the community."""
+    u = _require_user()
+    rec = request.form.get("recording")
+    pid, error = accounts.create_post(u["id"], job_id, request.form.get("title", ""), request.form.get("body", ""),
+                                      int(rec) if rec and rec.isdigit() else None)
+    if error:
+        abort(403 if "own" in error else 400, error)
+    return redirect(url_for("community_post", post_id=pid))
+
+
+def _visible_post(post_id):
+    p = accounts.post(post_id)
+    u = current_user()
+    if not p or (p["hidden"] and not (u and u["id"] == p["user_id"])):
+        abort(404)
+    return p
+
+
+@app.get("/community/<int:post_id>")
+def community_post(post_id):
+    p = _post_card(_visible_post(post_id))
+    return render_template("post.html", p=p, comments=accounts.comments(post_id), error=request.args.get("error"),
+                           max_comment=accounts.COMMENT_LEN)
+
+
+@app.get("/community/<int:post_id>/audio")
+def community_audio(post_id):
+    """The recording the musician chose to share with their post (only that one, only while it's posted)."""
+    p = _visible_post(post_id)
+    rec = accounts.recording(p["user_id"], p["recording_id"]) if p.get("recording_id") else None
+    path = REC_DIR / str(p["user_id"]) / rec["file"] if rec else None
+    if not path or not path.is_file():
+        abort(404)
+    return send_file(path, mimetype=REC_MIME.get(path.suffix.lower(), "application/octet-stream"), conditional=True,
+                     max_age=0)
+
+
+@app.post("/community/<int:post_id>/comment")
+def community_comment(post_id):
+    u = _require_user()
+    _visible_post(post_id)
+    _, error = accounts.add_comment(u["id"], post_id, request.form.get("body", ""))
+    return redirect(url_for("community_post", post_id=post_id, error=error) + ("" if error else "#comments"))
+
+
+@app.post("/community/comment/<int:comment_id>/delete")
+def community_comment_delete(comment_id):
+    u = _require_user()
+    pid = accounts.delete_comment(u["id"], comment_id)
+    if pid is None:
+        abort(403)
+    return redirect(url_for("community_post", post_id=pid) + "#comments")
+
+
+@app.post("/community/<int:post_id>/delete")
+def community_post_delete(post_id):
+    u = _require_user()
+    if not accounts.delete_post(u["id"], post_id):
+        abort(403)
+    return redirect(url_for("community"))
+
+
+@app.post("/community/report")
+def community_report():
+    """Report a post or a comment: after a few different people do, it's hidden."""
+    u = _require_user()
+    kind, item = request.form.get("kind"), request.form.get("id", "")
+    accounts.flag(u["id"], kind, int(item) if item.isdigit() else -1)
+    nxt = _safe_next(url_for("community")).split("#")[0]
+    return redirect(nxt + ("&" if "?" in nxt else "?") + "reported=1")
 
 
 @app.errorhandler(413)

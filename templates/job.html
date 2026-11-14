@@ -157,6 +157,8 @@
   {{ icon('lock', 18) }}<b>Who can see this:</b>
   {% if s.demo %}<span>Everyone: it's a demo, made from generated audio.</span>
   {% elif s.shared %}<span><b>Anyone with this link</b> can open it{% if not saved %}, until {{ expires|datetime }}{% endif %}.</span>
+  {% elif post and not post.hidden %}<span><b>Everyone on the site:</b> it's posted in the
+    <a href="{{ url_for('community_post', post_id=post.id) }}">community</a>.</span>
   {% elif saved %}<span><b>Only you.</b> It's in your private history, until you delete it.</span>
   {% elif s.visitor %}<span><b>Only this browser.</b> We delete it on {{ expires|datetime }}{% if not user %}, or sign in to keep it{% endif %}.</span>
   {% else %}<span>Anyone with this link, until {{ expires|datetime }}.</span>{% endif %}
@@ -198,6 +200,32 @@
   </form>
   {% endfor %}
 </div>
+{% endif %}
+{% if s.state == 'done' and s.mode != 'tags' %}
+{% if post %}
+<p class="small iline">{{ icon('users', 18) }}<span><b>In the community:</b> anyone on the site can read it and
+  comment. <a href="{{ url_for('community_post', post_id=post.id) }}">See the post and its comments →</a></span></p>
+{% else %}
+<details class="organise"><summary>{{ icon('users', 18) }}Share with the community</summary>
+  <form method="post" action="{{ url_for('job_post', job_id=job_id) }}">
+    <p class="muted small" style="margin:0">Everyone on the site will be able to read this analysis (Pro and Learn)
+      and comment on it. Your audio isn't shared unless you pick a recording below. Take it down any time.</p>
+    <label>Title <input name="title" maxlength="80" required value="{{ meta.title }}"></label>
+    <label>What would you like feedback on? <textarea name="body" rows="3" maxlength="1000"
+      placeholder="e.g. Does the bridge at 1:20 work? Is the groove too busy?"></textarea></label>
+    {% if my_recordings %}
+    <label>Let people listen (optional)
+      <select name="recording"><option value="">No audio, just the analysis</option>
+        {% for rec in my_recordings %}<option value="{{ rec.id }}" {{ 'selected' if rec.last_job == job_id }}>{{ rec.title }}</option>{% endfor %}
+      </select></label>
+    {% else %}
+    <p class="muted small" style="margin:0">To let people listen too, add the track to your
+      <a href="{{ url_for('recordings_page') }}">Recordings</a> first.</p>
+    {% endif %}
+    <button class="btn secondary" type="submit">Post it</button>
+  </form>
+</details>
+{% endif %}
 {% endif %}
 {% endif %}
 {% endmacro %}
@@ -425,6 +453,11 @@
     <a href="{{ url_for('style_page') }}">Your style across every session →</a> · each track on its own is further down.</p>
   {{ style_report(style_view, style_pics, min_tracks) }}
   <h2 class="style-h">Each track on its own</h2>
+  {% endif %}
+  {% if lessons is not none %}{% include "_learn.html" %}{% else %}
+  <p class="muted small" style="margin:28px 0 0">Pro view: every number, chart and file. Underlined words explain
+    themselves, and the <a href="{{ url_for('theory') }}">theory library</a> has them all.
+    <a href="{{ request.path }}?view=learn">Learn from this track →</a></p>
   {% endif %}
   <div class="report">{{ report_html|safe }}</div>
   <script>

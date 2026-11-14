@@ -90,6 +90,21 @@ def init(path):
                 opens INTEGER NOT NULL DEFAULT 0, reads INTEGER NOT NULL DEFAULT 0, charts INTEGER NOT NULL DEFAULT 0,
                 updated REAL NOT NULL,
                 PRIMARY KEY (user_id, section));
+            CREATE TABLE IF NOT EXISTS posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                job_id TEXT NOT NULL UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+                recording_id INTEGER, created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS posts_by_time ON posts(created);
+            CREATE TABLE IF NOT EXISTS comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL REFERENCES posts(id),
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                body TEXT NOT NULL, created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS comments_by_post ON comments(post_id, created);
+            CREATE TABLE IF NOT EXISTS flags (
+                kind TEXT NOT NULL, item_id INTEGER NOT NULL, user_id INTEGER NOT NULL, created REAL NOT NULL,
+                PRIMARY KEY (kind, item_id, user_id));
         """)
 
 
@@ -263,8 +278,9 @@ def save_job(user_id, job_id, title):
 def forget_job(user_id, job_id):
     with _connect() as db:
         gone = db.execute("DELETE FROM saved WHERE job_id = ? AND user_id = ?", (job_id, user_id)).rowcount > 0
-        if gone:  # and no group sees it any more
+        if gone:  # and no group or community post shows it any more
             db.execute("DELETE FROM group_shares WHERE job_id = ?", (job_id,))
+            _delete_posts(db, "job_id = ?", (job_id,))
         return gone
 
 
@@ -455,6 +471,7 @@ def delete_recording(user_id, rec_id):
         return None
     with _connect() as db:
         db.execute("DELETE FROM recordings WHERE id = ? AND user_id = ?", (rec_id, user_id))
+        db.execute("UPDATE posts SET recording_id = NULL WHERE recording_id = ? AND user_id = ?", (rec_id, user_id))
     return rec["file"]
 
 
@@ -605,7 +622,9 @@ def export(user_id):
             "goals": u.get("goals", ""), "saved": history(user_id), "feedback": list_feedback(user_id),
             "corrections": list_corrections(user_id), "report_sections_used": interest(user_id),
             "recordings": [{k: v for k, v in r.items() if k != "user_id"} for r in recordings(user_id)],
-            "groups": [{"name": g["name"], "facilitator": g["owner_id"] == user_id} for g in my_groups(user_id)]}
+            "groups": [{"name": g["name"], "facilitator": g["owner_id"] == user_id} for g in my_groups(user_id)],
+            "community_posts": [{k: x[k] for k in ("title", "body", "job_id", "created")} for x in posts(user_id=user_id)],
+            "community_comments": my_comments(user_id)}
 
 
 def delete_account(user_id):
@@ -614,6 +633,11 @@ def delete_account(user_id):
         leave_group(user_id, g["id"])
     with _connect() as db:
         jobs = [r["job_id"] for r in db.execute("SELECT job_id FROM saved WHERE user_id = ?", (user_id,))]
+        _delete_posts(db, "user_id = ?", (user_id,))  # their posts, with everyone's comments on them
+        db.execute("DELETE FROM flags WHERE kind = 'comment' AND item_id IN "
+                   "(SELECT id FROM comments WHERE user_id = ?)", (user_id,))
+        for table in ("comments", "flags"):
+            db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         for table in ("feedback", "corrections", "interest", "recordings", "group_shares", "group_members", "saved"):
             db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         db.execute("DELETE FROM users WHERE id = ?", (user_id,))
@@ -717,3 +741,156 @@ def profile_summary(items):
         parts.append(("with an " if mood[0] in "aeiou" else "with a ") + mood + " feel")
     out["sentence"] = "Your music is " + ", ".join(parts) + "." if parts else ""
     return out
+
+
+# ---------------------------------------------------------------- the community: shared tracks and comments
+TITLE_LEN, BODY_LEN, COMMENT_LEN = 80, 1000, 1000
+COMMENTS_PER_HOUR = 30  # per person: a conversation, not a flood
+FLAG_HIDE = 3  # reports from this many different people hide a post or comment (one grudge can't)
+
+
+def _delete_posts(db, where, args):
+    ids = [r["id"] for r in db.execute(f"SELECT id FROM posts WHERE {where}", args)]
+    for pid in ids:
+        db.execute("DELETE FROM flags WHERE kind = 'comment' AND item_id IN (SELECT id FROM comments WHERE post_id = ?)",
+                   (pid,))
+        db.execute("DELETE FROM comments WHERE post_id = ?", (pid,))
+        db.execute("DELETE FROM flags WHERE kind = 'post' AND item_id = ?", (pid,))
+        db.execute("DELETE FROM posts WHERE id = ?", (pid,))
+    return len(ids)
+
+
+def _line(s, n):
+    return " ".join((s or "").split())[:n]
+
+
+def _para(s, n):
+    return "\n".join(x.rstrip() for x in (s or "").strip().splitlines())[:n]
+
+
+def create_post(user_id, job_id, title, body="", recording_id=None):
+    """Share one of your saved analyses with the community, optionally with one of your recordings to listen to.
+    Returns (post id, None) or (None, an error message)."""
+    title, body = _line(title, TITLE_LEN), _para(body, BODY_LEN)
+    if not title:
+        return None, "Give your post a title."
+    with _connect() as db:
+        if not db.execute("SELECT 1 FROM saved WHERE job_id = ? AND user_id = ?", (job_id, user_id)).fetchone():
+            return None, "Only your own saved analyses can be shared."
+        if recording_id is not None and not db.execute("SELECT 1 FROM recordings WHERE id = ? AND user_id = ?",
+                                                       (recording_id, user_id)).fetchone():
+            recording_id = None  # never someone else's recording
+        row = db.execute("SELECT id FROM posts WHERE job_id = ?", (job_id,)).fetchone()
+        if row:
+            return row["id"], None
+        cur = db.execute("INSERT INTO posts (user_id, job_id, title, body, recording_id, created) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", (user_id, job_id, title, body, recording_id, time.time()))
+        return cur.lastrowid, None
+
+
+def _flags(db, kind, item_id):
+    return db.execute("SELECT COUNT(*) FROM flags WHERE kind = ? AND item_id = ?", (kind, item_id)).fetchone()[0]
+
+
+def posts(user_id=None, q="", limit=50, offset=0):
+    """Posts, newest first, with their author and comment count. Posts hidden by reports are left out, except in
+    the list of your own (user_id given)."""
+    args, where = [], ["1"]
+    if user_id is not None:
+        where.append("p.user_id = ?")
+        args.append(user_id)
+    else:
+        where.append(f"(SELECT COUNT(*) FROM flags f WHERE f.kind = 'post' AND f.item_id = p.id) < {FLAG_HIDE}")
+    if q:
+        where.append("(p.title LIKE ? OR p.body LIKE ? OR u.username LIKE ?)")
+        args += [f"%{q}%"] * 3
+    with _connect() as db:
+        rows = db.execute("SELECT p.*, u.username, (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) "
+                          f"AS n_comments FROM posts p JOIN users u ON u.id = p.user_id WHERE {' AND '.join(where)} "
+                          "ORDER BY p.created DESC LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
+    return [dict(r) for r in rows]
+
+
+def post(post_id):
+    with _connect() as db:
+        row = db.execute("SELECT p.*, u.username FROM posts p JOIN users u ON u.id = p.user_id WHERE p.id = ?",
+                         (post_id,)).fetchone()
+        if not row:
+            return None
+        return {**dict(row), "hidden": _flags(db, "post", post_id) >= FLAG_HIDE}
+
+
+def post_for_job(job_id):
+    with _connect() as db:
+        row = db.execute("SELECT id FROM posts WHERE job_id = ?", (job_id,)).fetchone()
+    return post(row["id"]) if row else None
+
+
+def in_community(job_id):
+    """Is this analysis shared in the community (and not hidden by reports)? Then anyone may read it."""
+    p = post_for_job(job_id)
+    return bool(p and not p["hidden"])
+
+
+def delete_post(user_id, post_id):
+    with _connect() as db:
+        return _delete_posts(db, "id = ? AND user_id = ?", (post_id, user_id)) > 0
+
+
+def add_comment(user_id, post_id, body):
+    """Returns (comment id, None) or (None, an error message)."""
+    body = _para(body, COMMENT_LEN)
+    if not body:
+        return None, "Write something first."
+    p = post(post_id)
+    if not p or p["hidden"]:
+        return None, "That post isn't there any more."
+    with _connect() as db:
+        recent = db.execute("SELECT COUNT(*) FROM comments WHERE user_id = ? AND created > ?",
+                            (user_id, time.time() - 3600)).fetchone()[0]
+        if recent >= COMMENTS_PER_HOUR:
+            return None, f"That's {COMMENTS_PER_HOUR} comments this hour. Take a breather and come back later."
+        cur = db.execute("INSERT INTO comments (post_id, user_id, body, created) VALUES (?, ?, ?, ?)",
+                         (post_id, user_id, body, time.time()))
+        return cur.lastrowid, None
+
+
+def comments(post_id):
+    """The post's comments, oldest first; ones hidden by reports are left out."""
+    with _connect() as db:
+        rows = db.execute("SELECT c.*, u.username FROM comments c JOIN users u ON u.id = c.user_id "
+                          "WHERE c.post_id = ? AND (SELECT COUNT(*) FROM flags f WHERE f.kind = 'comment' "
+                          f"AND f.item_id = c.id) < {FLAG_HIDE} ORDER BY c.created", (post_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def my_comments(user_id):
+    with _connect() as db:
+        return [dict(r) for r in db.execute("SELECT post_id, body, created FROM comments WHERE user_id = ? "
+                                            "ORDER BY created", (user_id,))]
+
+
+def delete_comment(user_id, comment_id):
+    """The comment's author, or the owner of the post it's on, may delete it. Returns the post id, or None."""
+    with _connect() as db:
+        row = db.execute("SELECT c.post_id, c.user_id, p.user_id AS owner FROM comments c JOIN posts p "
+                         "ON p.id = c.post_id WHERE c.id = ?", (comment_id,)).fetchone()
+        if not row or user_id not in (row["user_id"], row["owner"]):
+            return None
+        db.execute("DELETE FROM flags WHERE kind = 'comment' AND item_id = ?", (comment_id,))
+        db.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+        return row["post_id"]
+
+
+def flag(user_id, kind, item_id):
+    """Report a post or comment. Your own can't be reported, and each person counts once."""
+    if kind not in ("post", "comment"):
+        return False
+    table = "posts" if kind == "post" else "comments"
+    with _connect() as db:
+        row = db.execute(f"SELECT user_id FROM {table} WHERE id = ?", (item_id,)).fetchone()
+        if not row or row["user_id"] == user_id:
+            return False
+        db.execute("INSERT OR IGNORE INTO flags (kind, item_id, user_id, created) VALUES (?, ?, ?, ?)",
+                   (kind, item_id, user_id, time.time()))
+    return True
