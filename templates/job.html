@@ -458,6 +458,8 @@
   <p class="muted small" style="margin:28px 0 0">Pro view: every number, chart and file. Underlined words explain
     themselves, and the <a href="{{ url_for('theory') }}">theory library</a> has them all.
     <a href="{{ request.path }}?view=learn">Learn from this track →</a></p>
+  {% from "_lexicon.html" import lexicon_css, explore as explore_out %}
+  {% if explore %}{{ lexicon_css() }}{{ explore_out(explore) }}{% endif %}
   {% endif %}
   <div class="report">{{ report_html|safe }}</div>
   <script>

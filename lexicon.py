@@ -12,9 +12,12 @@ so they can't point at a wrong or removed video.
 """
 
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 YOUTUBE = "https://www.youtube.com/results?search_query="
+SPOTIFY = "https://open.spotify.com/search/"
+SONGSTERR = "https://www.songsterr.com/?pattern="
+TRENDS = "https://www.hooktheory.com/trends#"  # key=D&scale=major&path=1.5.6.4 opens D-A-Bm-G (see connect.py)
 
 GROUPS = ["Chords", "Scales & modes", "Progressions", "Form", "Rhythm & groove", "Melody", "Sound & production"]
 
@@ -28,9 +31,17 @@ def youtube(query):
     return YOUTUBE + quote_plus(query)
 
 
-def L(name, group, short, long, examples=(), lesson=None, try_it=None, related=(), aliases=()):
+def listen(song, artist):
+    """Searches for a listening example: watch it, hear it, play along with its tab."""
+    q = f"{song} {artist}"
+    return {"url": youtube(q), "spotify": SPOTIFY + quote(q), "songsterr": SONGSTERR + quote_plus(q)}
+
+
+def L(name, group, short, long, examples=(), lesson=None, try_it=None, related=(), aliases=(), trends=None):
+    """trends: (key, Hooktheory scale, path) to open the progression on Hooktheory Trends, in an easy key."""
     return {"name": name, "slug": slug(name), "group": group, "short": short, "long": list(long),
-            "examples": [{"song": s, "artist": a, "note": n, "url": youtube(f"{s} {a}")} for s, a, n in examples],
+            "trends": f"{TRENDS}key={quote(trends[0])}&scale={trends[1]}&path={trends[2]}" if trends else None,
+            "examples": [{"song": s, "artist": a, "note": n, **listen(s, a)} for s, a, n in examples],
             "lesson": youtube(lesson or f"{name} music theory explained"), "try_it": try_it,
             "related": [slug(r) for r in related], "aliases": list(aliases), "kind": "lesson"}
 
@@ -225,7 +236,7 @@ LESSONS = [
        ("Someone Like You", "Adele", "the loop on piano"),
        ("Don't Stop Believin'", "Journey", "the verse"),
        ("Zombie", "The Cranberries", "as vi–IV–I–V")],
-      lesson="I V vi IV four chord song explained",
+      lesson="I V vi IV four chord song explained", trends=("C", "major", "1.5.6.4"),
       try_it="Play C–G–Am–F, then start it on Am (Am–F–C–G). Same chords: which one sounds sadder?",
       related=["Roman numerals", "I–vi–IV–V (the '50s progression)", "Relative major and minor"],
       aliases=["I–V–vi–IV"]),
@@ -236,7 +247,7 @@ LESSONS = [
       [("Stand by Me", "Ben E. King", "the loop under the whole song"),
        ("Every Breath You Take", "The Police", "the verse"),
        ("Earth Angel", "The Penguins", "classic doo-wop")],
-      lesson="50s doo wop progression I vi IV V explained",
+      lesson="50s doo wop progression I vi IV V explained", trends=("C", "major", "1.6.4.5"),
       try_it="Play C–Am–F–G slowly with a 'shoo-bop' rhythm and you're in 1958.",
       related=["I–V–vi–IV (the 'four chords' of pop)", "Cadence"], aliases=["I–vi–IV–V"]),
     L("Andalusian cadence", "Progressions",
@@ -259,7 +270,7 @@ LESSONS = [
        ("Sympathy for the Devil", "The Rolling Stones", "the loop under the song"),
        ("Hey Jude", "The Beatles", "the long coda"),
        ("Sweet Home Alabama", "Lynyrd Skynyrd", "D–C–G round and round")],
-      lesson="bVII chord rock progression explained",
+      lesson="bVII chord rock progression explained", trends=("C", "major", "1.b7.4"),
       try_it="Play D–C–G–D with a strong backbeat: instant classic rock.",
       related=["Mixolydian", "I–IV–V (three-chord rock'n'roll)"], aliases=["I–bVII–IV (Mixolydian rock)"]),
     L("i–♭VII–♭VI (descending minor)", "Progressions",
@@ -267,7 +278,7 @@ LESSONS = [
       ["In C♯ minor that's C♯m–B–A. The chords walk down by step and loop back up, which gives an urgent, "
        "circling feeling."],
       [("All Along the Watchtower", "Bob Dylan / Jimi Hendrix", "the loop under the whole song")],
-      lesson="i bVII bVI progression explained",
+      lesson="i bVII bVI progression explained", trends=("A", "minor", "1.7.6"),
       try_it="Loop Am–G–F–G and sing over it: most minor-key rock is hiding in there.",
       related=["Andalusian cadence", "Aeolian (natural minor)"], aliases=["i–bVII–bVI (descending minor)"]),
     L("I–IV–V (three-chord rock'n'roll)", "Progressions",
@@ -277,7 +288,7 @@ LESSONS = [
       [("La Bamba", "Ritchie Valens", "I–IV–V on repeat"),
        ("Twist and Shout", "The Isley Brothers / The Beatles", "I–IV–V on repeat"),
        ("Wild Thing", "The Troggs", "A–D–E")],
-      lesson="I IV V chord progression explained",
+      lesson="I IV V chord progression explained", trends=("C", "major", "1.4.5"),
       try_it="Learn the I, IV and V chords in G (G, C, D) and play any campfire song you know.",
       related=["12-bar blues", "Roman numerals", "Cadence"], aliases=["I–IV–V"]),
     L("i–IV (Dorian vamp)", "Progressions",
@@ -286,7 +297,7 @@ LESSONS = [
        "Vamped over and over, it's the sound of Latin rock and funk."],
       [("Oye Como Va", "Santana", "Am7–D9 for the whole song"),
        ("Evil Ways", "Santana", "Gm–C on repeat")],
-      lesson="dorian vamp i IV explained",
+      lesson="dorian vamp i IV explained", trends=("A", "dorian", "1.4"),
       try_it="Loop Am–D and improvise with the A Dorian scale (the white keys from G, starting on A).",
       related=["Dorian"], aliases=["i–IV"]),
     L("ii–V–I (the jazz cadence)", "Progressions",
@@ -296,7 +307,7 @@ LESSONS = [
       [("Autumn Leaves", "jazz standard", "a chain of ii–V–Is"),
        ("Fly Me to the Moon", "Frank Sinatra", "ii–V–Is throughout"),
        ("Honeysuckle Rose", "Fats Waller", "opens with a ii–V")],
-      lesson="ii V I jazz progression explained",
+      lesson="ii V I jazz progression explained", trends=("C", "major", "2.5.1"),
       try_it="Play Dm7–G7–Cmaj7, then the same shape a whole step down (Cm7–F7–B♭maj7).",
       related=["Minor 7th chord", "Dominant 7th chord", "Cadence"], aliases=["ii–V–I"]),
     L("Cadence", "Progressions",
@@ -548,11 +559,12 @@ def _definitions():
     for group, terms in ma.GUIDE.items():
         for term, text in terms.items():
             out[term] = {"name": term, "slug": slug(term), "group": group, "short": text, "long": [],
-                         "examples": [], "lesson": youtube(f"{term} music explained"), "try_it": None,
+                         "examples": [], "lesson": youtube(f"{term} music explained"), "try_it": None, "trends": None,
                          "related": [], "aliases": [], "kind": "definition"}
     for mode, text in ma.MODE_INFO.items():
         out.setdefault(mode, {"name": mode, "slug": slug(mode), "group": "Scales & modes", "short": text, "long": [],
                               "examples": [], "lesson": youtube(f"{mode} mode explained"), "try_it": None,
+                              "trends": None,
                               "related": [], "aliases": [], "kind": "definition"})
     return out
 

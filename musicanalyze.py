@@ -3276,6 +3276,13 @@ def _check_times(text, r, tolerance=3):
     return text + (f" (⚠ check this: {'; '.join(problems)})" if problems else "")
 
 
+# Room for the whole reply. The JSON we ask for holds a vibe, an idea per gap (up to 6), 2 mood directions, 2 more
+# ideas, 2 progressions, 2 picture notes and 3 titles: about 20 short texts of 25 words (~35 tokens each) plus the
+# JSON around them, so about 1000 tokens from a wordy model. 1200 left no margin, and a reply cut off there loses
+# its ideas and progressions (they come last). 2000 covers twice the expected length.
+REPLY_TOKENS = 2000
+
+
 def make_llm():
     """Return (fn(prompt, info=None) -> text, label) for whichever API key is set, or (None, None).
     fn records which model answered in info["model"] (thread-safe: tracks are brainstormed in parallel)."""
@@ -3307,7 +3314,7 @@ def make_llm():
         model = os.environ.get("MUSIC_MODEL", ANTHROPIC_MODEL)
 
         def call(prompt, info=None):
-            m = client.messages.create(model=model, max_tokens=1200, temperature=0.7,
+            m = client.messages.create(model=model, max_tokens=REPLY_TOKENS, temperature=0.7,
                                        messages=[{"role": "user", "content": prompt}])
             if info is not None:
                 info["model"] = model
@@ -3341,7 +3348,7 @@ def _chat(client, model, prompt, quick=True, thinking_off=None):
         thinking_off = os.environ.get("MUSIC_THINKING_OFF") == "1"
     extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} \
         if thinking_off and _thinks_at_server(model) else {}
-    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=4096 if hint else 1200,
+    r = client.chat.completions.create(model=model, temperature=0.7, max_tokens=4096 if hint else REPLY_TOKENS,
                                        messages=messages, **extra)
     msg = r.choices[0].message
     text = msg.content or ""

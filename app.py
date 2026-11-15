@@ -47,6 +47,7 @@ import accounts
 import charts
 import crosscompare
 import demos
+import connect
 import icons
 import learn
 import lexicon
@@ -1501,7 +1502,7 @@ def tab_tracks(report_html, focus=None):
 def job(job_id):
     d = get_job_dir(job_id)
     s = read_status(d)
-    report_html, midi_files, lessons = None, [], None
+    report_html, midi_files, lessons, explore = None, [], None, []
     if s.get("state") == "done" and s.get("mode") == "tags":
         report_md = (d / "output" / "tags_report.md").read_text(encoding="utf-8")
         report_html = markdown.markdown(report_md, extensions=["tables", "fenced_code", "md_in_html"])
@@ -1523,6 +1524,7 @@ def job(job_id):
         has_refs = bool(s.get("references"))
         focus = "admire" if has_refs else "ideas" if len(own) == 1 else None
         report_html = tab_tracks(fold_sections(report_html), focus)
+        explore = [(r["file"], links) for _, r in tracks_of(job_id) if (links := connect.chord_links(r))]
         if _view() == "learn":  # the educational view, built from the same results (nothing is re-analysed)
             lessons = learn.lesson([r for _, r in tracks_of(job_id)])
             report_html = ""
@@ -1549,6 +1551,7 @@ def job(job_id):
                            projects=accounts.projects(u["id"]) if meta else [],
                            expires=(s.get("created") or s.get("updated") or time.time()) + JOB_TTL_HOURS * 3600,
                            fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"), lessons=lessons,
+                           explore=explore,
                            post=accounts.post_for_job(job_id),
                            my_recordings=accounts.recordings(u["id"]) if meta else [])
 

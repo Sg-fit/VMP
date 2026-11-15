@@ -612,8 +612,17 @@ def ai_checks(res):
         return
     if not check("ai", f"AI answers ({label})", not err, err or f"{ai.get('model')} in {secs:.0f}s"):
         return
-    check("ai", "AI answer arrives within the deadline", secs <= ma.AI_DEADLINE_SECONDS, f"{secs:.0f}s")
+    # the race gives up AT the deadline, then the reply is parsed: a second of slack for that, not more
+    check("ai", "AI answer arrives within the deadline", secs <= ma.AI_DEADLINE_SECONDS + 1,
+          f"{secs:.0f}s (deadline {ma.AI_DEADLINE_SECONDS:.0f}s)")
     every = ai["ideas"] + ai.get("gap_ideas", [])
+    if ai.get("partial"):
+        # no model finished in time, so the app used the one reply that was cut short: the provider was slow, the
+        # page shows what arrived. A warning like any other outage, since nothing in the app is broken.
+        warn("ai", f"AI provider was slow ({label}): only a cut-short reply arrived before the deadline",
+             f"{len(ai.get('gap_ideas', []))} gap ideas + {len(ai['ideas'])} more, "
+             f"{len(ai['alt_progressions'])} progressions after {secs:.0f}s")
+        return
     check("ai", "AI gives ideas and chord progressions", len(every) >= 3 and ai["alt_progressions"],
           f"{len(ai.get('gap_ideas', []))} gap ideas + {len(ai['ideas'])} more, {len(ai['alt_progressions'])} progressions")
     gaps_found = [g["id"] for g in (r.get("gaps") or {}).get("gaps", [])]
@@ -2816,6 +2825,35 @@ def learn_checks(tmp):
           "video ids), slugs are unique",
           not broken and all(u.startswith(lexicon.YOUTUBE) for u in urls) and len({e["slug"] for e in es}) == len(es),
           str(broken[:5]))
+    # links out to other music apps (connect.py). The Hooktheory paths below were opened on the live Trends page,
+    # which showed exactly these chords: D-A-Bm-G, Am-F-C-G, D-C-G, E-D-A (Mixolydian), Am-D (Dorian), Dm-G-C.
+    import connect
+    tp = lambda names, tonic, mode: connect.trends_path(names, tonic, mode)
+    check("learn", "Hooktheory Trends links: chords become the scale degrees Hooktheory uses, in major, minor and "
+          "modes; a borrowed bVII is b7; power chords and 7ths count as their triads",
+          tp(["D", "A", "Bm", "G"], 2, "Ionian (major)") == ("major", "1.5.6.4")
+          and tp(["Am", "F", "C", "G"], 9, "Aeolian (natural minor)") == ("minor", "1.6.3.7")
+          and tp(["D", "C", "G"], 2, "Ionian (major)") == ("major", "1.b7.4")
+          and tp(["E", "D", "A"], 4, "Mixolydian") == ("mixolydian", "1.7.4")
+          and tp(["Am", "D"], 9, "Dorian") == ("dorian", "1.4")
+          and tp(["Dm7", "G7", "Cmaj7"], 0, "Ionian (major)") == ("major", "2.5.1")
+          and tp(["D5", "G5", "A5"], 2, "Ionian (major)") == ("major", "1.4.5"))
+    check("learn", "a chord Hooktheory can't show in that key gets no link (NEGATIVE): the major V of a minor key, "
+          "a chord off the scale, a minor chord where the scale has a major one",
+          tp(["Am", "G", "F", "E"], 9, "Aeolian (natural minor)") is None
+          and tp(["C", "F#"], 0, "Ionian (major)") is None and tp(["C", "Fm"], 0, "Ionian (major)") is None)
+    links = connect.chord_links(pop)
+    check("learn", "a track's own loop links to Hooktheory in its key, and says which chords the link shows",
+          bool(links) and links[0]["url"].startswith(lexicon.TRENDS + "key=") and "&path=" in links[0]["url"]
+          and len(links[0]["shown"]) == len(links[0]["chords"]) and connect.chord_links({"error": "x"}) == [],
+          str(links[:1]))
+    four = lexicon.find("I–V–vi–IV")
+    ex = [x for e in lexicon.LESSONS for x in e["examples"]]
+    check("learn", "progression lessons open on Hooktheory Trends; every listening example has YouTube, Spotify and "
+          "tab searches (searches only, never a guessed page)",
+          four["trends"] == lexicon.TRENDS + "key=C&scale=major&path=1.5.6.4"
+          and all(x["spotify"].startswith(lexicon.SPOTIFY) and x["songsterr"].startswith(lexicon.SONGSTERR)
+                  and x["url"].startswith(lexicon.YOUTUBE) for x in ex))
     check("learn", "every lesson explains itself, says how to hear it and is grouped",
           all(e["short"] and e["long"] and e["group"] in lexicon.GROUPS for e in lexicon.LESSONS)
           and sum(len(e["examples"]) for e in lexicon.LESSONS) >= 100, f"{len(lexicon.LESSONS)} lessons")
@@ -2855,6 +2893,8 @@ def community_web_checks(base, files):
     check("community", "the Pro/Learn switch: Learn shows the patterns as lessons from the same analysis, the choice is "
           "remembered, Pro brings the full report back; the switch never sends you off-site",
           "Patterns in your track" in lrn and "12-bar blues" in lrn and "Patterns in your track" not in pro
+          and "hooktheory.com/trends#key=" in lrn and "open.spotify.com/search/" in lrn
+          and ("hooktheory.com/trends#key=" in pro) == ("hooktheory.com/trends#key=" in lrn)
           and "In short" in pro and 'data-term="' in pro and "Patterns in your track" in kept
           and "Patterns in your track" not in back and evil.headers.get("Location", "").endswith("/")
           and "evil" not in evil.headers.get("Location", ""))

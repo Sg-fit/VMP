@@ -1,5 +1,5 @@
 {# The educational view of an analysis (learn.py): the patterns found in each track, as lessons. #}
-{% from "_lexicon.html" import lexicon_css, entry_card %}
+{% from "_lexicon.html" import lexicon_css, entry_card, explore as explore_out %}
 {{ lexicon_css() }}
 <style>
   .learn { margin-top: 36px; }
@@ -36,6 +36,7 @@
   {% if t.main %}
   <h3 class="part">Patterns in your track</h3>
   {% for c in t.main %}{{ entry_card(c.entry, c.seen, c.how_sure, c.visual) }}{% endfor %}
+  {% for name, links in explore if name == t.name %}{{ explore_out([(name, links)]) }}{% endfor %}
   {% else %}
   <p class="muted">We didn't find a named pattern (a blues form, a famous progression, a mode, a groove) clearly
     enough to teach from in this track. The building blocks below are still there.</p>
