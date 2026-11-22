@@ -3360,14 +3360,53 @@ def _chat(client, model, prompt, quick=True, thinking_off=None):
     return text
 
 
+IDEA_TEXT = ("idea", "text", "suggestion", "description", "tip")
+CHORD_SPLIT = re.compile(r"\s*(?:[-–—→>|,]+|\s)\s*")
+
+
+def _idea_items(items):
+    """The AI's ideas as [{"area", "idea"}], whatever shape it wrote them in: a list of objects (the asked-for
+    shape, or with the text under another common name), a list of plain sentences, or one object per area."""
+    if isinstance(items, dict):
+        items = [{"area": k, "idea": v} for k, v in items.items()]
+    out = []
+    for i in items if isinstance(items, list) else []:
+        if isinstance(i, str) and i.strip():
+            out.append({"area": "idea", "idea": i})
+        elif isinstance(i, dict):
+            text = next((i[k] for k in IDEA_TEXT if isinstance(i.get(k), str) and i[k].strip()), None)
+            if text:
+                out.append({"area": i.get("area") or "idea", "idea": text})
+    return out
+
+
+def _progression_items(items):
+    """The AI's chord progressions as [{"name", "why", "chords": [...]}]: chords may come as a list or as one string
+    ("Bm – G – D – A", "Bm, G, D"), and a progression may be a bare list or string of chords."""
+    out = []
+    for p in items if isinstance(items, list) else []:
+        if isinstance(p, (str, list)):
+            p = {"chords": p}
+        if not isinstance(p, dict):
+            continue
+        chords = p.get("chords") if p.get("chords") is not None else p.get("progression")
+        if isinstance(chords, str):
+            chords = [c for c in CHORD_SPLIT.split(chords.strip()) if c]
+        if isinstance(chords, list) and len([c for c in chords if str(c).strip()]) >= 2:
+            out.append({"name": p.get("name", ""), "why": p.get("why", ""),
+                        "chords": [str(c).strip() for c in chords if str(c).strip()]})
+    return out
+
+
 def _complete_answer(text):
-    """A brainstorm reply is complete when it has several ideas and at least one progression
-    (a reply cut off at the token limit usually loses the progressions at the end)."""
+    """A brainstorm reply is complete when it has several usable ideas and at least one usable progression (a reply
+    cut off at the token limit usually loses the progressions at the end). "Usable" is judged by the same readers
+    the report uses, so a reply in a shape we can't read never counts as complete."""
     obj = _parse_json_reply(re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL))
     if not obj:
         return False
-    ideas = len(obj.get("ideas") or []) + len(obj.get("gap_ideas") or obj.get("gaps") or [])
-    return ideas >= 3 and bool(obj.get("alt_progressions"))
+    ideas = len(_idea_items(obj.get("ideas"))) + len(obj.get("gap_ideas") or obj.get("gaps") or [])
+    return ideas >= 3 and bool(_progression_items(obj.get("alt_progressions")))
 
 
 def _race(models, ask, info, fatal, complete=lambda text: True):
@@ -3495,20 +3534,22 @@ def ai_brainstorm(r, llm):
         "model": info.get("model"),
         "partial": bool(info.get("partial")),
         "vibe": _clean(obj.get("vibe", "")),
-        "ideas": [{"area": _clean(i.get("area", "idea")), "idea": _check_times(_clean(i["idea"]), r)}
-                  for i in obj.get("ideas", []) if isinstance(i, dict) and i.get("idea")],
+        "ideas": [{"area": _clean(i["area"]), "idea": _check_times(_clean(i["idea"]), r)}
+                  for i in _idea_items(obj.get("ideas"))],
         "gap_ideas": _gap_ideas(obj.get("gap_ideas") or obj.get("gaps"), r, unmatched := []),
         "mood": _mood_reply(obj.get("mood")),
-        "alt_progressions": [{"name": _clean(p.get("name", "")), "why": _clean(p.get("why", "")),
+        "alt_progressions": [{"name": _clean(p["name"]), "why": _clean(p["why"]),
                               "chords": [_clean(c) for c in p["chords"]]}
-                             for p in obj.get("alt_progressions", [])
-                             if isinstance(p, dict) and isinstance(p.get("chords"), list)],
+                             for p in _progression_items(obj.get("alt_progressions"))],
         "picture": [{"see": _check_times(_clean(p["see"]), r), "try": _check_times(_clean(p.get("try") or ""), r)}
                     for p in obj.get("picture") or [] if isinstance(p, dict) and p.get("see")][:3],
         "title_ideas": [_clean(t) for t in obj.get("title_ideas", [])][:5],
         "references": [{k: _clean(x.get(k, "")) for k in ("artist", "track", "shared")}
                        for x in obj.get("references", []) if isinstance(x, dict) and x.get("track")][:3],
     }
+    if not out["ideas"] or not out["alt_progressions"]:
+        # for the self-test and the logs: what the model sent where the ideas and progressions should have been
+        out["reply_shape"] = {k: obj.get(k) for k in ("ideas", "alt_progressions")}
     if not out["gap_ideas"] and (r.get("gaps") or {}).get("gaps"):
         # for the self-test and the logs: what the model sent where the gap ideas should have been
         out["gap_reply"] = (unmatched or obj.get("gap_ideas") or obj.get("gaps") or "(no gap_ideas field)")

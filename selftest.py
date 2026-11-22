@@ -624,7 +624,9 @@ def ai_checks(res):
              f"{len(ai['alt_progressions'])} progressions after {secs:.0f}s")
         return
     check("ai", "AI gives ideas and chord progressions", len(every) >= 3 and ai["alt_progressions"],
-          f"{len(ai.get('gap_ideas', []))} gap ideas + {len(ai['ideas'])} more, {len(ai['alt_progressions'])} progressions")
+          f"{len(ai.get('gap_ideas', []))} gap ideas + {len(ai['ideas'])} more, {len(ai['alt_progressions'])} progressions"
+          + (f"; the model sent: {json.dumps(ai.get('reply_shape'), ensure_ascii=False)[:500]}"
+             if ai.get("reply_shape") else ""))
     gaps_found = [g["id"] for g in (r.get("gaps") or {}).get("gaps", [])]
     check("ai", "the AI answers the gaps it was given (one idea per gap, at least most of them)",
           not gaps_found or len(ai.get("gap_ideas", [])) >= (len(gaps_found) + 1) // 2,
@@ -706,7 +708,7 @@ def unit_checks():
           "⚠" not in ma._check_times(gap_idea, fake) and "⚠" in ma._check_times("The F# at 0:47 clashes with the bass", fake))
     new_shape = json.dumps({"vibe": "v", "gap_ideas": [{"gap": "colour", "idea": "x"}, {"gap": "mood", "idea": "y"}],
                             "ideas": [{"area": "a", "idea": "z"}, {"area": "a", "idea": "w"}],
-                            "alt_progressions": [{"name": "n", "chords": ["G"]}]})
+                            "alt_progressions": [{"name": "n", "chords": ["G", "C"]}]})
     check("unit", "an AI reply in the gap shape (gap ideas + 2 more + progressions) is complete; a cut-off one isn't",
           ma._complete_answer(new_shape) and not ma._complete_answer(json.dumps({"gap_ideas": [{"gap": "colour"}]})))
 
@@ -763,6 +765,23 @@ def unit_checks():
     check("unit", "a 12-bar blues check accepts real blues and rejects a padded pop loop",
           ma.fits_twelve_bar("D7 G7 D7 D7 G7 G7 D7 D7 A7 G7 D7 A7".split(), 2)
           and not ma.fits_twelve_bar("D A Bm F#7 Gmaj7 D A Bm F#7 Gmaj7 D A".split(), 2))
+    # Models write the same reply in different shapes: each must give the same ideas and progressions, and a reply
+    # with nothing readable must not count as complete (so the next model is asked).
+    shapes = [{"ideas": [{"area": "harmony", "idea": "Try a ii"}, {"area": "melody", "idea": "Leap up"}],
+               "alt_progressions": [{"name": "a", "why": "b", "chords": ["Bm", "G", "D", "A"]}]},
+              {"ideas": ["Try a ii", "Leap up"], "alt_progressions": [{"name": "a", "chords": "Bm – G – D – A"}]},
+              {"ideas": [{"area": "harmony", "text": "Try a ii"}, {"suggestion": "Leap up"}],
+               "alt_progressions": ["Bm, G, D, A"]},
+              {"ideas": {"harmony": "Try a ii", "melody": "Leap up"}, "alt_progressions": [["Bm", "G", "D", "A"]]}]
+    read = [([i["idea"] for i in ma._idea_items(s["ideas"])], [p["chords"] for p in ma._progression_items(s["alt_progressions"])])
+            for s in shapes]
+    check("unit", "AI replies in any of the usual shapes give the same ideas and progressions",
+          all(x == (["Try a ii", "Leap up"], [["Bm", "G", "D", "A"]]) for x in read), str(read))
+    gaps3 = {"gap_ideas": [{"gap": "a", "idea": "x"}] * 3}
+    check("unit", "a reply whose progressions can't be read isn't complete, so the next model is asked (NEGATIVE)",
+          not ma._complete_answer(json.dumps({**gaps3, "ideas": ["x"], "alt_progressions": [{"name": "no chords"}]}))
+          and not ma._complete_answer(json.dumps({**gaps3, "alt_progressions": ["Bm"]}))
+          and ma._complete_answer(json.dumps({**gaps3, "alt_progressions": ["Bm – G"]})))
     fake2 = {"chord_timeline": [{"time": "0:12", "chord": "D"}], "sections": [], "drums": {}, "sound": {}}
     check("unit", "AI fact-check ignores chords the AI suggests adding",
           "⚠" not in ma._check_times("Insert an A7 before the D chord at 0:12 (play A7 at 0:11)", fake2))
