@@ -27,24 +27,28 @@
   </div>
   {% for t in lessons %}
   <h2 class="track">{{ t.name }}</h2>
-  <ul class="facts">
+  <ul class="facts" data-part="learn-facts">
     {% for label, value, slug in t.facts %}
     <li>{% if slug %}<a href="{{ url_for('theory_term', slug=slug) }}"><span>{{ label }}</span><b>{{ value }}</b></a>
         {% else %}<a><span>{{ label }}</span><b>{{ value }}</b></a>{% endif %}</li>
     {% endfor %}
   </ul>
+  <div data-part="learn-patterns">
   {% if t.main %}
   <h3 class="part">Patterns in your track</h3>
   {% for c in t.main %}{{ entry_card(c.entry, c.seen, c.how_sure, c.visual) }}{% endfor %}
-  {% for name, links in explore if name == t.name %}{{ explore_out([(name, links)]) }}{% endfor %}
   {% else %}
   <p class="muted">We didn't find a named pattern (a blues form, a famous progression, a mode, a groove) clearly
     enough to teach from in this track. The building blocks below are still there.</p>
   {% endif %}
+  </div>
+  {% for name, links in explore if name == t.name %}<div data-part="explore">{{ explore_out([(name, links)]) }}</div>{% endfor %}
   {% if t.basics %}
+  <div data-part="learn-basics">
   <h3 class="part">The building blocks it uses</h3>
   <div class="basics">
     {% for c in t.basics %}{{ entry_card(c.entry, c.seen, c.how_sure, c.visual, full=False) }}{% endfor %}
+  </div>
   </div>
   {% endif %}
   {% endfor %}

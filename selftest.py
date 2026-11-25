@@ -2405,10 +2405,13 @@ def report_ui_checks(tmp):
     tabbed = webapp.tab_tracks(page)
     tabs = re.findall(r'<a class="tab" role="tab" href="#(t1-\w+)"', tabbed)
     panels = re.findall(r'<section class="rsec" data-sec="\w+" id="(t1-\w+)" role="tabpanel"', tabbed)
-    thumbs = re.findall(r'<button type="button" class="thumb" data-go="(t1-\w+)" data-chart="(t1c\d+)">(.*?)</button>', tabbed, re.S)
+    # each picture names its part (data-sec), so hiding a part hides its pictures too
+    thumbs = re.findall(r'<button type="button" class="thumb" data-go="(t1-\w+)" data-chart="(t1c\d+)" '
+                        r'data-sec="(\w+)">(.*?)</button>', tabbed, re.S)
     charts_in = len(re.findall(r'<svg class="(?:chart|timeline)"', page[page.index('<section class="rsec"'):]))
     ok_links = all(f'id="{go}"' in tabbed and f'<svg data-chart="{cid}"' in tabbed[tabbed.index(f'id="{go}"'):]
-                   for go, cid, _ in thumbs)
+                   and re.match(rf't1-{sec}(?:-\d+)?$', go) for go, cid, sec, _ in thumbs)
+    thumbs = [(go, cid, t) for go, cid, _, t in thumbs]
     check("report", "a summary with every chart as a small picture (each opens its tab), then one tab per section",
           tabs == panels and len(tabs) == len(secs) and len(thumbs) == charts_in and ok_links
           and not any("data-dur" in t or "data-grid" in t for _, _, t in thumbs)
@@ -2917,6 +2920,37 @@ def community_web_checks(base, files):
           and "In short" in pro and 'data-term="' in pro and "Patterns in your track" in kept
           and "Patterns in your track" not in back and evil.headers.get("Location", "").endswith("/")
           and "evil" not in evil.headers.get("Location", ""))
+    import io
+    import zipfile
+    # Show or hide parts: the panel offers every part the page has (every tab, every marked part) and nothing it
+    # hasn't; the parts at the top of a track keep their text; the choice is kept per account, checked, and private
+    offered = set(re.findall(r'<input type="checkbox" value="([\w-]+)" checked>', pro))
+    marked = set(re.findall(r'data-part="([\w-]+)"', pro)) | set(re.findall(r'<a class="tab"[^>]*data-sec="(\w+)"', pro))
+    inshort = re.search(r'<div data-part="inshort">(.*?)</div>', pro, re.S)
+    check("community", "Show or hide parts: the panel lists every part on the page (each tab, the top of each track, "
+          "the gallery, the guide) and nothing that isn't there; wrapping a part keeps its text",
+          offered == marked and {"facts", "inshort", "glance", "gallery", "guide", "harmony"} <= offered
+          and "admire" not in offered and "ai" not in offered
+          and bool(inshort) and "In short:" in inshort.group(1),
+          f"offered only: {sorted(offered - marked)}; on the page only: {sorted(marked - offered)}")
+    lrn_offered = set(re.findall(r'<input type="checkbox" value="([\w-]+)" checked>', lrn))
+    check("community", "in the Learn view the panel lists the Learn parts, not the Pro report's tabs",
+          {"learn-facts", "learn-patterns"} <= lrn_offered and "harmony" not in lrn_offered)
+    saved_parts = fran.post(base + "/prefs/parts", json={"hidden": ["harmony", "inshort", "bogus", "<script>",
+                                                                   "harmony"]}, timeout=10)
+    again = fran.get(f"{base}/jobs/{job}", timeout=10).text
+    check("community", "a signed-in musician's hidden parts are kept on their account: unknown or repeated keys are "
+          "dropped, they're in the data download, and someone else's page is unaffected",
+          saved_parts.ok and saved_parts.json()["hidden"] == ["inshort", "harmony"]
+          and '["inshort", "harmony"]' in again
+          and json.loads(zipfile.ZipFile(io.BytesIO(fran.get(base + "/account/export", timeout=30).content))
+                         .read("account.json"))["report_parts_hidden"] == ["inshort", "harmony"]
+          and '"harmony"' not in gus.get(f"{base}/jobs/{job}", timeout=10).text.split("let stored =")[-1][:80],
+          saved_parts.text[:200])
+    nobody = anon.post(base + "/prefs/parts", json={"hidden": ["harmony"]}, timeout=10)
+    check("community", "signed out, hidden parts are never sent or kept on the server (NEGATIVE: the save is refused; "
+          "the page keeps the choice in the browser)", nobody.status_code == 401)
+    fran.post(base + "/prefs/parts", json={"hidden": []}, timeout=10)
     stolen = gus.post(f"{base}/jobs/{job}/post", data={"title": "mine now"}, allow_redirects=False, timeout=10)
     before = anon.get(f"{base}/jobs/{job}", timeout=10).status_code
     r = fran.post(f"{base}/jobs/{job}/post", data={"title": "<b>My first blues</b>", "body": "Is bar 12 clear?"},

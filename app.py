@@ -1391,6 +1391,50 @@ SECTION_NAMES = {"admire": "Songs you admire", "picture": "Picture", "harmony": 
                  "ai": "AI ideas", "sheet": "Sheet music", "midi": "MIDI"}
 
 
+# Everything on a result page a musician can choose to show or hide (the "Show or hide parts" panel): the report's
+# own sections (SECTION_NAMES) and the other parts of the page, each marked data-part="<key>" where it's drawn.
+# Shown here in this order, by group; the panel lists only the ones a page actually has.
+PAGE_PARTS = [
+    ("overview", "All your tracks side by side", "Whole report"),
+    ("guide", "How to read this report", "Whole report"),
+    ("style", "Across these tracks (what they share)", "Whole report"),
+    ("blend", "Tracks that blend well", "Whole report"),
+    ("explore", "Your chords on Hooktheory and other apps", "Whole report"),
+    ("facts", "Length, tempo, key and mode line", "Top of each track"),
+    ("inshort", "In short", "Top of each track"),
+    ("start", "Where to start", "Top of each track"),
+    ("glance", "At-a-glance pictures", "Top of each track"),
+    ("gallery", "All the pictures", "Top of each track"),
+    ("learn-facts", "The track's facts", "Learn view"),
+    ("learn-patterns", "Patterns in your track", "Learn view"),
+    ("learn-basics", "The building blocks it uses", "Learn view"),
+]
+ALL_PARTS = [k for k, _, _ in PAGE_PARTS] + list(SECTION_NAMES)
+assert len(set(ALL_PARTS)) == len(ALL_PARTS)
+
+
+def part_choices(page_html):
+    """[(group, [(key, label)])] for the parts this page has (a part is there if something is marked with it)."""
+    has = set(re.findall(r'data-(?:part|sec)="([\w-]+)"', page_html))
+    groups = {}
+    for k, label, group in PAGE_PARTS[:10]:
+        if k in has:
+            groups.setdefault(group, []).append((k, label))
+    secs = [(k, n) for k, n in SECTION_NAMES.items() if k in has]
+    if secs:
+        groups["Parts of each track"] = secs
+    for k, label, group in PAGE_PARTS[10:]:
+        if k in has:
+            groups.setdefault(group, []).append((k, label))
+    return list(groups.items())
+
+
+def clean_parts(keys):
+    """Only keys we know, each once, in our order (whatever a browser sends)."""
+    keys = set(keys) if isinstance(keys, list) else set()
+    return [k for k in ALL_PARTS if k in keys]
+
+
 def section_key(title):
     t = title.lower().replace("’", "'")
     return next((k for k, w in SECTION_WORDS if w.lower() in t), None)
@@ -1438,14 +1482,36 @@ def _chart_name(svg):
 FOCUS_ORDER = {"ideas": ["ideas", "gaps", "ai"], "admire": ["admire"]}
 
 
+def _wrap(html_text, pattern, key):
+    """Wrap the first match of pattern in a <div data-part="key">, so the musician can hide it."""
+    return re.sub(pattern, lambda m: f'<div data-part="{key}">{m.group(0)}</div>', html_text, count=1, flags=re.S)
+
+
+def mark_intro(intro):
+    """The parts at the top of a track (musicanalyze.track_report): the facts line (length, tempo, key, mode), "In
+    short", "Where to start" with what's missing most, and the at-a-glance pictures. "You told us" stays: it's what
+    the musician typed."""
+    intro = _wrap(intro, r'<p><strong><abbr[^>]*data-term="length".*?</p>', "facts")
+    intro = _wrap(intro, r"<blockquote>\s*<p><strong>In short:.*?</blockquote>", "inshort")
+    intro = _wrap(intro, r"<p><strong>Where to start</strong></p>\s*<ul>.*?</ul>"
+                         r"(?:\s*<p><em>What's missing most:.*?</p>)?", "start")
+    intro = _wrap(intro, r'<div class="glance">.*?</figure></div>', "glance")
+    return intro
+
+
 def tab_tracks(report_html, focus=None):
     """Each track's report as a summary and tabs: its header, the few plain sentences and the at-a-glance pictures,
     then every other chart of the report as a small picture (a click opens its part), then one tab per section
     (fold_sections' <section>s), each with its own charts. The page script shows one tab at a time; without
     scripts, the tabs are links to the sections, which all stay on the page."""
     out, n = [], 0
-    for part in re.split(r"(?=<h2[ >])", report_html):
+    for i, part in enumerate(re.split(r"(?=<h2[ >])", report_html)):
         if not part.startswith("<h2") or '<section class="rsec"' not in part:
+            if i == 0:  # above the first track: the tracks side by side (two or more), and the guide to the words
+                part = _wrap(part, r"<table>.*?</table>", "overview")
+                part = _wrap(part, r"<details><summary>[^<]*How to read this report</summary>.*?</details>", "guide")
+            elif part.startswith("<h2") and "blend well" in part[:part.find("</h2>")]:
+                part = f'<div data-part="blend">{part}</div>'
             out.append(part)
             continue
         n += 1
@@ -1471,7 +1537,7 @@ def tab_tracks(report_html, focus=None):
                 svg = svg_m.group(0)
                 # the summary's copy is a picture only: no timeline links, no playback, nothing to tab to
                 thumb = re.sub(r' data-(?:dur|x0|x1|t0|t1|grid|hats|bpm|beats)="[^"]*"', "", svg)
-                thumbs.append(f'<button type="button" class="thumb" data-go="{pid}" data-chart="{cid}">'
+                thumbs.append(f'<button type="button" class="thumb" data-go="{pid}" data-chart="{cid}" data-sec="{key}">'
                               f'<span class="tl"><b>{html.escape(_chart_name(svg))}</b> · {html.escape(name)}</span>'
                               f'{thumb}</button>')
                 return svg.replace("<svg ", f'<svg data-chart="{cid}" ', 1)
@@ -1481,11 +1547,12 @@ def tab_tracks(report_html, focus=None):
                               f'aria-label="{html.escape(name)}">', 1)
             tabs.append(f'<a class="tab" role="tab" href="#{pid}" data-go="{pid}" data-sec="{key}">{html.escape(name)}</a>')
             panels.append(sec)
-        gallery = (f'<div class="gallery" aria-label="Every picture in this report"><p class="eyebrow">All the '
+        gallery = (f'<div class="gallery" data-part="gallery" aria-label="Every picture in this report"><p class="eyebrow">All the '
                    f'pictures · click one to open its part</p><div class="thumbs">{"".join(thumbs)}</div></div>'
                    if thumbs else "")
         # a summary picture that opens its own part (musicanalyze.glance marks it with the section's key)
         intro = re.sub(r'data-go-sec="(\w+)"', lambda m: f'data-go="t{n}-{m.group(1)}"', intro)
+        intro = mark_intro(intro)
         first = FOCUS_ORDER.get(focus, [])
         pairs = sorted(zip(tabs, panels[-len(tabs):] if tabs else []),
                        key=lambda tp: first.index(tp[0].split('data-sec="')[1].split('"')[0])
@@ -1531,6 +1598,13 @@ def job(job_id):
         midi_dir = d / "output" / "midi"
         midi_files = sorted(p.name for p in midi_dir.glob("*.mid")) if midi_dir.is_dir() else []
     u, owner = current_user(), accounts.owner_of(job_id)
+    # parts marked outside the report (the template's own): each has its key, so the panel can list it
+    extra = " ".join(f'data-part="{k}"' for k, on in (
+        ("style", s.get("state") == "done" and s.get("mode") != "tags" and len(tracks_of(job_id)) >= 2),
+        ("explore", bool(explore)),
+        ("learn-facts", lessons is not None), ("learn-patterns", lessons is not None),
+        ("learn-basics", lessons is not None)) if on)
+    parts = part_choices((report_html or "") + extra) if s.get("state") == "done" and s.get("mode") != "tags" else []
     teach = bool(u and u.get("memory_on") and owner == u["id"] and s.get("mode") != "tags" and not s.get("demo"))
     meta = next((it for it in accounts.history(u["id"]) if it["job_id"] == job_id), None) \
         if u and owner == u["id"] else None
@@ -1551,9 +1625,21 @@ def job(job_id):
                            projects=accounts.projects(u["id"]) if meta else [],
                            expires=(s.get("created") or s.get("updated") or time.time()) + JOB_TTL_HOURS * 3600,
                            fields=accounts.CORRECTABLE, corrected=request.args.get("corrected"), lessons=lessons,
-                           explore=explore,
+                           explore=explore, parts=parts, hidden=accounts.hidden_parts(u["id"]) if u else None,
                            post=accounts.post_for_job(job_id),
                            my_recordings=accounts.recordings(u["id"]) if meta else [])
+
+
+@app.post("/prefs/parts")
+def save_parts():
+    """The report parts a signed-in musician hides, kept on their account so every device shows the same. (Signed
+    out, the page keeps the choice in the browser instead and never sends it.)"""
+    u = current_user()
+    if not u:
+        return jsonify({"ok": False, "error": "sign in to keep this on your account"}), 401
+    keys = clean_parts((request.get_json(silent=True) or {}).get("hidden"))
+    accounts.set_hidden_parts(u["id"], keys)
+    return jsonify({"ok": True, "hidden": keys})
 
 
 @app.get("/jobs/<job_id>/status")

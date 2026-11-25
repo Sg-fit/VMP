@@ -47,6 +47,9 @@ def init(path):
             db.execute("ALTER TABLE users ADD COLUMN memory_on INTEGER NOT NULL DEFAULT 0")
         if "goals" not in cols:
             db.execute("ALTER TABLE users ADD COLUMN goals TEXT NOT NULL DEFAULT ''")
+        # Which parts of a report they've chosen to hide (space-separated part keys; empty: show everything)
+        if "hidden_parts" not in cols:
+            db.execute("ALTER TABLE users ADD COLUMN hidden_parts TEXT NOT NULL DEFAULT ''")
         # Keeping the work organised: a project, where it's at, labels, private notes, a star
         saved_cols = [c[1] for c in db.execute("PRAGMA table_info(saved)")]
         for col, kind in (("project", "TEXT NOT NULL DEFAULT ''"), ("status", "TEXT NOT NULL DEFAULT ''"),
@@ -143,9 +146,20 @@ def check_login(username, password):
 
 def get_user(user_id):
     with _connect() as db:
-        row = db.execute("SELECT id, username, created, seen_intro, memory_on, goals FROM users WHERE id = ?",
-                         (user_id,)).fetchone()
+        row = db.execute("SELECT id, username, created, seen_intro, memory_on, goals, hidden_parts FROM users "
+                         "WHERE id = ?", (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def hidden_parts(user_id):
+    u = get_user(user_id)
+    return (u.get("hidden_parts") or "").split() if u else []
+
+
+def set_hidden_parts(user_id, keys):
+    """The report parts this user hides. The app checks the keys; this only stores them."""
+    with _connect() as db:
+        db.execute("UPDATE users SET hidden_parts = ? WHERE id = ?", (" ".join(keys)[:2000], user_id))
 
 
 # ---------------------------------------------------------------- the musician's memory (see memory.py)
@@ -619,7 +633,7 @@ def export(user_id):
     """Everything we hold about a user, as plain data (the analyses' files are added by the app)."""
     u = get_user(user_id)
     return {"username": u["username"], "created": u["created"], "memory_on": bool(u.get("memory_on")),
-            "goals": u.get("goals", ""), "saved": history(user_id), "feedback": list_feedback(user_id),
+            "goals": u.get("goals", ""), "report_parts_hidden": hidden_parts(user_id), "saved": history(user_id), "feedback": list_feedback(user_id),
             "corrections": list_corrections(user_id), "report_sections_used": interest(user_id),
             "recordings": [{k: v for k, v in r.items() if k != "user_id"} for r in recordings(user_id)],
             "groups": [{"name": g["name"], "facilitator": g["owner_id"] == user_id} for g in my_groups(user_id)],

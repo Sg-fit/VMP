@@ -57,6 +57,18 @@
   .organise input:not([type=checkbox]), .organise select, .organise textarea { font: inherit; font-size: .9rem; padding: 6px 8px;
       border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--ink); }
   .organise .btn { justify-self: start; padding: 8px 14px; }
+  /* Show or hide parts */
+  .parts .parts-box { margin-top: 10px; max-width: 760px; }
+  .parts .parts-box > p { margin: 0 0 10px; }
+  .parts fieldset { border: 0; border-top: 1px solid var(--line); margin: 0; padding: 10px 0 12px;
+                    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; }
+  .parts legend { font-size: .74rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+                  letter-spacing: .06em; padding: 0 8px 0 0; }
+  .parts label.inline { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: .9rem; }
+  .parts .parts-acts { display: flex; gap: 14px; margin: 0 0 6px; font-size: .85rem; }
+  .parts .parts-count { color: var(--ink); font-weight: 600; }
+  .parts-empty { margin: 24px 0; }
+  @media (pointer: coarse) { .parts label.inline { min-height: 44px; } }
   .savebar form { margin: 0; }
   .savebar .ok { font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
   .midis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
@@ -446,12 +458,81 @@
   {% elif user and saved and s.mode != 'tags' and not s.demo %}
   <p class="muted small iline" style="margin-top:16px">{{ icon('bookmark', 18) }}<span>Want the app to learn from your feedback? <a href="{{ url_for('memory_page') }}">Switch on your memory</a>.</span></p>
   {% endif %}
+  {% if parts %}
+  {# Show or hide parts: every part this page has, ticked unless the musician hid it. Signed in, the choice is kept
+     on their account (POST /prefs/parts); signed out, in this browser only. It changes the page, never the files. #}
+  <details class="organise parts" id="parts-panel">
+    <summary>{{ icon('eye', 18) }}<span>Show or hide parts of the analysis<span class="parts-count"></span></span></summary>
+    <div class="parts-box">
+      <p class="muted small">Untick anything you don't want to see. It applies to every analysis you open
+        {{- ', and is kept on your account' if hidden is not none else ' in this browser' }}. Downloads always have
+        everything.</p>
+      <div class="parts-acts"><button type="button" class="linkish" data-all="1">Show everything</button>
+        <button type="button" class="linkish" data-all="0">Hide everything</button></div>
+      {% for group, items in parts %}
+      <fieldset><legend>{{ group }}</legend>
+        {% for k, label in items %}<label class="inline"><input type="checkbox" value="{{ k }}" checked> {{ label }}</label>{% endfor %}
+      </fieldset>
+      {% endfor %}
+      <p class="parts-note muted small" aria-live="polite"></p>
+    </div>
+  </details>
+  <style id="parts-style"></style>
+  <script>
+    (function () {
+      const KEY = 'vmp-hidden', signedIn = {{ 'true' if hidden is not none else 'false' }};
+      let stored = {{ (hidden or [])|tojson }};
+      if (!signedIn) { try { stored = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { stored = []; } }
+      const hidden = new Set(Array.isArray(stored) ? stored.filter(k => /^[\w-]+$/.test(k)) : []);
+      const panel = document.getElementById('parts-panel'), style = document.getElementById('parts-style');
+      const boxes = Array.from(panel.querySelectorAll('input[type=checkbox]'));
+      const sel = k => `[data-part="${k}"], .report section.rsec[data-sec="${k}"], .report nav.tabs .tab[data-sec="${k}"], `
+                     + `.report button.thumb[data-sec="${k}"]`;
+      function apply() {
+        style.textContent = Array.from(hidden).map(k => sel(k) + ' { display: none !important; }').join('\n');
+        window.vmpHidden = hidden;
+        const off = boxes.filter(b => hidden.has(b.value)).length;
+        panel.querySelector('.parts-count').textContent = off ? ` · ${off} hidden` : '';
+        const empty = document.querySelector('.parts-empty');
+        if (empty) empty.hidden = off < boxes.length;
+        document.dispatchEvent(new CustomEvent('parts-changed'));
+      }
+      let timer;
+      function save() {
+        apply();
+        const note = panel.querySelector('.parts-note');
+        if (!signedIn) {
+          try { localStorage.setItem(KEY, JSON.stringify(Array.from(hidden))); note.textContent = ''; }
+          catch (e) { note.textContent = "This browser won't keep it, so it lasts until you leave the page."; }
+          return;
+        }
+        clearTimeout(timer);
+        timer = setTimeout(() => fetch("{{ url_for('save_parts') }}", {method: 'POST',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({hidden: Array.from(hidden)})})
+          .then(r => { note.textContent = r.ok ? 'Saved to your account.' : "Couldn't save it: try again."; })
+          .catch(() => { note.textContent = "Couldn't save it: try again."; }), 400);
+      }
+      boxes.forEach(b => {
+        b.checked = !hidden.has(b.value);
+        b.addEventListener('change', () => { b.checked ? hidden.delete(b.value) : hidden.add(b.value); save(); });
+      });
+      panel.querySelectorAll('[data-all]').forEach(btn => btn.addEventListener('click', () => {
+        boxes.forEach(b => { b.checked = btn.dataset.all === '1'; b.checked ? hidden.delete(b.value) : hidden.add(b.value); });
+        save();
+      }));
+      document.addEventListener('DOMContentLoaded', apply);
+      apply();
+    })();
+  </script>
+  {% endif %}
   {% if style_view %}
   {{ style_css() }}
+  <div data-part="style">
   <h2 class="style-h">{{ 'Your style in' if s.mode == 'style' else 'Across' }} these {{ style_view.tracks }} tracks</h2>
   <p class="muted small" style="margin:0 0 10px">What's there in all of them, what none of them has, and how they differ.
     <a href="{{ url_for('style_page') }}">Your style across every session →</a> · each track on its own is further down.</p>
   {{ style_report(style_view, style_pics, min_tracks) }}
+  </div>
   <h2 class="style-h">Each track on its own</h2>
   {% endif %}
   {% if lessons is not none %}{% include "_learn.html" %}{% else %}
@@ -459,8 +540,10 @@
     themselves, and the <a href="{{ url_for('theory') }}">theory library</a> has them all.
     <a href="{{ request.path }}?view=learn">Learn from this track →</a></p>
   {% from "_lexicon.html" import lexicon_css, explore as explore_out %}
-  {% if explore %}{{ lexicon_css() }}{{ explore_out(explore) }}{% endif %}
+  {% if explore %}{{ lexicon_css() }}<div data-part="explore">{{ explore_out(explore) }}</div>{% endif %}
   {% endif %}
+  {% if parts %}<p class="parts-empty muted" hidden>You've hidden every part. <a href="#parts-panel"
+    onclick="document.getElementById('parts-panel').open = true">Show or hide parts</a> to bring some back.</p>{% endif %}
   <div class="report">{{ report_html|safe }}</div>
   <script>
     (function () {
@@ -520,9 +603,13 @@
         if (!tabs.length) return;
         art.classList.add('tabbed');
         const nav = art.querySelector('nav.tabs');
-        function show(pid, how) {
-          const panel = panels.find(p => p.id === pid) || panels[0];
+        let current = null;
+        function show(pid, how) {  // a hidden part never opens: the first part shown opens instead
+          const off = window.vmpHidden || new Set(), shown = panels.filter(p => !off.has(p.dataset.sec));
+          const panel = shown.find(p => p.id === pid) || shown[0];
           panels.forEach(p => p.classList.toggle('on', p === panel));
+          if (!panel) return null;
+          current = panel.id;
           tabs.forEach(t => t.setAttribute('aria-selected', String(t.dataset.go === panel.id)));
           if (how === 'click') {
             note(panel.dataset.sec, 'open');
@@ -535,8 +622,10 @@
           if (favs.includes(t.dataset.sec)) t.classList.add('fav');
           t.addEventListener('click', e => { e.preventDefault(); show(t.dataset.go, 'click'); });
         });
+        document.addEventListener('parts-changed', () => show(current));
         art.querySelectorAll('button.thumb').forEach(b => b.addEventListener('click', () => {
           const panel = show(b.dataset.go, 'click');
+          if (!panel) return;
           const chart = panel.querySelector(`svg[data-chart="${b.dataset.chart}"]`);
           if (!chart) return;
           const fold = chart.closest('details'); if (fold) fold.open = true;
